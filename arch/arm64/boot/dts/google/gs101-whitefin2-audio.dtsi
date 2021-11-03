@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Google GS101 Whitefin 2 audio device tree source
+ *
+ * Copyright (c) 2020 Google, LLC
+ *		https://www.google.com
+ *
+*/
+
+#include "gs101-whitefin-audio.dtsi"
+
+&aoc {
+	aoc-board-cfg = "wf2";
+};
+
+&m_ldo30_reg {
+	regulator-always-on;
+	schematic-name = "L30M_DMICS";
+};

@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# kernel vendor hook modules
+
+config VH_SCHED
+        tristate "Vendor hooks for kernel scheduler"
+        depends on VH_KERNEL
+        default m
+
+config VH_MIN_CAPACITY_CPU
+        int "Starting cpu of min capacity cluster"
+        depends on VH_KERNEL
+        default 0
+
+config VH_MID_CAPACITY_CPU
+        int "Starting cpu of mid capacity cluster"
+        depends on VH_KERNEL
+        default 4
+
+config VH_MAX_CAPACITY_CPU
+        int "Starting cpu of max capacity cluster"
+        depends on VH_KERNEL
+        default 6
+
+config VH_HIGH_CAPACITY_CPU
+        int "Starting cpu of high capacity cluster"
+        depends on VH_KERNEL
+        default 4
+
+config VH_SCHED_CPU_NR
+        int "CPU number on this platform"
+        depends on VH_KERNEL
+        default 8
+
+config VH_SYSTRACE
+        tristate "Vendor SYSTRACE support"
+        depends on VH_KERNEL
+        depends on TRACING
+        default m
+        help
+          This module exports ATRACE_XXX APIs at kernel.
+          All tracepoints can be identified and plotted at Chrome tracing UI.
+
+          Use APIs exported by this module to correlate kernel activities
+          to userspace and system events in the timeline.
+
+          If in doubt, say N.
+
+config VH_THERMAL
+        tristate "Vendor hooks for kernel thermal"
+        depends on VH_KERNEL
+        default m
+
+config VH_FS
+        tristate "Vendor hooks for filesystem"
+        depends on VH_KERNEL
+        default m
+
+config VH_CGROUP
+        tristate "Vendor hooks for cgroup"
+        depends on VH_KERNEL
+        default m
+
+config VH_I2C
+	tristate "Vendor hooks for i2c subsystems"
+	depends on VH_KERNEL
+	default m
+
+config UCLAMP_STATS
+        bool "Uclamp stats"
+        depends on VH_KERNEL
+        default y
+
+config VH_PREEMPTIRQ_TRACEPOINTS
+        tristate "Vendor hooks for long preemptirq trace points"
+        depends on VH_SCHED
+        default m
+

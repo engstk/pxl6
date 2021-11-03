@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Samsung Pin control drivers
+#
+config PINCTRL_SAMSUNG
+	tristate "Pinctrl driver data for Samsung SoCs"
+	depends on OF_GPIO
+	select PINMUX
+	select PINCONF
+	select PINCTRL_EXYNOS
+
+config PINCTRL_EXYNOS
+	bool "Pinctrl common driver part for Samsung Exynos SoCs"
+	depends on OF_GPIO
+	depends on OF && GPIOLIB
+	select PINCTRL_EXYNOS_ARM if ARM
+	select PINCTRL_EXYNOS_ARM64 if ARM64
+
+config PINCTRL_EXYNOS_ARM
+	bool "ARMv7-specific pinctrl driver for Samsung Exynos SoCs" if COMPILE_TEST
+	depends on PINCTRL_EXYNOS
+
+config PINCTRL_EXYNOS_ARM64
+	bool "ARMv8-specific pinctrl driver for Samsung Exynos SoCs" if COMPILE_TEST
+	depends on PINCTRL_EXYNOS
+
+config PINCTRL_GS
+	tristate "pinctrl driver data for GSxxx"
+	depends on PINCTRL_EXYNOS
+
+config PINCTRL_S3C24XX
+	bool "Samsung S3C24XX SoC pinctrl driver"
+	depends on OF_GPIO
+	depends on ARCH_S3C24XX || COMPILE_TEST
+
+config PINCTRL_S3C64XX
+	bool "Samsung S3C64XX SoC pinctrl driver"
+	depends on OF_GPIO
+	depends on ARCH_S3C64XX || COMPILE_TEST
