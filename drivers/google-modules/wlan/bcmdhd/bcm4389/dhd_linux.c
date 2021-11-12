@@ -17803,26 +17803,29 @@ write_dump_to_file(dhd_pub_t *dhd, uint8 *buf, int size, char *fname)
 
 int dhd_os_wake_lock_timeout(dhd_pub_t *pub)
 {
-	dhd_info_t *dhd = (dhd_info_t *)(pub->info);
-	unsigned long flags;
-	int ret = 0;
-
+	dhd_info_t __maybe_unused *dhd = (dhd_info_t *)(pub->info);
+	unsigned long __maybe_unused flags;
+	int __maybe_unused ret = 0;
+#if 0
 	if (dhd && (dhd->dhd_state & DHD_ATTACH_STATE_WAKELOCKS_INIT)) {
 		DHD_WAKE_SPIN_LOCK(&dhd->wakelock_spinlock, flags);
 		ret = dhd->wakelock_rx_timeout_enable > dhd->wakelock_ctrl_timeout_enable ?
 			dhd->wakelock_rx_timeout_enable : dhd->wakelock_ctrl_timeout_enable;
 #ifdef CONFIG_HAS_WAKELOCK
+
 		if (dhd->wakelock_rx_timeout_enable)
 			dhd_wake_lock_timeout(dhd->wl_rxwake,
 				msecs_to_jiffies(dhd->wakelock_rx_timeout_enable));
+#endif
 		if (dhd->wakelock_ctrl_timeout_enable)
 			dhd_wake_lock_timeout(dhd->wl_ctrlwake,
 				msecs_to_jiffies(dhd->wakelock_ctrl_timeout_enable));
-#endif
-		dhd->wakelock_rx_timeout_enable = 0;
+
+		//dhd->wakelock_rx_timeout_enable = 0;
 		dhd->wakelock_ctrl_timeout_enable = 0;
 		DHD_WAKE_SPIN_UNLOCK(&dhd->wakelock_spinlock, flags);
 	}
+#endif
 	return ret;
 }
 
@@ -18200,7 +18203,7 @@ dhd_os_check_wakelock_all(dhd_pub_t *pub)
 {
 #if defined(CONFIG_HAS_WAKELOCK) || defined(BCMSDIO)
 #if defined(CONFIG_HAS_WAKELOCK)
-	int l1, l2, l3, l4, l7, l8, l9, l10;
+	int l1, l2, l4, l7, l8, l9, l10;
 	int l5 = 0, l6 = 0;
 	int c, lock_active;
 #endif /* CONFIG_HAS_WAKELOCK */
@@ -18223,7 +18226,9 @@ dhd_os_check_wakelock_all(dhd_pub_t *pub)
 	c = dhd->wakelock_counter;
 	l1 = dhd_wake_lock_active(dhd->wl_wifi);
 	l2 = dhd_wake_lock_active(dhd->wl_wdwake);
+#if 0
 	l3 = dhd_wake_lock_active(dhd->wl_rxwake);
+#endif
 	l4 = dhd_wake_lock_active(dhd->wl_ctrlwake);
 	l7 = dhd_wake_lock_active(dhd->wl_evtwake);
 #ifdef BCMPCIE_OOB_HOST_WAKE
@@ -18235,13 +18240,13 @@ dhd_os_check_wakelock_all(dhd_pub_t *pub)
 	l8 = dhd_wake_lock_active(dhd->wl_pmwake);
 	l9 = dhd_wake_lock_active(dhd->wl_txflwake);
 	l10 = dhd_wake_lock_active(dhd->wl_nanwake);
-	lock_active = (l1 || l2 || l3 || l4 || l5 || l6 || l7 || l8 || l9 || l10);
+	lock_active = (l1 || l2 || l4 || l5 || l6 || l7 || l8 || l9 || l10);
 
 	/* Indicate to the Host to avoid going to suspend if internal locks are up */
 	if (lock_active) {
-		DHD_ERROR(("%s wakelock c-%d wl-%d wd-%d rx-%d "
+		DHD_ERROR(("%s wakelock c-%d wl-%d wd-%d "
 			"ctl-%d intr-%d scan-%d evt-%d, pm-%d, txfl-%d nan-%d\n",
-			__FUNCTION__, c, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10));
+			__FUNCTION__, c, l1, l2, l4, l5, l6, l7, l8, l9, l10));
 #ifdef RPM_FAST_TRIGGER
 		if (pub->rpm_fast_trigger && l4) {
 			DHD_ERROR(("%s : reset rpm_fast_trigger becasue of wl_ctrlwake activated\n",
@@ -18450,12 +18455,14 @@ void dhd_os_wake_lock_init(struct dhd_info *dhd)
 {
 	DHD_TRACE(("%s: initialize wake_lock_counters\n", __FUNCTION__));
 	dhd->wakelock_counter = 0;
-	dhd->wakelock_rx_timeout_enable = 0;
+	//dhd->wakelock_rx_timeout_enable = 0;
 	dhd->wakelock_ctrl_timeout_enable = 0;
 	/* wakelocks prevent a system from going into a low power state */
 #ifdef CONFIG_HAS_WAKELOCK
 	dhd_wake_lock_init(dhd->wl_wifi, dhd_bus_to_dev(dhd->pub.bus), "wlan_wake");
+#if 0
 	dhd_wake_lock_init(dhd->wl_rxwake, dhd_bus_to_dev(dhd->pub.bus), "wlan_rx_wake");
+#endif
 	dhd_wake_lock_init(dhd->wl_ctrlwake, dhd_bus_to_dev(dhd->pub.bus), "wlan_ctrl_wake");
 	dhd_wake_lock_init(dhd->wl_evtwake, dhd_bus_to_dev(dhd->pub.bus), "wlan_evt_wake");
 	dhd_wake_lock_init(dhd->wl_pmwake, dhd_bus_to_dev(dhd->pub.bus), "wlan_pm_wake");
@@ -18478,10 +18485,12 @@ void dhd_os_wake_lock_destroy(struct dhd_info *dhd)
 	DHD_TRACE(("%s: deinit wake_lock_counters\n", __FUNCTION__));
 #ifdef CONFIG_HAS_WAKELOCK
 	dhd->wakelock_counter = 0;
-	dhd->wakelock_rx_timeout_enable = 0;
+	//dhd->wakelock_rx_timeout_enable = 0;
 	dhd->wakelock_ctrl_timeout_enable = 0;
 	dhd_wake_lock_destroy(dhd->wl_wifi);
+#if 0
 	dhd_wake_lock_destroy(dhd->wl_rxwake);
+#endif
 	dhd_wake_lock_destroy(dhd->wl_ctrlwake);
 	dhd_wake_lock_destroy(dhd->wl_evtwake);
 	dhd_wake_lock_destroy(dhd->wl_pmwake);
