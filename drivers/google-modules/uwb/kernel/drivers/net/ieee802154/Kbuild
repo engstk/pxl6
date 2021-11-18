@@ -1,0 +1,33 @@
+obj-$(CONFIG_MCPS_FAKE) := mcps802154_fake.o
+
+ccflags-$(CONFIG_DW3000_DEBUG) := -DDEBUG -g
+ccflags-$(CONFIG_MCPS802154_TESTMODE) += -DCONFIG_MCPS802154_TESTMODE
+
+dw3000-y := \
+		dw3000_calib.o \
+		dw3000_ccc.o \
+		dw3000_ccc_mailbox.o \
+		dw3000_chip_c0.o \
+		dw3000_chip_d0.o \
+		dw3000_chip_e0.o \
+		dw3000_core.o \
+		dw3000_mcps.o \
+		dw3000_spi.o \
+		dw3000_stm.o \
+		dw3000_trc.o \
+		dw3000_txpower_adjustment.o
+
+dw3000-$(CONFIG_MCPS802154_TESTMODE) += dw3000_testmode.o
+
+CFLAGS_dw3000_trc.o := -I$(src) -I$(srctree)/$(src)
+
+ifdef CONFIG_SPI_MASTER
+# Build dw3000.ko only if SPI supported on target kernel.
+obj-m += dw3000.o
+endif
+
+ifeq ($(CONFIG_OF_OVERLAY),y)
+# DTBO for RaspberryPi
+dtbo-y += dw3000.dtbo
+always-y += $(dtbo-y) $(dtbo-m)
+endif
