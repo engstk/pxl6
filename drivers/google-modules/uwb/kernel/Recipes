@@ -1,0 +1,59 @@
+# Run with `make -f Recipes`.
+#
+# You can get help with `make -f Recipes help`.
+
+ALL = linux/x86_64 linux-uwb/dragon linux-rpi/pi4
+
+DESTS = root@db845c
+
+linux-uwb/dragon_CROSS := ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+linux-uwb/dragon_INSTALLFLAGS := $(DESTS)
+
+linux-rpi/pi4_CROSS := ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+linux-rpi/pi4_INSTALLFLAGS := -D $(DESTS)
+
+KDIR = ../projects/linux-build/$*/deps/linux/linux
+KARGS = $($*_CROSS) CONFIG_MCPS_FAKE=m CONFIG_QCOM_SPI_LOWLATENCY=m CONFIG_KUNIT_DW3000_CORE_TEST=y
+
+all: $(ALL:%=%.all)
+clean: $(ALL:%=%.clean)
+
+%.all:
+	$(MAKE) -f Makefile KDIR=$(KDIR) $(KARGS)
+
+%.clean:
+	$(MAKE) -f Makefile KDIR=$(KDIR) $(KARGS) clean
+
+linux-uwb/dragon.install: %.install: %.all
+	../tools/ssh-kernel-install --args '-f Makefile KDIR=$(KDIR) $(KARGS)' --external-modules . $($*_INSTALLFLAGS)
+
+linux-rpi/pi4.install: %.install: %.all
+	../tools/ssh-kernel-install --args '-f Makefile KDIR=$(KDIR) $(KARGS)' --external-modules . $($*_INSTALLFLAGS)
+
+check: check_format check_doc
+
+check_format:
+	../tools/check-format
+
+check_doc:
+	echo ../deps/linux/linux/scripts/kernel-doc -none $$(git ls-files '**.[ch]')
+
+help:
+	@echo "For all configured kernels ($(ALL))"
+	@echo "  all      - build external modules, need a prepared kernel tree"
+	@echo "  clean    - remove generated files"
+	@echo ""
+	@echo "For a specific kernel (for example $(firstword $(ALL)))"
+	@echo "  %.all      - same as all, but for one kernel"
+	@echo "  %.clean    - same as clean, but for one kernel"
+	@echo "  %.install  - install specific kernel using ssh-kernel-install"
+	@echo "               override destinations using DESTS='root@a root@b'"
+	@echo ""
+	@echo "Generic commands"
+	@echo "  check_format - run clang-format"
+	@echo "  check_doc    - check kernel-doc comments"
+	@echo "  check        - run all checks"
+	@echo ""
+	@echo "Example:"
+	@echo "  make -C ../projects/linux-build linux-uwb/dragon.all"
+	@echo "  make -f Recipes linux-uwb/dragon.install"
