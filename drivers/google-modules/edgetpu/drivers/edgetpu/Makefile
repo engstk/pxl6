@@ -31,4 +31,4 @@ abrolhos-objs	:= abrolhos-core.o abrolhos-debug-dump.o \
 KBUILD_OPTIONS += CONFIG_ABROLHOS=m
 
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)

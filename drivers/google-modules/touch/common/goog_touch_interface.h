@@ -16,7 +16,7 @@
 
 #include "heatmap.h"
 #include "touch_offload.h"
-#include "uapi/input/touch_offload.h"
+#include "include/uapi/input/touch_offload.h"
 
 #define GOOG_LOG_NAME "GTI"
 #define GOOG_DBG(fmt, args...)    pr_debug("[%s] %s: " fmt, GOOG_LOG_NAME,\

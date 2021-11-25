@@ -1,7 +1,7 @@
 obj-m := net/mcps802154/ drivers/net/ieee802154/
 
 subdir-ccflags-y := -I$(src) -I$(src)/include \
- -I$(srctree)/$(src) -I$(srctree)/$(src)/include -Werror -Wall $(DW3000_DEFS)
+ -I$(srctree)/$(src) -I$(srctree)/$(src)/include $(DW3000_DEFS)
 
 ifeq ($(CONFIG_BACKPORT_LINUX),y)
 NOSTDINC_FLAGS := \
