@@ -25,5 +25,5 @@ modules modules_install clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) \
 		$(KBUILD_OPTIONS) \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
-		W=1 $(@)
+		$(@)
 

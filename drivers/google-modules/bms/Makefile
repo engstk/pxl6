@@ -125,12 +125,12 @@ M ?= $(shell pwd)
 KBUILD_OPTIONS += $(foreach m,$(GBMS_MODULES),CONFIG_$(m)=m )
 
 modules:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) \
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) \
 		EXTRA_CFLAGS="-DDYNAMIC_DEBUG_MODULE $(foreach m,$(GBMS_MODULES),-DCONFIG_$(m)_MODULE)" \
 		$(@)
 
 modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)
 
 print-%:
 	@echo $* = $($*)
