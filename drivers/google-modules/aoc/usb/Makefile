@@ -9,5 +9,7 @@ M ?= $(shell pwd)
 KBUILD_OPTIONS += CONFIG_AOC_DRIVER=m
 EXTRA_CFLAGS=-I$(KERNEL_SRC)/../google-modules/aoc_ipc -I$(KERNEL_SRC)/../google-modules/aoc -I$(KERNEL_SRC)/drivers/usb/host
 
+EXTRA_CFLAGS += -I$(srctree)/$(src)/../../aoc_ipc -I$(srctree)/$(src)/.. -I$(srctree)/$(src)/../../../usb/host
+
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 -Werror $(KBUILD_OPTIONS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../gs-google/Module.symvers KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../google-modules/aoc/Module.symvers $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../gs-google/Module.symvers KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../google-modules/aoc/Module.symvers $(@)
