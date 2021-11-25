@@ -322,7 +322,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		}
 	}
 
-	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, GIT_REPO_TAG);
 	/* Turn the device off unless a client request is already received. */
 	edgetpu_pm_shutdown(etdev, false);
 

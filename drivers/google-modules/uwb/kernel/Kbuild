@@ -1,7 +1,7 @@
 obj-m := net/mcps802154/ drivers/net/ieee802154/ drivers/spi/
 
 subdir-ccflags-y := -I$(src) -I$(src)/include \
- -I$(srctree)/$(src) -I$(srctree)/$(src)/include -Werror -Wall -Wno-error=undef
+ -I$(srctree)/$(src) -I$(srctree)/$(src)/include -Wno-error=undef
 
 ifeq ($(CONFIG_BACKPORT_LINUX),y)
 NOSTDINC_FLAGS := \
