@@ -11,3 +11,4 @@ obj-$(CONFIG_DRM_PANEL_SAMSUNG_S6E3HC3_C10)		+= panel-samsung-s6e3hc3-c10.o
 obj-$(CONFIG_DRM_PANEL_SAMSUNG_S6E3HC4)		+= panel-samsung-s6e3hc4.o
 obj-$(CONFIG_DRM_PANEL_BOE_NT37290)		+= panel-boe-nt37290.o
 
+EXTRA_CFLAGS += -I$(srctree)/$(src)/../../include
