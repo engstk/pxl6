@@ -233,10 +233,10 @@ EXTRA_CFLAGS := $(foreach config,$(CONFIGS), \
 #
 
 all:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" modules
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" modules
 
 modules_install:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) modules_install
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) modules_install
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) clean
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) clean
