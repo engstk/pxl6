@@ -5,14 +5,6 @@
 
 obj-$(CONFIG_ABROLHOS)		+= abrolhos.o
 
-GIT_PATH=$(srctree)
-ifeq ($(shell git --git-dir=$(GIT_PATH)/.git rev-parse --is-inside-work-tree),true)
-	GIT_REPO_STATE=$(shell (git --git-dir=$(GIT_PATH)/.git --work-tree=$(GIT_PATH) status --porcelain | grep -q .) && echo -dirty)
-	ccflags-y       += -DGIT_REPO_TAG=\"$(shell git --git-dir=$(GIT_PATH)/.git rev-parse --short HEAD)$(GIT_REPO_STATE)\"
-else
-	ccflags-y       += -DGIT_REPO_TAG=\"Not\ a\ git\ repository\"
-endif
-
 edgetpu-fw-objs := edgetpu-firmware-util.o edgetpu-firmware.o edgetpu-shared-fw.o
 edgetpu-objs	:= edgetpu-async.o edgetpu-dmabuf.o edgetpu-iremap-pool.o \
 		   edgetpu-kci.o edgetpu-mailbox.o edgetpu-mapping.o \
@@ -29,4 +21,4 @@ abrolhos-objs	:= abrolhos-core.o abrolhos-debug-dump.o \
 KBUILD_OPTIONS += CONFIG_ABROLHOS=m
 
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)

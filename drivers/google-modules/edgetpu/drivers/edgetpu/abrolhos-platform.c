@@ -308,9 +308,6 @@ static int edgetpu_platform_probe(struct platform_device *pdev)
 	abpdev->edgetpu_dev.thermal =
 			devm_tpu_thermal_create(dev, &abpdev->edgetpu_dev);
 
-	dev_info(dev, "%s edgetpu initialized. Build: %s\n",
-		 abpdev->edgetpu_dev.dev_name, GIT_REPO_TAG);
-
 	dev_dbg(dev, "Probe finished, powering down\n");
 	/* Turn the device off unless a client request is already received. */
 	edgetpu_pm_shutdown(&abpdev->edgetpu_dev, false);

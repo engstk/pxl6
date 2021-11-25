@@ -23,9 +23,7 @@
 # Path to the module source
 M ?= $(shell pwd)
 
-ifeq ($(KERNEL_SRC),)
- BCMDHD_ROOT=$(src)
-else
+ifneq ($(KERNEL_SRC),)
  KBUILD_OPTIONS += BCMDHD_ROOT=$(shell cd $(KERNEL_SRC); readlink -e $(M))
 endif
 
