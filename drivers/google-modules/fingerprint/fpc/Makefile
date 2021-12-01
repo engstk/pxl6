@@ -9,4 +9,4 @@ M ?= $(shell pwd)
 KBUILD_OPTIONS += CONFIG_FPC_FINGERPRINT=m
 
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) W=1 $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)
