@@ -66,3 +66,5 @@ obj-$(CONFIG_SBB_MUX)		+= sbb-mux/
 obj-$(CONFIG_SUBSYSTEM_COREDUMP)	+= sscoredump/
 obj-$(CONFIG_ACCESS_RAMOOPS)	+= access_ramoops.o
 obj-$(CONFIG_BCM_GPS_SPI_DRIVER)   += bbdpl/
+
+obj-$(CONFIG_FORCE_FAST_CHARGE) += fastchg.o
