@@ -19,6 +19,10 @@
 #include "../tcpci.h"
 #include "tcpci_max77759.h"
 
+#if IS_ENABLED(CONFIG_FORCE_FAST_CHARGE)
+extern bool force_fast_charge;
+#endif
+
 struct bc12_status {
 	struct workqueue_struct *wq;
 	struct max77759_plat *chip;
@@ -101,7 +105,14 @@ static void vendor_bc12_alert(struct work_struct *work)
 			logbuffer_log(plat->log, "BC12: nothing attached");
 			break;
 		case CHGTYP_SDP:
+#if IS_ENABLED(CONFIG_FORCE_FAST_CHARGE)
+			if (force_fast_charge == 0)
+				bc12->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
+			else
+				bc12->usb_type = POWER_SUPPLY_USB_TYPE_CDP;
+#else
 			bc12->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
+#endif
 			logbuffer_log(plat->log, "BC12: SDP detected");
 			break;
 		case CHGTYP_CDP:
