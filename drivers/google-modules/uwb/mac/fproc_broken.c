@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,13 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, FProc state broken.
- *
- * When broken, ignore everything until stopped. Next step will be to have an
- * automatic recovery.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/printk.h>
 
@@ -32,7 +26,7 @@
 
 static void mcps802154_fproc_broken_enter(struct mcps802154_local *local)
 {
-	pr_err_ratelimited("mcps802154: entering broken state for %s\n",
+	pr_err("mcps802154: entering broken state for %s\n",
 			   wpan_phy_name(local->hw->phy));
 	local->broken = true;
 }
@@ -68,7 +62,6 @@ static const struct mcps802154_fproc_state mcps802154_fproc_broken = {
 	.rx_error = mcps802154_fproc_broken_ignore_rx_error,
 	.tx_done = mcps802154_fproc_broken_ignore,
 	.broken = mcps802154_fproc_broken_ignore,
-	.timer_expired = mcps802154_fproc_broken_ignore,
 	.schedule_change = mcps802154_fproc_broken_schedule_change,
 };
 

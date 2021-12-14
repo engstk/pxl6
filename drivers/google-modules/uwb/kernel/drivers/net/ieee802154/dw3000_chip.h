@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,15 +18,13 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_CHIP_H
 #define __DW3000_CHIP_H
 
 /* Forward declaration */
 struct dw3000;
-struct dw3000_chip_register_priv;
 
 /**
  * enum dw3000_chip_register_flags - flags for the register declaration
@@ -90,7 +88,7 @@ struct dw3000_chip_register {
  */
 struct dw3000_chip_register_priv {
 	struct dw3000 *dw;
-	struct dw3000_chip_register *reg;
+	const struct dw3000_chip_register *reg;
 	size_t count;
 };
 
@@ -102,9 +100,12 @@ struct dw3000_chip_register_priv {
  * @coex_gpio: change state of WiFi coexistence GPIO
  * @prog_ldo_and_bias_tune: programs the device's LDO and BIAS tuning
  * @get_config_mrxlut_chan: Lookup table default values for channel provided or NULL
+ * @get_dgc_dec: Read DGC_DBG register
  * @pre_read_sys_time: Workaround before the SYS_TIME register reads
  * @adc_offset_calibration: Workaround to calibrate ADC offset
  * @pll_calibration_from_scratch: Workaround to calibrate the PLL from scratch
+ * @pll_coarse_code: Workaround to set PLL coarse code
+ * @prog_pll_coarse_code: Program PLL coarse code from OTP
  * @get_registers: Return known registers table and it's size
  */
 struct dw3000_chip_ops {
@@ -114,9 +115,12 @@ struct dw3000_chip_ops {
 	int (*coex_gpio)(struct dw3000 *dw, bool state, int delay_us);
 	int (*prog_ldo_and_bias_tune)(struct dw3000 *dw);
 	const u32 *(*get_config_mrxlut_chan)(struct dw3000 *dw, u8 channel);
+	int (*get_dgc_dec)(struct dw3000 *dw, u8 *value);
 	int (*pre_read_sys_time)(struct dw3000 *dw);
 	int (*adc_offset_calibration)(struct dw3000 *dw);
 	int (*pll_calibration_from_scratch)(struct dw3000 *dw);
+	int (*pll_coarse_code)(struct dw3000 *dw);
+	int (*prog_pll_coarse_code)(struct dw3000 *dw);
 	const struct dw3000_chip_register *(*get_registers)(struct dw3000 *dw,
 							    size_t *count);
 };
@@ -124,21 +128,26 @@ struct dw3000_chip_ops {
 /**
  * struct dw3000_chip_version - supported chip version definition
  * @id: device model ID
- * @ver: device version, saved to __dw3000_chip_version
+ * @ver: device registers version, saved to __dw3000_chip_version
  * @ops: associated version specific operations
+ * @name: short version name of current device
  */
 struct dw3000_chip_version {
 	unsigned id;
 	int ver;
 	const struct dw3000_chip_ops *ops;
+	const char *name;
 };
 
 /* DW3000 device model IDs (with or non PDOA) */
 #define DW3000_C0_DEV_ID 0xdeca0302
 #define DW3000_C0_PDOA_DEV_ID 0xdeca0312
+#define DW3000_C0_VERSION 0
 #define DW3000_D0_DEV_ID 0xdeca0303
 #define DW3000_D0_PDOA_DEV_ID 0xdeca0313
+#define DW3000_D0_VERSION 1
 #define DW3000_E0_PDOA_DEV_ID 0xdeca0314
+#define DW3000_E0_VERSION 2
 
 /* Declaration of version specific chip operations */
 extern const struct dw3000_chip_ops dw3000_chip_c0_ops;

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef DW3000_TESTMODE_NL_H
@@ -32,11 +31,13 @@
  * @cir_pwr: value of the channel impulse response power (CIR power)
  * @pacc_cnt: value of the the preamble accumulation count (PACC count)
  * @prf_64mhz: value of preamble repetition frequency (0 = 16MHz, 1 = 64MHz)
+ * @dgc_dec: value of dgc decision from DGC_CFG register
  */
 struct dw3000_rssi {
 	uint32_t cir_pwr : 17;
 	uint16_t pacc_cnt : 11;
 	uint8_t prf_64mhz : 1;
+	uint8_t dgc_dec : 3;
 } __attribute__((__packed__));
 
 /**
@@ -70,6 +71,9 @@ enum dw3000_tm_attr {
 	DW3000_TM_ATTR_CCC_CONFLICT_SLOT_IDX,
 	DW3000_TM_ATTR_CCC_CMD_RC,
 	DW3000_TM_ATTR_DEEP_SLEEP_DELAY_MS,
+	DW3000_TM_ATTR_CONTTX_FRAME_LENGHT,
+	DW3000_TM_ATTR_CONTTX_RATE,
+	DW3000_TM_ATTR_CONTTX_DURATION,
 
 	/* keep last */
 	__DW3000_TM_ATTR_AFTER_LAST,
@@ -83,10 +87,16 @@ enum dw3000_tm_cmd {
 	DW3000_TM_CMD_STOP_RX_DIAG,
 	DW3000_TM_CMD_GET_RX_DIAG,
 	DW3000_TM_CMD_CLEAR_RX_DIAG,
-	DW3000_TM_CMD_START_TX_CWTONE,
-	DW3000_TM_CMD_STOP_TX_CWTONE,
 	DW3000_TM_CMD_OTP_READ,
 	DW3000_TM_CMD_OTP_WRITE,
+
+	/* Start/Stop Continous Wave Tone */
+	DW3000_TM_CMD_START_TX_CWTONE,
+	DW3000_TM_CMD_STOP_TX_CWTONE,
+
+	/* Continuous TX : start/stop sending frame at regular interval */
+	DW3000_TM_CMD_START_CONTINUOUS_TX,
+	DW3000_TM_CMD_STOP_CONTINUOUS_TX,
 
 	/* CCC NFCC/AP coexistence test commands */
 	DW3000_TM_CMD_CCC_START,

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_CORE_REG_H
 #define __DW3000_CORE_REG_H
@@ -1372,6 +1371,48 @@
 #define DW3000_PG_TEST_TX_TEST_CH1_BIT_LEN (4U)
 #define DW3000_PG_TEST_TX_TEST_CH1_BIT_MASK 0xfU
 
+/* register PGC_CTRL */
+#define DW3000_PGC_CTRL_ID                          0x80010
+#define DW3000_PGC_CTRL_LEN                         (4U)
+#define DW3000_PGC_CTRL_MASK                        0xFFFFFFFFUL
+#define DW3000_PGC_CTRL_PGC_START_VAL_BIT_OFFSET    (8U)
+#define DW3000_PGC_CTRL_PGC_START_VAL_BIT_LEN       (1U)
+#define DW3000_PGC_CTRL_PGC_START_VAL_BIT_MASK      0x100U
+#define DW3000_PGC_CTRL_CAL_DIR_BIT_OFFSET          (7U)
+#define DW3000_PGC_CTRL_CAL_DIR_BIT_LEN             (1U)
+#define DW3000_PGC_CTRL_CAL_DIR_BIT_MASK            0x80U
+#define DW3000_PGC_CTRL_CAL_ON_TX_BIT_OFFSET        (6U)
+#define DW3000_PGC_CTRL_CAL_ON_TX_BIT_LEN           (1U)
+#define DW3000_PGC_CTRL_CAL_ON_TX_BIT_MASK          0x40U
+#define DW3000_PGC_CTRL_PGC_TMEAS_BIT_OFFSET        (2U)
+#define DW3000_PGC_CTRL_PGC_TMEAS_BIT_LEN           (4U)
+#define DW3000_PGC_CTRL_PGC_TMEAS_BIT_MASK          0x3cU
+#define DW3000_PGC_CTRL_PGC_AUTO_CAL_BIT_OFFSET     (1U)
+#define DW3000_PGC_CTRL_PGC_AUTO_CAL_BIT_LEN        (1U)
+#define DW3000_PGC_CTRL_PGC_AUTO_CAL_BIT_MASK       0x2U
+#define DW3000_PGC_CTRL_PGC_START_BIT_OFFSET        (0U)
+#define DW3000_PGC_CTRL_PGC_START_BIT_LEN           (1U)
+#define DW3000_PGC_CTRL_PGC_START_BIT_MASK          0x1U
+
+#define DW3000_PGC_STATUS_ID 0x80014
+#define DW3000_PGC_STATUS_LEN (4U)
+#define DW3000_PGC_STATUS_MASK 0xFFFFFFFFUL
+#define DW3000_PGC_STATUS_AUTOCAL_DONE_BIT_OFFSET (12U)
+#define DW3000_PGC_STATUS_AUTOCAL_DONE_BIT_LEN (1U)
+#define DW3000_PGC_STATUS_AUTOCAL_DONE_BIT_MASK  0x1000U
+#define DW3000_PGC_STATUS_PG_DELAY_COUNT_BIT_OFFSET (0U)
+#define DW3000_PGC_STATUS_PG_DELAY_COUNT_BIT_LEN (12U)
+#define DW3000_PGC_STATUS_PG_DELAY_COUNT_BIT_MASK 0xfffU
+
+
+/* register PG_CAL_TARGET  */
+#define DW3000_PG_CAL_TARGET_ID 0x8001c
+#define DW3000_PG_CAL_TARGET_LEN (4U)
+#define DW3000_PG_CAL_TARGET_MASK 0xFFFFFFFFUL
+#define DW3000_PG_CAL_TARGET_TARGET_BIT_OFFSET (0U)
+#define DW3000_PG_CAL_TARGET_TARGET_BIT_LEN (12U)
+#define DW3000_PG_CAL_TARGET_TARGET_BIT_MASK 0xfffU
+
 /* register PLL_CAL */
 #define DW3000_PLL_CAL_ID 0x90008
 #define DW3000_PLL_CAL_LEN (4U)
@@ -2054,7 +2095,7 @@
 
 /* DW3000 scratch ram */
 #define DW3000_SCRATCH_RAM_ID 0x160000
-#define DW3000_SCRATCH_RAM_LEN (127U)
+#define DW3000_SCRATCH_RAM_LEN 127
 
 /* Double buffer diagnostic register set */
 #define DW3000_DB_DIAG_SET_1 0x180000

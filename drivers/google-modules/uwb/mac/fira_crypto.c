@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,7 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.  Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include "fira_crypto.h"
@@ -32,6 +32,7 @@
 #include <linux/printk.h>
 #include <linux/skbuff.h>
 #include <linux/string.h>
+#include <net/mcps802154_frame.h>
 
 #define FIRA_STATIC_STS_SESSION_KEY "StaticTSStaticTS"
 
@@ -49,6 +50,9 @@ static int fira_crypto_config_digest(struct fira_local *local,
 	u8 *p = derivation_data;
 	int slot_duration_us;
 	static const u8 zero_key[AES_KEYSIZE_128];
+	const struct mcps802154_channel *channel;
+
+	channel = mcps802154_get_current_channel(local->llhw);
 
 	slot_duration_us = session->params.slot_duration_dtu * 1000 /
 			   (local->llhw->dtu_freq_hz / 1000);
@@ -56,12 +60,12 @@ static int fira_crypto_config_digest(struct fira_local *local,
 	*p++ = session->params.ranging_round_usage;
 	*p++ = session->params.sts_config;
 	*p++ = session->params.multi_node_mode;
-	*p++ = session->params.channel_number;
+	*p++ = session->params.channel_number ?: channel->channel;
 	put_unaligned_be16(slot_duration_us, p);
 	p += sizeof(u16);
 	*p++ = session->params.mac_fcs_type;
 	*p++ = session->params.rframe_config;
-	*p++ = session->params.preamble_code_index;
+	*p++ = session->params.preamble_code_index ?: channel->preamble_code;
 	*p++ = session->params.sfd_id;
 	*p++ = session->params.psdu_data_rate;
 	*p++ = session->params.preamble_duration;
@@ -172,6 +176,7 @@ int fira_crypto_test(void)
 	static const u8 zero_key[AES_KEYSIZE_128];
 	struct sk_buff *skb = NULL;
 	int r;
+	struct fira_round_hopping_sequence round_hopping_sequence;
 
 	static const u8 digest_data[] = { 0x02, 0x00, 0x00, 0x09, 0x07, 0xD0,
 					  0x00, 0x03, 0x0a, 0x02, 0x00, 0x01,
@@ -257,6 +262,8 @@ int fira_crypto_test(void)
 	skb_put_data(skb, frame_enc, sizeof(frame_enc));
 	skb_pull(skb, frame_header_len);
 
+	/* Prepare cannot fail. */
+	fira_aead_decrypt_prepare(skb);
 	r = fira_aead_decrypt(&aead, skb, frame_header_len,
 			      frame_src_short_addr, frame_counter);
 	skb_push(skb, frame_header_len);
@@ -282,6 +289,8 @@ int fira_crypto_test(void)
 	skb_pull(skb, frame_header_len);
 	skb->data[skb->len - 1]++;
 
+	/* Prepare cannot fail. */
+	fira_aead_decrypt_prepare(skb);
 	r = fira_aead_decrypt(&aead, skb, frame_header_len,
 			      frame_src_short_addr, frame_counter);
 	if (r != -EBADMSG) {
@@ -289,6 +298,12 @@ int fira_crypto_test(void)
 		r = -EINVAL;
 		goto out;
 	}
+
+	/* Test ecb(aes) presence for hopping. */
+	r = fira_round_hopping_crypto_init(&round_hopping_sequence);
+	if (r)
+		goto out;
+	fira_round_hopping_crypto_destroy(&round_hopping_sequence);
 
 	r = 0;
 out:

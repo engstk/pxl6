@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,14 +18,13 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/interrupt.h>
-
+#include <linux/mutex.h>
 #include "dw3000.h"
 #include "dw3000_core.h"
 
@@ -42,9 +41,9 @@ static inline int dw3000_set_sched_attr(struct task_struct *p)
 #else
 	struct sched_attr attr = {
 		.sched_policy = SCHED_FIFO,
-		.sched_priority = MAX_USER_RT_PRIO / 2,
+		.sched_priority = MAX_USER_RT_PRIO - 1,
 		.sched_flags = SCHED_FLAG_UTIL_CLAMP_MIN,
-		.sched_util_min = 50
+		.sched_util_min = SCHED_CAPACITY_SCALE
 	};
 	return sched_setattr_nocheck(p, &attr);
 #endif
@@ -74,6 +73,15 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 		   but it can be executed directly instead. */
 		return cmd->cmd(dw, cmd->in, cmd->out);
 	}
+
+	/* Mutex is used in dw3000_enqueue_generic()
+	* This protection will work with the spinlock in order to allow
+	* the CPU to sleep and avoid ressources wasting during spinning
+	*/
+	if (mutex_lock_interruptible(&stm->mtx) == -EINTR) {
+		dev_err(dw->dev, "work enqueuing interrupted by signal");
+		return -EINTR;
+	}
 	/* Slow path if not in STM thread context */
 	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work |= work;
@@ -82,6 +90,7 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 	wait_event_interruptible_locked_irq(stm->work_wq,
 					    !(stm->pending_work & work));
 	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	mutex_unlock(&stm->mtx);
 	return cmd->ret;
 }
 
@@ -179,8 +188,8 @@ unsigned long dw3000_get_pending_work(struct dw3000 *dw)
 	return work;
 }
 
-/* Init work that run inside the high-priority thread below */
-int dw3000_init_work(struct dw3000 *dw, const void *in, void *out)
+/* Chip detect work that run inside the high-priority thread below */
+static int dw3000_detect_work(struct dw3000 *dw, const void *in, void *out)
 {
 	int rc;
 
@@ -189,22 +198,21 @@ int dw3000_init_work(struct dw3000 *dw, const void *in, void *out)
 		return rc;
 	}
 
-	rc = dw3000_hardreset(dw);
-	if (rc != 0) {
-		dev_err(dw->dev, "hard reset failed: %d\n", rc);
+	dev_warn(dw->dev, "checking device presence\n");
+
+	/* Now, read DEV_ID and initialise chip version */
+	rc = dw3000_check_devid(dw);
+	if (rc) {
+		dev_err(dw->dev, "device checking failed: %d\n", rc);
+		dw3000_poweroff(dw); // Force power-off if error.
 		return rc;
 	}
 
-	/* Soft reset */
-	rc = dw3000_softreset(dw);
-	if (rc != 0) {
-		dev_err(dw->dev, "device reset failed: %d\n", rc);
-		return rc;
-	}
+	dev_warn(dw->dev, "device present\n");
 
 	/* Now, we just power-off the device waiting for it to be used by the
-	 * MAC to avoid power consumption. We may put it in deep-sleep instead. */
-	rc = dw3000_poweroff(dw);
+	 * MAC to avoid power consumption. Except if SPI tests are enabled. */
+	rc = dw3000_spitests_enabled(dw) ? 0 : dw3000_poweroff(dw);
 	return rc;
 }
 
@@ -238,13 +246,16 @@ int dw3000_event_thread(void *data)
 		/* In nearly all states, we can execute generic works. */
 		if (pending_work & DW3000_COMMAND_WORK) {
 			struct dw3000_stm_command *cmd = stm->generic_work;
-			bool is_init_work = cmd->cmd == dw3000_init_work;
+			bool is_detect_work = cmd->cmd == dw3000_detect_work;
 
 			cmd->ret = cmd->cmd(dw, cmd->in, cmd->out);
 			dw3000_dequeue(dw, DW3000_COMMAND_WORK);
-			if (unlikely(is_init_work)) {
-				/* Run SPI tests if enabled after dw3000_init_work. */
+			if (unlikely(is_detect_work &&
+				     dw3000_spitests_enabled(dw))) {
+				/* Run SPI tests if enabled after dw3000_detect_work. */
 				dw3000_spitests(dw);
+				/* Power down the device after SPI tests */
+				dw3000_poweroff(dw);
 			}
 		}
 
@@ -283,6 +294,8 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 	/* Wait queues */
 	init_waitqueue_head(&stm->work_wq);
 
+	mutex_init(&stm->mtx);
+
 	/* SKIP: Setup timers (state timeout and ADC timers) */
 
 	/* Init event handler thread */
@@ -299,6 +312,8 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 	if (rc)
 		dev_err(dw->dev, "dw3000_set_sched_attr failed: %d\n", rc);
 
+	dw->dw3000_pid = stm->mthread->pid;
+
 	return 0;
 }
 
@@ -306,8 +321,9 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 int dw3000_state_start(struct dw3000 *dw)
 {
 	struct dw3000_state *stm = &dw->stm;
-	struct dw3000_stm_command cmd = { dw3000_init_work, NULL, NULL };
+	struct dw3000_stm_command cmd = { dw3000_detect_work, NULL, NULL };
 	unsigned long flags;
+	int rc;
 
 	/* Ensure spurious IRQ that may come during dw3000_setup_irq() (because
 	   IRQ pin is already HIGH) isn't handle by the STM thread. */
@@ -319,7 +335,13 @@ int dw3000_state_start(struct dw3000 *dw)
 	wake_up_process(stm->mthread);
 	dev_dbg(dw->dev, "state machine started\n");
 
-	/* Do initialisation and return result to caller */
+	/* Turn on power and de-assert reset GPIO */
+	rc = dw3000_hardreset(dw);
+	if (rc) {
+		dev_err(dw->dev, "device power on failed: %d\n", rc);
+		return rc;
+	}
+	/* Do chip detection and return result to caller */
 	return dw3000_enqueue_generic(dw, &cmd);
 }
 

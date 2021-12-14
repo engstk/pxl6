@@ -78,6 +78,7 @@ static void decon_seamless_mode_set(struct exynos_drm_crtc *exynos_crtc,
 				    struct drm_crtc_state *old_crtc_state);
 static int decon_request_te_irq(struct exynos_drm_crtc *exynos_crtc,
 				const struct exynos_drm_connector_state *exynos_conn_state);
+static bool decon_check_fs_pending_locked(struct decon_device *decon);
 
 void decon_dump(const struct decon_device *decon)
 {
@@ -1090,6 +1091,69 @@ static void decon_disable(struct exynos_drm_crtc *crtc)
 	decon_info(decon, "%s -\n", __func__);
 }
 
+#define TIMEOUT msecs_to_jiffies(100)
+
+/* wait at least one frame time on top of common timeout */
+static inline unsigned long fps_timeout(int fps)
+{
+	/* default to 60 fps, if fps is not provided */
+	const frame_time_ms = DIV_ROUND_UP(MSEC_PER_SEC, fps ? : 60);
+
+	return msecs_to_jiffies(frame_time_ms) + TIMEOUT;
+}
+
+static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
+				const struct drm_crtc_state *old_crtc_state,
+				const struct drm_crtc_state *new_crtc_state)
+{
+	struct decon_device *decon = crtc->ctx;
+	struct drm_crtc_commit *commit = new_crtc_state->commit;
+	struct decon_mode *mode;
+	int fps, recovering;
+
+	if (!new_crtc_state->active)
+		return;
+
+	if (WARN_ON(!commit))
+		return;
+
+	fps = drm_mode_vrefresh(&new_crtc_state->mode);
+	if (old_crtc_state->active)
+		fps = min(fps, drm_mode_vrefresh(&old_crtc_state->mode));
+
+	if (!wait_for_completion_timeout(&commit->flip_done, fps_timeout(fps))) {
+		unsigned long flags;
+		bool fs_irq_pending;
+
+		spin_lock_irqsave(&decon->slock, flags);
+		fs_irq_pending = decon_check_fs_pending_locked(decon);
+		spin_unlock_irqrestore(&decon->slock, flags);
+
+		if (!fs_irq_pending) {
+			DPU_EVENT_LOG(DPU_EVT_FRAMESTART_TIMEOUT, decon->id, NULL);
+			recovering = atomic_read(&decon->recovery.recovering);
+			pr_warn("decon%u framestart timeout (%d fps). recovering(%d)\n",
+					decon->id, fps, recovering);
+			if (!recovering)
+				decon_dump_all(decon, DPU_EVT_CONDITION_ALL, false);
+
+			decon_force_vblank_event(decon);
+
+			if (!recovering)
+				decon_trigger_recovery(decon);
+		} else {
+			pr_warn("decon%u scheduler late to service fs irq handle (%d fps)\n",
+					decon->id, fps);
+		}
+	}
+
+	mode = &decon->config.mode;
+	if (mode->op_mode == DECON_COMMAND_MODE && !decon->keep_unmask) {
+		DPU_EVENT_LOG(DPU_EVT_DECON_TRIG_MASK, decon->id, NULL);
+		decon_reg_set_trigger(decon->id, mode, DECON_TRIG_MASK);
+	}
+}
+
 static const struct exynos_drm_crtc_ops decon_crtc_ops = {
 	.enable = decon_enable,
 	.disable = decon_disable,
@@ -1101,6 +1165,7 @@ static const struct exynos_drm_crtc_ops decon_crtc_ops = {
 	.update_plane = decon_update_plane,
 	.disable_plane = decon_disable_plane,
 	.atomic_flush = decon_atomic_flush,
+	.wait_for_flip_done = decon_wait_for_flip_done,
 };
 
 static int dpu_sysmmu_fault_handler(struct iommu_fault *fault, void *data)
@@ -1261,26 +1326,37 @@ irq_end:
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t decon_fs_irq_handler(int irq, void *dev_data)
+static bool decon_check_fs_pending_locked(struct decon_device *decon)
 {
-	struct decon_device *decon = dev_data;
 	u32 pending_irq;
 
-	spin_lock(&decon->slock);
 	if (decon->state != DECON_STATE_ON)
-		goto irq_end;
+		return false;
 
 	pending_irq = decon_reg_get_fs_interrupt_and_clear(decon->id);
 
 	if (pending_irq & DPU_FRAME_START_INT_PEND) {
 		DPU_EVENT_LOG(DPU_EVT_DECON_FRAMESTART, decon->id, decon);
 		decon_send_vblank_event_locked(decon);
-		decon_debug(decon, "%s: frame start\n", __func__);
 		if (decon->config.mode.op_mode == DECON_VIDEO_MODE)
 			drm_crtc_handle_vblank(&decon->crtc->base);
+
+		return true;
 	}
 
-irq_end:
+	return false;
+}
+
+
+static irqreturn_t decon_fs_irq_handler(int irq, void *dev_data)
+{
+	struct decon_device *decon = dev_data;
+
+	spin_lock(&decon->slock);
+
+	if (decon_check_fs_pending_locked(decon))
+		decon_debug(decon, "%s: frame start\n", __func__);
+
 	spin_unlock(&decon->slock);
 	return IRQ_HANDLED;
 }

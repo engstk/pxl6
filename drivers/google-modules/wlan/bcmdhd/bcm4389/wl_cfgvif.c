@@ -3162,17 +3162,15 @@ wl_cfg80211_bcn_bringup_ap(
 		}
 
 #ifdef MFP
-		if (cfg->mfp_mode) {
-			/* This needs to go after wsec otherwise the wsec command will
-			 * overwrite the values set by MFP
-			 */
-			err = wldev_iovar_setint_bsscfg(dev, "mfp", cfg->mfp_mode, bssidx);
-			if (err < 0) {
-				WL_ERR(("MFP Setting failed. ret = %d \n", err));
-				/* If fw doesn't support mfp, Ignore the error */
-				if (err != BCME_UNSUPPORTED) {
-					goto exit;
-				}
+		/* This needs to go after wsec otherwise the wsec command will
+		 * overwrite the values set by MFP
+		 */
+		err = wldev_iovar_setint_bsscfg(dev, "mfp", cfg->mfp_mode, bssidx);
+		if (err < 0) {
+			WL_ERR(("MFP Setting failed. ret = %d \n", err));
+			/* If fw doesn't support mfp, Ignore the error */
+			if (err != BCME_UNSUPPORTED) {
+				goto exit;
 			}
 		}
 #endif /* MFP */
@@ -3216,9 +3214,7 @@ exit:
 	}
 
 #ifdef MFP
-	if (cfg->mfp_mode) {
-		cfg->mfp_mode = 0;
-	}
+	cfg->mfp_mode = 0;
 
 	if (cfg->bip_pos) {
 		cfg->bip_pos = NULL;
@@ -6789,34 +6785,32 @@ wl_cfgvif_roam_config(struct bcm_cfg80211 *cfg, struct net_device *dev,
 
 	if (state == ROAM_CONF_ROAM_DISAB_REQ) {
 		cfg->disable_fw_roam = TRUE;
-#ifdef WL_DUAL_APSTA
+
 		wl_android_rcroam_turn_on(dev, FALSE);
-		/* Disable roam on all interfaces */
-		wl_dualsta_enable_roam(cfg, dev, FALSE);
-#else
 		/* roam off for incoming ndev interface */
 		wl_roam_off_config(dev, TRUE);
-#endif
 		return;
 	} else if (state == ROAM_CONF_ROAM_ENAB_REQ) {
-		struct net_device *roam_ndev = dev;
 		cfg->disable_fw_roam = FALSE;
-		if ((cfg->stas_associated > 1)) {
+#ifdef WL_DUAL_APSTA
+		if ((cfg->stas_associated >= 1)) {
 			WL_DBG_MEM(("Roam enable with more than one interface connected.\n"));
 			/* If roam enable comes with > 1 iface connected, enable it on primary */
 			if (!cfg->inet_ndev) {
 				WL_ERR(("primary_sta (inet_ndev) not set! skip roam enable\n"));
 				return;
 			}
-			roam_ndev = cfg->inet_ndev;
+			/* Enable roam on primary, disable on others */
+			wl_dualsta_enable_roam(cfg, cfg->inet_ndev, TRUE);
+			wl_android_rcroam_turn_on(cfg->inet_ndev, TRUE);
+			return;
 		}
+#endif /* WL_DUAL_APSTA */
 
 		/* ROAM enable */
-		wl_roam_off_config(roam_ndev, FALSE);
-#ifdef WL_DUAL_APSTA
+		wl_roam_off_config(dev, FALSE);
 		/* Single Interface. Enable back rcroam */
 		wl_android_rcroam_turn_on(dev, TRUE);
-#endif /* WL_DUAL_APSTA */
 		return;
 	}
 
