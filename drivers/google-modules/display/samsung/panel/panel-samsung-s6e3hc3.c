@@ -247,7 +247,7 @@ static const struct exynos_dsi_cmd s6e3hc3_early_exit_enable_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_GE(PANEL_REV_PROTO1_1), 0xB9, 0x41),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_GE(PANEL_REV_PROTO1_1), 0xB0, 0x00, 0x06, 0xB9),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_GE(PANEL_REV_PROTO1_1),
-						0xB9, 0x07, 0xBA, 0x07, 0xBA, 0x07, 0xF2),
+						0xB9, 0x0C, 0x44, 0x0C, 0x44, 0x00, 0x1C),
 
 	EXYNOS_DSI_CMD_SEQ(0xBD, 0x21, 0x02),
 	EXYNOS_DSI_CMD0(early_exit_global_para),

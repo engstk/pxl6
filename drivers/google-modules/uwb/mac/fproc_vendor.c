@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, FProc states: Vendor.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/errno.h>
@@ -40,9 +36,10 @@ mcps802154_fproc_vendor_handle_callback_return(struct mcps802154_local *local,
 	u32 next_access_dtu = access->timestamp_dtu + duration_dtu;
 
 	if (!r)
+		/* TODO_MR : call access_done(false) ?? */
 		return;
 
-	mcps802154_fproc_access_done(local);
+	mcps802154_fproc_access_done(local, r);
 	if (r != 1) {
 		mcps802154_fproc_broken_handle(local);
 	} else if (duration_dtu) {
@@ -95,7 +92,10 @@ static void mcps802154_fproc_vendor_tx_done(struct mcps802154_local *local)
 	struct mcps802154_access *access = local->fproc.access;
 	int r;
 
-	r = access->vendor_ops->tx_done(access);
+	if (access->vendor_ops->tx_done)
+		r = access->vendor_ops->tx_done(access);
+	else
+		r = EOPNOTSUPP;
 	mcps802154_fproc_vendor_handle_callback_return(local, r);
 }
 
@@ -109,6 +109,19 @@ static void mcps802154_fproc_vendor_broken(struct mcps802154_local *local)
 	else
 		r = -EOPNOTSUPP;
 	mcps802154_fproc_vendor_handle_callback_return(local, r);
+}
+
+static void
+mcps802154_fproc_vendor_timer_expired(struct mcps802154_local *local)
+{
+	struct mcps802154_access *access = local->fproc.access;
+
+	if (access->vendor_ops->timer_expired) {
+		int r;
+
+		r = access->vendor_ops->timer_expired(access);
+		mcps802154_fproc_vendor_handle_callback_return(local, r);
+	}
 }
 
 static void
@@ -131,6 +144,7 @@ static const struct mcps802154_fproc_state mcps802154_fproc_vendor = {
 	.rx_error = mcps802154_fproc_vendor_rx_error,
 	.tx_done = mcps802154_fproc_vendor_tx_done,
 	.broken = mcps802154_fproc_vendor_broken,
+	.timer_expired = mcps802154_fproc_vendor_timer_expired,
 	.schedule_change = mcps802154_fproc_vendor_schedule_change,
 };
 

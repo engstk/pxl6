@@ -169,7 +169,7 @@ enum { NORMAL = 0, MMAPED, RAW, INCALL, HIFI, ANDROID_AEC, COMPRESS };
 
 enum { BUILTIN_MIC0 = 0, BUILTIN_MIC1, BUILTIN_MIC2, BUILTIN_MIC3 };
 enum { MIC_LOW_POWER_GAIN = 0, MIC_HIGH_POWER_GAIN, MIC_CURRENT_GAIN };
-enum { DEFAULT_MIC = 0, BUILTIN_MIC, USB_MIC, BT_MIC, IN_CALL_MUSIC, NO_MIC=IN_CALL_MUSIC };
+enum { DEFAULT_MIC = 0, BUILTIN_MIC, USB_MIC, BT_MIC, IN_CALL_MUSIC, NO_MIC=IN_CALL_MUSIC, ERASER };
 enum { INCALL_CAPTURE_OFF = 0, INCALL_CAPTURE_UL, INCALL_CAPTURE_DL, INCALL_CAPTURE_UL_DL };
 enum { NONBLOCKING = 0, BLOCKING = 1 };
 enum { STOP = 0, START };
@@ -213,11 +213,13 @@ struct aoc_chip {
 
 	int compr_offload_volume;
 	int mic_spatial_module_enable;
+	int capture_eraser_enable;
 	int sidetone_enable;
 	int mic_loopback_enabled;
 	unsigned int opened;
 	unsigned int capture_param_set;
 	struct mutex audio_mutex;
+	struct mutex audio_cmd_chan_mutex;
 	spinlock_t audio_lock;
 	long pcm_wait_time_in_ms;
 	long voice_pcm_wait_time_in_ms;
@@ -262,12 +264,14 @@ struct aoc_alsa_stream {
 	int draining;
 
 	struct work_struct free_aoc_service_work;
+	struct work_struct pcm_period_work;
 };
 
 void aoc_timer_start(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_restart(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop_sync(struct aoc_alsa_stream *alsa_stream);
+void aoc_pcm_period_work_handler(struct work_struct *work);
 
 int snd_aoc_new_ctl(struct aoc_chip *chip);
 int snd_aoc_new_pcm(struct aoc_chip *chip);
@@ -318,6 +322,7 @@ int ap_record_stop(struct aoc_chip *chip);
 int aoc_capture_filter_runtime_control(struct aoc_chip *chip, uint32_t port_id, bool on);
 int aoc_audio_capture_runtime_trigger(struct aoc_chip *chip, int ep_id,
 	 int dst, bool on);
+int aoc_audio_capture_eraser_enable(struct aoc_chip *chip, long enable);
 
 int aoc_voice_call_mic_mute(struct aoc_chip *chip, int mute);
 int aoc_incall_capture_enable_get(struct aoc_chip *chip, int stream, long *val);

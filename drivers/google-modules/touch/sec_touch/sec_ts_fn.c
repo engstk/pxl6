@@ -1052,6 +1052,89 @@ static ssize_t heatmap_mode_show(struct device *dev,
 #endif
 }
 
+/* sysfs file node to store grip prescreen mode
+ * "echo cmd > grip_prescreen_mode" to change
+ * Possible commands:
+ * 0 = GRIP_PRESCREEN_OFF
+ * 1 = GRIP_PRESCREEN_MODE_1
+ * 2 = GRIP_PRESCREEN_MODE_2
+ * 3 = GRIP_PRESCREEN_MODE_3
+ */
+static ssize_t grip_prescreen_mode_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
+	struct sec_ts_plat_data *pdata = ts->plat_data;
+	int result;
+	int val;
+
+	result = kstrtoint(buf, 10, &val);
+	if (result < 0 || val < GRIP_PRESCREEN_OFF ||
+	    val > GRIP_PRESCREEN_MODE_3) {
+		input_err(true, &ts->client->dev,
+			"%s: Invalid input.\n", __func__);
+		return -EINVAL;
+	}
+
+	pdata->grip_prescreen_mode = val;
+
+	return count;
+}
+
+static ssize_t grip_prescreen_mode_show(struct device *dev,
+				        struct device_attribute *attr,
+				        char *buf)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
+	const struct sec_ts_plat_data *pdata = ts->plat_data;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 pdata->grip_prescreen_mode);
+}
+
+/* sysfs file node to store grip prescreen timeout
+ * "echo timeout > grip_prescreen_timeout" to change
+ * Possible timeout range:
+ *   GRIP_PRESCREEN_TIMEOUT_MIN ~ GRIP_PRESCREEN_TIMEOUT_MAX
+ */
+static ssize_t grip_prescreen_timeout_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
+	struct sec_ts_plat_data *pdata = ts->plat_data;
+	int result;
+	int val;
+
+	result = kstrtoint(buf, 10, &val);
+	if (result < 0 || val < GRIP_PRESCREEN_TIMEOUT_MIN ||
+	    val > GRIP_PRESCREEN_TIMEOUT_MAX) {
+		input_err(true, &ts->client->dev,
+			"%s: Invalid input.\n", __func__);
+		return -EINVAL;
+	}
+
+	pdata->grip_prescreen_timeout = val;
+
+	return count;
+}
+
+static ssize_t grip_prescreen_timeout_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct sec_cmd_data *sec = dev_get_drvdata(dev);
+	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
+	const struct sec_ts_plat_data *pdata = ts->plat_data;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 pdata->grip_prescreen_timeout);
+}
+
 /* sysfs file node to store encoded_enable control
  * "echo cmd > encoded_enable" to change
  * Possible commands:
@@ -1306,6 +1389,8 @@ static DEVICE_ATTR_RW(pressure_enable);
 static DEVICE_ATTR_RO(get_lp_dump);
 static DEVICE_ATTR_RO(force_recal_count);
 static DEVICE_ATTR_RW(heatmap_mode);
+static DEVICE_ATTR_RW(grip_prescreen_mode);
+static DEVICE_ATTR_RW(grip_prescreen_timeout);
 static DEVICE_ATTR_RW(encoded_enable);
 static DEVICE_ATTR_RW(heatmap_dump);
 static DEVICE_ATTR_RO(fw_version);
@@ -1329,6 +1414,8 @@ static struct attribute *cmd_attributes[] = {
 	&dev_attr_get_lp_dump.attr,
 	&dev_attr_force_recal_count.attr,
 	&dev_attr_heatmap_mode.attr,
+	&dev_attr_grip_prescreen_mode.attr,
+	&dev_attr_grip_prescreen_timeout.attr,
 	&dev_attr_encoded_enable.attr,
 	&dev_attr_heatmap_dump.attr,
 	&dev_attr_fw_version.attr,

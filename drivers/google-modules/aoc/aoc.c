@@ -37,6 +37,7 @@
 #include <linux/platform_data/sscoredump.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/timer.h>
@@ -165,6 +166,9 @@ struct aoc_prvdata {
 	struct notifier_block itmon_nb;
 #endif
 	struct device *gsa_dev;
+
+	struct regulator *regulator_sensor_1v8;
+	struct regulator *regulator_sensor_3v3;
 };
 
 /* TODO: Reduce the global variables (move into a driver structure) */
@@ -203,6 +207,14 @@ static bool aoc_autoload_firmware;
 module_param(aoc_autoload_firmware, bool, 0644);
 MODULE_PARM_DESC(aoc_autoload_firmware, "Automatically load firmware if true");
 
+static int aoc_core_suspend(struct device *dev);
+static int aoc_core_resume(struct device *dev);
+
+const static struct dev_pm_ops aoc_core_pm_ops = {
+	.suspend = aoc_core_suspend,
+	.resume = aoc_core_resume,
+};
+
 static int aoc_bus_match(struct device *dev, struct device_driver *drv);
 static int aoc_bus_probe(struct device *dev);
 static int aoc_bus_remove(struct device *dev);
@@ -231,6 +243,7 @@ static void acpm_aoc_reset_callback(unsigned int *cmd, unsigned int size);
 static int start_firmware_load(struct device *dev);
 static void aoc_take_offline(struct aoc_prvdata *prvdata);
 static void signal_aoc(struct mbox_chan *channel);
+static void reset_sensor_power(struct aoc_prvdata *prvdata, bool is_init);
 
 static void aoc_process_services(struct aoc_prvdata *prvdata, int offset);
 
@@ -890,6 +903,36 @@ phys_addr_t aoc_service_ring_base_phys_addr(struct aoc_service_dev *dev, aoc_dir
 }
 EXPORT_SYMBOL_GPL(aoc_service_ring_base_phys_addr);
 
+phys_addr_t aoc_get_heap_base_phys_addr(struct aoc_service_dev *dev, aoc_direction dir,
+					    size_t *out_size)
+{
+	const struct device *parent;
+	struct aoc_prvdata *prvdata;
+	aoc_service *service;
+	phys_addr_t audio_heap_base;
+
+	if (!dev)
+		return -EINVAL;
+
+	parent = dev->dev.parent;
+	prvdata = dev_get_drvdata(parent);
+
+	service = service_at_index(prvdata, dev->service_index);
+
+	if (out_size)
+		*out_size = aoc_service_ring_size(service, dir);
+
+	if (dir == AOC_DOWN)
+		audio_heap_base = prvdata->audio_playback_heap_base;
+	else
+		audio_heap_base = prvdata->audio_capture_heap_base;
+
+	pr_debug("Get heap address(phy):%llx\n", audio_heap_base);
+
+	return audio_heap_base;
+}
+EXPORT_SYMBOL_GPL(aoc_get_heap_base_phys_addr);
+
 bool aoc_service_flush_read_data(struct aoc_service_dev *dev)
 {
 	const struct device *parent;
@@ -1394,6 +1437,7 @@ static int aoc_watchdog_restart(struct aoc_prvdata *prvdata)
 		dbg_snapshot_emergency_reboot("AoC Restart timed out");
 		return -ETIMEDOUT;
 	}
+	reset_sensor_power(prvdata, false);
 	dev_info(prvdata->dev, "aoc reset finished\n");
 	prvdata->aoc_reset_done = false;
 
@@ -1682,6 +1726,7 @@ static struct platform_driver aoc_driver = {
 	.driver = {
 			.name = "aoc",
 			.owner = THIS_MODULE,
+			.pm = &aoc_core_pm_ops,
 			.of_match_table = of_match_ptr(aoc_match),
 		},
 };
@@ -1833,6 +1878,9 @@ static struct aoc_service_dev *create_service_device(struct aoc_prvdata *prvdata
 	dev->service = s;
 	dev->ipc_base = prvdata->ipc_base;
 	dev->dead = false;
+
+	if (aoc_service_is_queue(s))
+		dev->wake_capable = true;
 
 	init_waitqueue_head(&dev->read_queue);
 	init_waitqueue_head(&dev->write_queue);
@@ -2020,31 +2068,109 @@ err:
 	mutex_unlock(&aoc_service_lock);
 }
 
+static bool configure_sensor_regulator(struct aoc_prvdata *prvdata, bool enable)
+{
+	bool check_enabled;
+
+	if (enable) {
+		check_enabled = true;
+		if (prvdata->regulator_sensor_1v8 &&
+				!regulator_is_enabled(prvdata->regulator_sensor_1v8)) {
+			if (regulator_enable(prvdata->regulator_sensor_1v8)) {
+				pr_warn("encountered error on enabling sensor 1v8");
+			}
+			check_enabled &= regulator_is_enabled(prvdata->regulator_sensor_1v8);
+		}
+
+		if (prvdata->regulator_sensor_3v3 &&
+				!regulator_is_enabled(prvdata->regulator_sensor_3v3)) {
+			if (regulator_enable(prvdata->regulator_sensor_3v3)) {
+				pr_warn("encountered error on enabling sensor 3v3");
+			}
+			check_enabled &= regulator_is_enabled(prvdata->regulator_sensor_3v3);
+		}
+	} else {
+		check_enabled = false;
+		if (prvdata->regulator_sensor_3v3 &&
+				regulator_is_enabled(prvdata->regulator_sensor_3v3)) {
+			if (regulator_disable(prvdata->regulator_sensor_3v3)) {
+				pr_warn("encountered error on disabling sensor 3v3");
+			}
+			check_enabled |= regulator_is_enabled(prvdata->regulator_sensor_3v3);
+		}
+
+		if (prvdata->regulator_sensor_1v8 &&
+				regulator_is_enabled(prvdata->regulator_sensor_1v8)) {
+			if (regulator_disable(prvdata->regulator_sensor_1v8)) {
+				pr_warn("encountered error on disabling sensor 1v8");
+			}
+			check_enabled |= regulator_is_enabled(prvdata->regulator_sensor_1v8);
+		}
+	}
+
+	return (check_enabled == enable);
+}
+
+static void reset_sensor_power(struct aoc_prvdata *prvdata, bool is_init)
+{
+	const int max_retry = 5;
+	int count;
+	bool success;
+
+	if (!is_init) {
+		count = 0;
+		success = false;
+		while (!success && count < max_retry) {
+			success = configure_sensor_regulator(prvdata, false);
+			count++;
+		}
+		if (!success) {
+			pr_err("failed to disable sensor power after %d retry.", max_retry);
+		} else {
+			pr_info("sensor power is disabled.");
+		}
+
+		msleep(150);
+	}
+
+	count = 0;
+	success = false;
+	while (!success && count < max_retry) {
+		success = configure_sensor_regulator(prvdata, true);
+		count++;
+	}
+	if (!success) {
+		pr_err("failed to enable sensor power after %d retry.", max_retry);
+	} else {
+		pr_info("sensor power is enabled.");
+	}
+}
+
 static void aoc_take_offline(struct aoc_prvdata *prvdata)
 {
 	int rc;
 
 	/* check if devices/services are ready */
-	if (aoc_state == AOC_STATE_OFFLINE || !prvdata->services)
-		return;
+	if (aoc_state == AOC_STATE_ONLINE) {
+		pr_notice("taking aoc offline\n");
+		aoc_state = AOC_STATE_OFFLINE;
 
-	pr_notice("taking aoc offline\n");
-	aoc_state = AOC_STATE_OFFLINE;
+		bus_for_each_dev(&aoc_bus_type, NULL, NULL, aoc_remove_device);
 
-	bus_for_each_dev(&aoc_bus_type, NULL, NULL, aoc_remove_device);
+		if (aoc_control)
+			aoc_control->magic = 0;
 
-	if (aoc_control)
-		aoc_control->magic = 0;
+		if (prvdata->services) {
+			devm_kfree(prvdata->dev, prvdata->services);
+			prvdata->services = NULL;
+			prvdata->total_services = 0;
+		}
 
-	devm_kfree(prvdata->dev, prvdata->services);
-	prvdata->services = NULL;
-	prvdata->total_services = 0;
-
-	/* wakeup AOC before calling GSA */
-	aoc_req_assert(prvdata, true);
-	rc = aoc_req_wait(prvdata, true);
-	if (rc) {
-		dev_err(prvdata->dev, "timed out waiting for aoc_ack\n");
+		/* wakeup AOC before calling GSA */
+		aoc_req_assert(prvdata, true);
+		rc = aoc_req_wait(prvdata, true);
+		if (rc)
+			dev_err(prvdata->dev, "timed out waiting for aoc_ack\n");
 	}
 
 	/* TODO: GSA_AOC_SHUTDOWN needs to be 4, but the current header defines
@@ -2662,6 +2788,48 @@ static int find_gsa_device(struct aoc_prvdata *prvdata)
 					prvdata);
 }
 
+static int aoc_core_suspend(struct device *dev)
+{
+	struct aoc_prvdata *prvdata = dev_get_drvdata(dev);
+	size_t total_services = aoc_num_services();
+	int i = 0;
+
+	mutex_lock(&aoc_service_lock);
+	for (i = 0; i < total_services; i++) {
+		struct aoc_service_dev *s = service_dev_at_index(prvdata, i);
+
+		if (s && s->wake_capable)
+			s->suspend_rx_count = aoc_service_slots_available_to_read(s->service,
+										  AOC_UP);
+	}
+	mutex_unlock(&aoc_service_lock);
+
+	return 0;
+}
+
+static int aoc_core_resume(struct device *dev)
+{
+	struct aoc_prvdata *prvdata = dev_get_drvdata(dev);
+	size_t total_services = aoc_num_services();
+	int i = 0;
+
+	mutex_lock(&aoc_service_lock);
+	for (i = 0; i < total_services; i++) {
+		struct aoc_service_dev *s = service_dev_at_index(prvdata, i);
+
+		if (s && s->wake_capable) {
+			size_t available = aoc_service_slots_available_to_read(s->service, AOC_UP);
+
+			if (available != s->suspend_rx_count)
+				dev_notice(dev, "Service \"%s\" has %zu messages to read on wake\n",
+					   dev_name(&s->dev), available);
+		}
+	}
+	mutex_unlock(&aoc_service_lock);
+
+	return 0;
+}
+
 static int aoc_platform_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -2772,8 +2940,9 @@ static int aoc_platform_probe(struct platform_device *pdev)
 		goto err_watchdog_irq_get;
 	}
 
+	irq_set_status_flags(prvdata->watchdog_irq, IRQ_NOAUTOEN);
 	ret = devm_request_irq(dev, prvdata->watchdog_irq, watchdog_int_handler,
-			       IRQF_TRIGGER_HIGH | IRQ_NOAUTOEN, dev_name(dev), dev);
+			       IRQF_TRIGGER_HIGH, dev_name(dev), dev);
 	if (ret != 0) {
 		dev_err(dev, "failed to register watchdog irq handler: %d\n",
 			ret);
@@ -2879,6 +3048,20 @@ static int aoc_platform_probe(struct platform_device *pdev)
 	}
 #endif
 
+	prvdata->regulator_sensor_1v8 = devm_regulator_get_exclusive(dev, "sensor_1v8");
+	if (IS_ERR_OR_NULL(prvdata->regulator_sensor_1v8)) {
+		prvdata->regulator_sensor_1v8 = NULL;
+		pr_err("failed to get sensor 1v8 regulator");
+	}
+
+	prvdata->regulator_sensor_3v3 = devm_regulator_get_exclusive(dev, "sensor_3v3");
+	if (IS_ERR_OR_NULL(prvdata->regulator_sensor_3v3)) {
+		prvdata->regulator_sensor_3v3 = NULL;
+		pr_err("failed to get sensor 3v3 regulator");
+	}
+
+	reset_sensor_power(prvdata, true);
+
 	/* Default to 6MB if we are not loading the firmware (i.e. trace32) */
 	aoc_control = aoc_dram_translate(prvdata, 6 * SZ_1M);
 
@@ -2958,6 +3141,12 @@ static int aoc_platform_remove(struct platform_device *pdev)
 
 	prvdata = platform_get_drvdata(pdev);
 	acpm_ipc_release_channel(pdev->dev.of_node, prvdata->acpm_async_id);
+	if (prvdata->regulator_sensor_1v8) {
+		regulator_put(prvdata->regulator_sensor_1v8);
+	}
+	if (prvdata->regulator_sensor_3v3) {
+		regulator_put(prvdata->regulator_sensor_3v3);
+	}
 	sysfs_remove_groups(&pdev->dev.kobj, aoc_groups);
 
 	aoc_cleanup_resources(pdev);

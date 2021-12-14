@@ -28,15 +28,20 @@ struct aoc_service_dev {
 	void *ipc_base;
 	aoc_service_dev_handler handler;
 	void *prvdata;
+	uint64_t suspend_rx_count;
 
-	bool dead;
 	uint8_t mbox_index;
 	uint8_t service_index;
+
+	bool dead;
+	bool wake_capable;
 };
 
 #define AOC_DEVICE(_d) container_of((_d), struct aoc_service_dev, dev)
 
 phys_addr_t aoc_service_ring_base_phys_addr(struct aoc_service_dev *dev, aoc_direction dir,
+					    size_t *out_size);
+phys_addr_t aoc_get_heap_base_phys_addr(struct aoc_service_dev *dev, aoc_direction dir,
 					    size_t *out_size);
 ssize_t aoc_service_read(struct aoc_service_dev *dev, uint8_t *buffer,
 			 size_t count, bool block);

@@ -1496,7 +1496,8 @@ dhd_rtt_nan_start_session(dhd_pub_t *dhd, rtt_target_info_t *rtt_target)
 		goto done;
 	}
 
-	if (!wl_cfgnan_is_enabled(cfg)) { /* If nan is not enabled report error */
+	if (NAN_RTT_ENABLED(cfg) != TRUE) {
+		/* If nan is not enabled or nan ranging is not enabled report error */
 		err = BCME_NOTENABLED;
 		goto done;
 	}

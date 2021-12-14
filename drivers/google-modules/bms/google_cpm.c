@@ -447,12 +447,13 @@ static int gcpm_dc_enable(struct gcpm_drv *gcpm, bool enabled)
  */
 static int gcpm_dc_stop(struct gcpm_drv *gcpm, int index)
 {
+	int dc_state = gcpm->dc_state;
 	int ret = 0;
 
 	if (!gcpm_is_dc(gcpm, index))
-		return 0;
+		dc_state = DC_ENABLE_PASSTHROUGH;
 
-	switch (gcpm->dc_state) {
+	switch (dc_state) {
 	case DC_RUNNING:
 	case DC_PASSTHROUGH:
 		ret = gcpm_chg_offline(gcpm, index);
@@ -792,69 +793,66 @@ static int gcpm_pps_wait_for_ready(struct gcpm_drv *gcpm)
 	return pwr_ok ? pps_ui : -EAGAIN;
 }
 
+/* return 0< */
+static int gcpm_pps_check_source(struct pd_pps_data *pps_data)
+{
+	int pps_ui;
+
+	if (pps_data->stage == PPS_NOTSUPP)
+		return 0;
+
+	pps_ui = pps_work(pps_data, pps_data->pps_psy);
+	if (pps_data->pd_online < PPS_PSY_PROG_ONLINE)
+		pr_debug("PPS_Work: TCPM Wait %s pps_ui=%d online=%d, stage=%d\n",
+			pps_name(pps_data->pps_psy), pps_ui, pps_data->pd_online,
+			pps_data->stage);
+
+	return pps_ui >= 0 && pps_data->stage == PPS_ACTIVE;
+}
+
 /*
- * Pick the first PPS source that transition to PPS_ACTIVE:
+ * Debounce online, enable PROG on each of the sources (ping) source that
+ * transition to PPS_ACTIVE and set the pps_index.
  *
  * ->stage ==
  *	DISABLED => NONE -> AVAILABLE -> ACTIVE -> DISABLED
  *		 -> DISABLED
  *		 -> NOTSUPP
  *
- * return 0 if needs to continue polling, -ENODEV if none of the sources
- * support pps.
+ * return -EAGAIN if none of the sources is online, -ENODEV none of the sources
+ * supports pps, 0 to continue polling.
  */
 static int gcpm_pps_work(struct gcpm_drv *gcpm)
 {
-	int ret = 0, pps_index = 0;
-	int not_supported = 0;
+	int rc, ret = 0, online = 0, pps_index = 0;
 
-	if (gcpm->tcpm_pps_data.stage != PPS_NOTSUPP) {
-		struct pd_pps_data *pps_data = &gcpm->tcpm_pps_data;
-		int pps_ui;
-
-		pps_ui = pps_work(pps_data, pps_data->pps_psy);
-		if (pps_ui >= 0 && pps_data->stage == PPS_ACTIVE)
-			pps_index = PPS_INDEX_TCPM;
-
-		if (pps_data->pd_online < PPS_PSY_PROG_ONLINE)
-			pr_debug("PPS_Work: TCPM Wait pps_ui=%d online=%d, stage=%d\n",
-				pps_ui, pps_data->pd_online, pps_data->stage);
-	} else {
-		not_supported += 1;
-	}
-
-	if (gcpm->wlc_pps_data.stage != PPS_NOTSUPP) {
-		struct pd_pps_data *pps_data = &gcpm->wlc_pps_data;
-		int pps_ui;
-
-		pps_ui = pps_work(pps_data, pps_data->pps_psy);
-		if (pps_ui >= 0 && pps_data->stage == PPS_ACTIVE)
+	rc =  gcpm_pps_check_source(&gcpm->tcpm_pps_data);
+	if (rc <= 0) {
+		rc =  gcpm_pps_check_source(&gcpm->wlc_pps_data);
+		if (rc > 0)
 			pps_index = PPS_INDEX_WLC;
+		else
+			online |= gcpm->wlc_pps_data.pd_online != 0;
 
-		if (pps_data->pd_online < PPS_PSY_PROG_ONLINE)
-			pr_debug("PPS_Work: WLC Wait pps_ui=%d online=%d, stage=%d\n",
-				pps_ui, pps_data->pd_online, pps_data->stage);
+		online |= gcpm->tcpm_pps_data.pd_online != 0;
 	} else {
-		not_supported += 1;
+		pps_index = PPS_INDEX_TCPM;
 	}
 
-	pr_debug("PPS_Work: tcpm[online=%d, stage=%d] wlc[online=%d, stage=%d] ns=%d pps_index=%d\n",
-		 gcpm->tcpm_pps_data.pd_online, gcpm->tcpm_pps_data.stage,
-		 gcpm->wlc_pps_data.pd_online, gcpm->wlc_pps_data.stage,
-		 not_supported, pps_index);
-
-	/* 2 sources */
-	if (not_supported == PPS_INDEX_MAX)
-		return -ENODEV;
-
-	/* index==0 mean detecting */
+	/* index==0 means keep detecting */
 	if (gcpm->pps_index != pps_index)
-		pr_debug("PPS_Work: pps_index %d->%d\n",
-			gcpm->pps_index, pps_index);
+		logbuffer_log(gcpm->log, "PPS_Work: pps_index %d->%d\n",
+			      gcpm->pps_index, pps_index);
 
-	/* went away! */
-	if (gcpm->pps_index && !pps_index)
+	if (pps_index == 0 && gcpm->pps_index)
 		ret = -ENODEV;
+	else if (pps_index == 0 && !online)
+		ret = -EAGAIN;
+
+	pr_debug("PPS_Work: tcpm[online=%d, stage=%d] wlc[online=%d, stage=%d] ol=%d ret=%d pps_index=%d->%d\n",
+		gcpm->tcpm_pps_data.pd_online, gcpm->tcpm_pps_data.stage,
+		gcpm->wlc_pps_data.pd_online, gcpm->wlc_pps_data.stage,
+		online, ret, gcpm->pps_index, pps_index);
 
 	gcpm->pps_index = pps_index;
 	return ret;
@@ -1368,12 +1366,16 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 	}
 
 	/*
-	 * Wait until one of the sources come online, <0 when PPS is not
-	 * supported from ANY source. Deadline at PPS_PROG_TIMEOUT_S.
+	 * Wait until one of the sources becomes online AND switch to prog
+	 * mode. gcpm_pps_work will return <0 when PPS is not supported from
+	 * ANY source and when there is no online source.
+	 * Deadline to  PPS_PROG_TIMEOUT_S.
 	 */
 	ret = gcpm_pps_work(gcpm);
 	if (ret < 0) {
 		if (elap < PPS_PROG_TIMEOUT_S) {
+			pr_debug("PPS_Work: elap=%lld retry\n", elap);
+
 			/* retry for the session  */
 			pps_ui = PPS_PROG_RETRY_MS;
 			gcpm_pps_online(gcpm);
@@ -1585,11 +1587,13 @@ static int gcpm_psy_set_property(struct power_supply *psy,
 			 */
 
 			/*
-			 * No op if the current source is not DC, ->dc_state
+			 * No op if the current source is not DC (uncluding
+			 * stop while in DC_ENABLE_), ->dc_state
 			 * will be DC_DISABLED if this was actually disabled.
 			 */
 			ret = gcpm_dc_stop(gcpm,  gcpm->chg_psy_active);
 			if (ret == -EAGAIN) {
+				pr_debug("%s: cannot disable, try again\n", __func__);
 				mutex_unlock(&gcpm->chg_psy_lock);
 				return -EAGAIN;
 			}

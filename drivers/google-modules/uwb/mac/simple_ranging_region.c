@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,12 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, simple ranging using old Sevenhugs
- * protocol.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <asm/unaligned.h>
@@ -326,7 +321,8 @@ bool twr_frame_report_check(struct sk_buff *skb, s32 *tof_x4_rctu,
 
 static void twr_responder_rx_frame(struct mcps802154_access *access,
 				   int frame_idx, struct sk_buff *skb,
-				   const struct mcps802154_rx_frame_info *info)
+				   const struct mcps802154_rx_frame_info *info,
+				   enum mcps802154_rx_error_type error)
 {
 	struct simple_ranging_local *local = access_to_local(access);
 	struct mcps802154_nl_ranging_request *request = &local->current_request;
@@ -439,23 +435,18 @@ twr_responder_tx_return(struct mcps802154_access *access, int frame_idx,
 	kfree_skb(skb);
 }
 
-static void twr_responder_access_done(struct mcps802154_access *access)
-{
-	/* Nothing. */
-}
-
 struct mcps802154_access_ops twr_responder_access_ops = {
 	.rx_frame = twr_responder_rx_frame,
 	.tx_get_frame = twr_responder_tx_get_frame,
 	.tx_return = twr_responder_tx_return,
-	.access_done = twr_responder_access_done,
 };
 
 /* Access initiator. */
 
 static void twr_rx_frame(struct mcps802154_access *access, int frame_idx,
 			 struct sk_buff *skb,
-			 const struct mcps802154_rx_frame_info *info)
+			 const struct mcps802154_rx_frame_info *info,
+			 enum mcps802154_rx_error_type error)
 {
 	struct simple_ranging_local *local = access_to_local(access);
 	struct mcps802154_nl_ranging_request *request = &local->current_request;
@@ -557,16 +548,10 @@ static void twr_tx_return(struct mcps802154_access *access, int frame_idx,
 	kfree_skb(skb);
 }
 
-static void twr_access_done(struct mcps802154_access *access)
-{
-	/* Nothing. */
-}
-
 struct mcps802154_access_ops twr_access_ops = {
 	.rx_frame = twr_rx_frame,
 	.tx_get_frame = twr_tx_get_frame,
 	.tx_return = twr_tx_return,
-	.access_done = twr_access_done,
 };
 
 /* Region responder. */
@@ -593,6 +578,8 @@ twr_responder_get_access(struct mcps802154_region *region,
 				.timeout_dtu = -1,
 				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU |
 					MCPS802154_RX_INFO_RANGING |
+					MCPS802154_RX_INFO_KEEP_RANGING_CLOCK |
+					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
 				.ant_pair_id = local->rx_ant_pair_azimuth,
 			},
@@ -609,6 +596,7 @@ twr_responder_get_access(struct mcps802154_region *region,
 		.tx_frame_info = {
 			.flags = MCPS802154_TX_FRAME_TIMESTAMP_DTU |
 				MCPS802154_TX_FRAME_RANGING |
+				MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK |
 				MCPS802154_TX_FRAME_SP1,
 			.ant_id = local->tx_ant,
 		},
@@ -620,6 +608,7 @@ twr_responder_get_access(struct mcps802154_region *region,
 			.info = {
 				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU |
 					MCPS802154_RX_INFO_RANGING |
+					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
 				.ant_pair_id = local->rx_ant_pair_elevation,
 			},
@@ -659,11 +648,8 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 	const int slots_dtu = local->slot_duration_dtu * N_TWR_FRAMES;
 
 	/* Do nothing if nothing to do. */
-	if (local->n_requests == 0) {
-		access->method = MCPS802154_ACCESS_METHOD_NOTHING;
-		access->ops = &twr_access_ops;
-		return access;
-	}
+	if (local->n_requests == 0)
+		return NULL;
 
 	/* Only start a ranging request if we have enough time to end it. */
 	if (next_in_region_dtu + slots_dtu > region_duration_dtu)
@@ -681,6 +667,7 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 			.timestamp_dtu = next_timestamp_dtu,
 			.flags = MCPS802154_TX_FRAME_TIMESTAMP_DTU |
 				MCPS802154_TX_FRAME_RANGING |
+				MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK |
 				MCPS802154_TX_FRAME_SP1,
 			.ant_id = local->tx_ant,
 		},
@@ -698,6 +685,8 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 					local->slot_duration_dtu,
 				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU |
 					MCPS802154_RX_INFO_RANGING |
+					MCPS802154_RX_INFO_KEEP_RANGING_CLOCK |
+					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
 				.ant_pair_id = local->rx_ant_pair_azimuth,
 			},
@@ -732,6 +721,7 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 					3 * local->slot_duration_dtu,
 				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU |
 					MCPS802154_RX_INFO_RANGING |
+					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
 				.ant_pair_id = local->rx_ant_pair_elevation,
 			},

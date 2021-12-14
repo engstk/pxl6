@@ -13,7 +13,7 @@ linux-rpi/pi4_CROSS := ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
 linux-rpi/pi4_INSTALLFLAGS := -D $(DESTS)
 
 KDIR = ../projects/linux-build/$*/deps/linux/linux
-KARGS = $($*_CROSS) CONFIG_MCPS_FAKE=m CONFIG_QCOM_SPI_LOWLATENCY=m
+KARGS = $($*_CROSS) CONFIG_MCPS_FAKE=m CONFIG_QCOM_SPI_LOWLATENCY=m CONFIG_KUNIT_DW3000_CORE_TEST=y
 
 all: $(ALL:%=%.all)
 clean: $(ALL:%=%.clean)

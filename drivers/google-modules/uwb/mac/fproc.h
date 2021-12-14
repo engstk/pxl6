@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, frame processing internal definitions.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_MCPS802154_FPROC_H
@@ -54,7 +50,7 @@ struct mcps802154_fproc_state {
 	void (*tx_done)(struct mcps802154_local *local);
 	/** @broken: Handle unrecoverable error. */
 	void (*broken)(struct mcps802154_local *local);
-	/** @timer_expired: Handle timer expiration. */
+	/** @timer_expired: Handle timer expiration, ignored if NULL. */
 	void (*timer_expired)(struct mcps802154_local *local);
 	/** @schedule_change: Handle schedule change. */
 	void (*schedule_change)(struct mcps802154_local *local);
@@ -112,8 +108,9 @@ void mcps802154_fproc_access_now(struct mcps802154_local *local);
 /**
  * mcps802154_fproc_access_done() - Done with the access, release it.
  * @local: MCPS private data.
+ * @error: Internal error code.
  */
-void mcps802154_fproc_access_done(struct mcps802154_local *local);
+void mcps802154_fproc_access_done(struct mcps802154_local *local, int error);
 
 /**
  * mcps802154_fproc_access_reset() - Reset an access when things go wrong.
@@ -141,8 +138,12 @@ void mcps802154_fproc_broken_handle(struct mcps802154_local *local);
 /**
  * mcps802154_fproc_nothing_handle() - Handle inactivity.
  * @local: MCPS private data.
+ * @access: Current access to handle.
+ *
+ * Return: 0 or error.
  */
-void mcps802154_fproc_nothing_handle(struct mcps802154_local *local);
+int mcps802154_fproc_nothing_handle(struct mcps802154_local *local,
+				    struct mcps802154_access *access);
 
 /**
  * mcps802154_fproc_rx_handle() - Handle an RX access and change state.

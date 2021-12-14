@@ -197,6 +197,7 @@ struct exynos_drm_plane_config {
  * @disable_plane: disable hardware specific overlay.
  * @te_handler: trigger to transfer video image at the tearing effect
  *	synchronization signal if there is a page flip request.
+ * @wait_for_flip_done: wait for active crtc flip to be done
  */
 struct exynos_drm_crtc;
 struct exynos_drm_crtc_ops {
@@ -223,6 +224,9 @@ struct exynos_drm_crtc_ops {
 	void (*atomic_flush)(struct exynos_drm_crtc *crtc,
 			struct drm_crtc_state *old_crtc_state);
 	void (*te_handler)(struct exynos_drm_crtc *crtc);
+	void (*wait_for_flip_done)(struct exynos_drm_crtc *crtc,
+			const struct drm_crtc_state *old_crtc_state,
+			const struct drm_crtc_state *new_crtc_state);
 };
 
 struct exynos_drm_crtc_state {

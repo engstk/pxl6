@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,20 +18,19 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, nfcc_coex ranging region.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/math64.h>
+#include <linux/printk.h>
 
 #include <linux/netdevice.h>
 
 #include <net/mcps802154_schedule.h>
 #include "net/nfcc_coex_region_nl.h"
+#include "mcps802154_i.h"
 
 #include "nfcc_coex_region.h"
 #include "nfcc_coex_region_call.h"
@@ -62,6 +61,19 @@ static void nfcc_coex_close(struct mcps802154_region *region)
 	kfree(local);
 }
 
+static void nfcc_coex_notify_stop(struct mcps802154_region *region)
+{
+	struct nfcc_coex_local *local = region_to_local(region);
+
+	nfcc_coex_session_control(local, NFCC_COEX_CALL_CCC_SESSION_STOP, NULL,
+				  NULL);
+	if (local->state != NFCC_COEX_STATE_UNUSED) {
+		pr_err("device stopped while nfcc coex not stopped state=%d",
+		       local->state);
+		local->state = NFCC_COEX_STATE_UNUSED;
+	}
+}
+
 static int nfcc_coex_call(struct mcps802154_region *region, u32 call_id,
 			  const struct nlattr *attrs,
 			  const struct genl_info *info)
@@ -75,6 +87,40 @@ static int nfcc_coex_call(struct mcps802154_region *region, u32 call_id,
 	default:
 		return -EINVAL;
 	}
+}
+
+static int nfcc_coex_get_demand(struct mcps802154_region *region,
+				u32 next_timestamp_dtu,
+				struct mcps802154_region_demand *demand)
+{
+	struct nfcc_coex_local *local = region_to_local(region);
+	const struct nfcc_coex_session *session = &local->session;
+
+	switch (local->state) {
+	case NFCC_COEX_STATE_UNUSED:
+		return 0;
+	default:
+		if (session->first_access) {
+			/* region_demand have never been set.
+			 * Duration is set at 12ms, value catched during test. */
+			demand->timestamp_dtu = next_timestamp_dtu;
+			demand->duration_dtu = 187200;
+		} else if (is_before_dtu(session->region_demand.timestamp_dtu,
+					 next_timestamp_dtu)) {
+			/* Date is late. */
+			int shift = next_timestamp_dtu -
+				    session->region_demand.timestamp_dtu;
+			int duration =
+				session->region_demand.duration_dtu - shift;
+			demand->timestamp_dtu = next_timestamp_dtu;
+			demand->duration_dtu = duration > 0 ? duration : 1;
+		} else {
+			memcpy(demand, &session->region_demand,
+			       sizeof(*demand));
+		}
+		return 1;
+	}
+	return 0;
 }
 
 void nfcc_coex_report(struct nfcc_coex_local *local)
@@ -120,8 +166,10 @@ static struct mcps802154_region_ops nfcc_coex_region_ops = {
 	.name = "nfcc_coex",
 	.open = nfcc_coex_open,
 	.close = nfcc_coex_close,
+	.notify_stop = nfcc_coex_notify_stop,
 	.call = nfcc_coex_call,
 	.get_access = nfcc_coex_get_access,
+	.get_demand = nfcc_coex_get_demand,
 	/* clang-format on */
 };
 

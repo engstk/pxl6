@@ -1,4 +1,5 @@
 // Device Tree overlay for dw3000 for Raspberry Pi 4
+// Using a DW3700 shield connected using an Waveshare ARPI600 HAT.
 
 /dts-v1/;
 /plugin/;
@@ -38,9 +39,11 @@
         target = <&gpio>;
         __overlay__ {
             dw3000_pins: dw3000_pins {
-                brcm,pins = <23 24 25>; /* Wakeup, IRQ, RST on GPIO23 to 25 */
+                /* Wakeup, IRQ, RST on GPIO4, GPIO25 and GPIO24 */
+                brcm,pins = <4 25 24>;
                 brcm,function = <0x0 0x0 0x0>;
-                brcm,pull = <0 0 2>; /* 0: disabled, 1: down, 2: up */
+                /* Pull up/down config: 0: disabled, 1: down, 2: up */
+                brcm,pull = <0 1 2>;
             };
         };
     };
@@ -58,10 +61,9 @@
                 pinctrl-names = "default";
                 pinctrl-0 = <&dw3000_pins>;
                 interrupt-parent = <&gpio>;
-                interrupts = <24 4>; /*IRQ_TYPE_LEVEL_HIGH*/
-                /* TODO: reset to 38Mhz when no more wire used */
-                spi-max-frequency = <25000000>;
-                uwbhal,reset-gpio = <&gpio 25 4>; /* OPEN_DRAIN */
+                interrupts = <25 4>; /*IRQ_TYPE_LEVEL_HIGH*/
+                spi-max-frequency = <20000000>;
+                uwbhal,reset-gpio = <&gpio 24 4>; /* OPEN_DRAIN */
                 decawave,eui64 = /bits/ 64 <0>;
                 decawave,panid = /bits/ 16 <0>;
                 status = "okay";

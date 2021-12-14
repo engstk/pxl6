@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, endless scheduler.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/errno.h>
@@ -71,6 +67,16 @@ mcps802154_endless_scheduler_close(struct mcps802154_scheduler *scheduler)
 		mcps802154_region_close(plocal->llhw, plocal->region);
 
 	kfree(plocal);
+}
+
+static void
+mcps802154_endless_scheduler_notify_stop(struct mcps802154_scheduler *scheduler)
+{
+	struct mcps802154_private_local *plocal =
+		scheduler_to_plocal(scheduler);
+
+	if (plocal->region)
+		mcps802154_region_notify_stop(plocal->llhw, plocal->region);
 }
 
 static int mcps802154_endless_scheduler_set_region_parameters(
@@ -149,6 +155,7 @@ static struct mcps802154_scheduler_ops mcps802154_endless_scheduler_scheduler = 
 	.name = "endless",
 	.open = mcps802154_endless_scheduler_open,
 	.close = mcps802154_endless_scheduler_close,
+	.notify_stop = mcps802154_endless_scheduler_notify_stop,
 	.set_region_parameters =
 		mcps802154_endless_scheduler_set_region_parameters,
 	.call_region = mcps802154_endless_scheduler_call_region,

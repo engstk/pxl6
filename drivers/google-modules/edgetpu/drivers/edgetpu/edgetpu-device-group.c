@@ -1433,6 +1433,7 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 	const u32 mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_HOST;
 	int i;
 	bool readonly;
+	tpu_addr_t tpu_addr;
 
 	if (!valid_dma_direction(flags & EDGETPU_MAP_DIR_MASK))
 		return -EINVAL;
@@ -1488,15 +1489,19 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 			goto error;
 	}
 
+	/*
+	 * @map can be freed (by another thread) once it's added to the mappings, record the address
+	 * before that.
+	 */
+	tpu_addr = map->device_address;
 	ret = edgetpu_mapping_add(&group->host_mappings, map);
 	if (ret) {
-		etdev_dbg(etdev, "duplicate mapping %u:0x%llx",
-			  group->workload_id, map->device_address);
+		etdev_dbg(etdev, "duplicate mapping %u:0x%llx", group->workload_id, tpu_addr);
 		goto error;
 	}
 
 	mutex_unlock(&group->lock);
-	arg->device_address = map->device_address;
+	arg->device_address = tpu_addr;
 	kvfree(pages);
 	return 0;
 

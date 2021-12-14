@@ -108,10 +108,8 @@ static int abrolhos_firmware_prepare_run(struct edgetpu_firmware *et_fw,
 	tpu_state = gsa_send_tpu_cmd(abpdev->gsa_dev, GSA_TPU_GET_STATE);
 
 	if (tpu_state < GSA_TPU_STATE_INACTIVE) {
-		etdev_warn(etdev, "GSA failed to retrieve current status: %d\n",
-			   tpu_state);
-		etdev_warn(etdev, "Assuming device is inactive\n");
-		tpu_state = GSA_TPU_STATE_INACTIVE;
+		etdev_err(etdev, "GSA failed to retrieve current status: %d\n", tpu_state);
+		return tpu_state;
 	}
 
 	etdev_dbg(etdev, "GSA Reports TPU state: %d\n", tpu_state);

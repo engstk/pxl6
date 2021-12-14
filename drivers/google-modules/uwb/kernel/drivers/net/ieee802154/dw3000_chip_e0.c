@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include "dw3000.h"
 #include "dw3000_core.h"
@@ -27,6 +26,7 @@
 #include "dw3000_chip_e0.h"
 #include "dw3000_trc.h"
 
+int dw3000_c0_prog_pll_coarse_code(struct dw3000 *dw);
 int dw3000_d0_softreset(struct dw3000 *dw);
 int dw3000_d0_init(struct dw3000 *dw);
 int dw3000_d0_coex_init(struct dw3000 *dw);
@@ -37,12 +37,12 @@ const u32 *dw3000_e0_get_config_mrxlut_chan(struct dw3000 *dw, u8 channel)
 {
 	/* Lookup table default values for channel 5 */
 	static const u32 dw3000_e0_configmrxlut_ch5[DW3000_CONFIGMRXLUT_MAX] = {
-		0x380fd, 0x3887d, 0x38c7d, 0x38dfd, 0x39d7d, 0x39dfd, 0x39ffd
+		0x3803e, 0x3876e, 0x397fe, 0x38efe, 0x39c7e, 0x39dfe, 0x39ff6
 	};
 
 	/* Lookup table default values for channel 9 */
 	static const u32 dw3000_e0_configmrxlut_ch9[DW3000_CONFIGMRXLUT_MAX] = {
-		0x540fe, 0x547be, 0x5597e, 0x55e3e, 0x55dbe, 0x55dfe, 0x55ffe
+		0x5407e, 0x547be, 0x54d36, 0x55e36, 0x55f36, 0x55df6, 0x55ffe
 	};
 
 	switch (channel) {
@@ -171,7 +171,8 @@ static int dw3000_e0_coex_gpio(struct dw3000 *dw, bool state, int delay_us)
 		rc = dw3000_timer_set_expiration(dw, DW3000_TIMER0, expire);
 		if (rc)
 			return rc;
-		trace_dw3000_coex_gpio(dw, state, delay_us, expire);
+		trace_dw3000_coex_gpio(dw, state, delay_us, expire,
+				       dw->coex_status);
 		return dw3000_timer_start(dw, DW3000_TIMER0);
 	}
 	if (!state) {
@@ -192,7 +193,7 @@ static int dw3000_e0_coex_gpio(struct dw3000 *dw, bool state, int delay_us)
 		return rc;
 	/* Update GPIO output state */
 	offset = DW3000_GPIO_OUT_GOP0_BIT_LEN * dw->coex_gpio;
-	trace_dw3000_coex_gpio(dw, state, delay_us, 0);
+	trace_dw3000_coex_gpio(dw, state, delay_us, 0, dw->coex_status);
 	return dw3000_set_gpio_out(dw, !state << offset, state << offset);
 }
 
@@ -214,9 +215,7 @@ int dw3000_e0_prog_ldo_and_bias_tune(struct dw3000 *dw)
 		local->sleep_mode |= DW3000_LOADLDO | DW3000_LOADBIAS;
 	}
 	/* Use DGC_CFG from OTP */
-	local->dgc_otp_set = otp->dgc_addr == DW3000_DGC_CFG0 ?
-				     DW3000_DGC_LOAD_FROM_OTP :
-				     DW3000_DGC_LOAD_FROM_SW;
+	local->dgc_otp_set = otp->dgc_addr == DW3000_DGC_CFG0 ? true : false;
 	return 0;
 }
 
@@ -371,6 +370,8 @@ int dw3000_e0_adc_offset_calibration(struct dw3000 *dw)
 {
 	int rc, i;
 	u32 switch_control_reg_backup;
+	u32 sys_enable_lo;
+	u32 sys_enable_hi;
 	u32 agc_reg_backup;
 	u32 dgc_reg_backup;
 	u32 dgc_lut0_reg_backup;
@@ -384,16 +385,20 @@ int dw3000_e0_adc_offset_calibration(struct dw3000 *dw)
 			       &switch_control_reg_backup);
 	if (rc)
 		return rc;
+
 	rc = dw3000_reg_read32(dw, DW3000_AGC_CFG_ID, 0, &agc_reg_backup);
 	if (rc)
 		return rc;
+
 	rc = dw3000_reg_read32(dw, DW3000_DGC_CFG_ID, 0, &dgc_reg_backup);
 	if (rc)
 		return rc;
+
 	rc = dw3000_reg_read32(dw, DW3000_DGC_LUT_0_CFG_ID, 0,
 			       &dgc_lut0_reg_backup);
 	if (rc)
 		return rc;
+
 	if (dw->config.chan == 5) {
 		rc = dw3000_reg_read32(dw, DW3000_DGC_LUT_6_CFG_ID, 0,
 				       &dgc_lutn_reg_backup);
@@ -438,6 +443,24 @@ int dw3000_e0_adc_offset_calibration(struct dw3000 *dw)
 			(u8)~DW3000_DGC_CFG_RX_TUNE_EN_BIT_MASK);
 	if (rc)
 		return rc;
+
+	rc = dw3000_reg_read32(dw, DW3000_SYS_ENABLE_HI_ID, 0, &sys_enable_hi);
+	if (rc)
+		return rc;
+
+	rc = dw3000_reg_read32(dw, DW3000_SYS_ENABLE_LO_ID, 0, &sys_enable_lo);
+	if (rc)
+		return rc;
+
+	rc = dw3000_reg_write32(dw, DW3000_SYS_ENABLE_HI_ID, 0, 0);
+	if (rc)
+		return rc;
+
+	rc = dw3000_reg_write32(dw, DW3000_SYS_ENABLE_LO_ID, 0, 0);
+	if (rc)
+		return rc;
+
+
 	/* Step 3a: Enable RX (may need further work) */
 	{
 		/* Ensure coex is disable to have immediate RX */
@@ -496,6 +519,14 @@ int dw3000_e0_adc_offset_calibration(struct dw3000 *dw)
 	if (rc)
 		return rc;
 	/* Step 4: restore initial register values */
+	rc = dw3000_reg_write32(dw, DW3000_SYS_ENABLE_HI_ID, 0, sys_enable_hi);
+	if (rc)
+		return rc;
+
+	rc = dw3000_reg_write32(dw, DW3000_SYS_ENABLE_LO_ID, 0, sys_enable_lo);
+	if (rc)
+		return rc;
+
 	rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0,
 				switch_control_reg_backup);
 	if (rc)
@@ -516,7 +547,7 @@ int dw3000_e0_adc_offset_calibration(struct dw3000 *dw)
  *
  * Return: zero on success, else a negative error code.
  */
-int dw3000_e0_pll_calibration_from_scratch(struct dw3000 *dw)
+static int dw3000_e0_pll_calibration_from_scratch(struct dw3000 *dw)
 {
 	int rc = 0;
 
@@ -525,13 +556,57 @@ int dw3000_e0_pll_calibration_from_scratch(struct dw3000 *dw)
 	 * its calculation. This is just in order to faster the process.
 	 */
 	rc = dw3000_reg_or32(dw, DW3000_PLL_CAL_ID, 0,
-			     DW3000_PLL_CAL_PLL_CAL_EN_BIT_MASK |
-				     DW3000_PLL_CAL_PLL_USE_OLD_BIT_MASK);
+			     DW3000_PLL_CAL_PLL_CAL_EN_BIT_MASK);
 	if (rc)
 		return rc;
 	/* Wait for the PLL calibration (needed before read the calibration status register) */
 	usleep_range(DW3000_E0_PLL_CALIBRATION_FROM_SCRATCH_DELAY_US,
 		     DW3000_E0_PLL_CALIBRATION_FROM_SCRATCH_DELAY_US + 10);
+	return rc;
+}
+
+/**
+ * dw3000_e0_get_dgc_dec() - Read DGC_DBG register content
+ * @dw: The DW device.
+ * @value: Pointer to store DGC DECISION value.
+ *
+ * Return: zero on succes, else a negative error code.
+ */
+static int dw3000_e0_get_dgc_dec(struct dw3000 *dw, u8 *value)
+{
+	int rc;
+	u32 dgc_dbg;
+
+	rc = dw3000_reg_read32(dw, DW3000_E0_DGC_DBG_ID, 0, &dgc_dbg);
+	if (unlikely(rc))
+		return rc;
+
+	/* DGC_DECISION is on bits 28 to 30 of DGC_CFG, cf 8.2.4.2 of DW3700
+	 * User Manual, store it to right the rssi stats entry */
+	*value = (u8)((dgc_dbg & 0x70000000) >> 0x1c);
+	return 0;
+}
+
+/**
+ * dw3000_e0_pll_coarse_code() - Calibrate the PLL from scratch
+ * @dw: the DW device
+ *
+ * Return: zero on success, else a negative error code.
+ */
+static int dw3000_e0_pll_coarse_code(struct dw3000 *dw)
+{
+	int rc = 0;
+	u8 tmp;
+
+	/* Disable Pre-buffer-enable for Ch9 PLL calibration for E0.
+	 * Clear CH9_CAL_WITH_PREBUF
+	 */
+	tmp = (u8)(~(DW3000_PLL_COARSE_CODE_CH5_CAL_WITH_PREBUF_BIT_MASK |
+		     DW3000_PLL_COARSE_CODE_CH9_ICAS_BIT_MASK |
+		     DW3000_PLL_COARSE_CODE_CH9_RCAS_BIT_MASK ) >>
+		   24);
+	rc = dw3000_reg_and8(dw, DW3000_PLL_COARSE_CODE_ID, 3, tmp);
+
 	return rc;
 }
 
@@ -542,7 +617,10 @@ const struct dw3000_chip_ops dw3000_chip_e0_ops = {
 	.coex_gpio = dw3000_e0_coex_gpio,
 	.prog_ldo_and_bias_tune = dw3000_e0_prog_ldo_and_bias_tune,
 	.get_config_mrxlut_chan = dw3000_e0_get_config_mrxlut_chan,
+	.get_dgc_dec = dw3000_e0_get_dgc_dec,
 	.adc_offset_calibration = dw3000_e0_adc_offset_calibration,
 	.pll_calibration_from_scratch = dw3000_e0_pll_calibration_from_scratch,
+	.prog_pll_coarse_code = dw3000_c0_prog_pll_coarse_code,
+	.pll_coarse_code = dw3000_e0_pll_coarse_code,
 	.get_registers = dw3000_d0_get_registers,
 };

@@ -453,6 +453,15 @@ int max_m5_load_gauge_model(struct max_m5_data *m5_data)
 	if (!m5_data || !m5_data->custom_model || !m5_data->custom_model_size)
 		return -ENODATA;
 
+	/* check FStat.DNR to wait it clear for data ready */
+	for (retries = 20; retries > 0; retries--) {
+		ret = REGMAP_READ(regmap, MAX_M5_FSTAT, &data);
+		if (ret == 0 && !(data & MAX_M5_FSTAT_DNR))
+			break;
+		msleep(50);
+	}
+	dev_info(m5_data->dev, "retries:%d, FSTAT:%#x\n", retries, data);
+
 	/* loading in progress, this is not good (tm) */
 	ret = REGMAP_READ(regmap, MAX_M5_CONFIG2, &data);
 	if (ret == 0 && (data & MAX_M5_CONFIG2_LDMDL)) {
