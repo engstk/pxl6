@@ -312,7 +312,7 @@ extern int dhd_pktlog_dump_write_file(dhd_pub_t *dhdp);
 
 extern void dhd_pktlog_get_filename(dhd_pub_t *dhdp, char *dump_path, int len);
 extern uint32 dhd_pktlog_get_item_length(dhd_pktlog_ring_info_t *report_ptr);
-extern uint32 dhd_pktlog_get_dump_length(dhd_pub_t *dhdp);
+extern int dhd_pktlog_get_dump_length(dhd_pub_t *dhdp);
 extern uint32 __dhd_dbg_pkt_hash(uintptr_t pkt, uint32 pktid);
 
 #ifdef DHD_COMPACT_PKT_LOG

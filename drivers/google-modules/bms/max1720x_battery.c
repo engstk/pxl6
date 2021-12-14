@@ -208,6 +208,7 @@ struct max1720x_chip {
 	bool shadow_override;
 	int nb_empty_voltage;
 	u16 *empty_voltage;
+	bool por;
 
 	unsigned int debug_irq_none_cnt;
 	unsigned long icnt;
@@ -225,12 +226,18 @@ struct max1720x_chip {
 	/* debug interface, register to read or write */
 	u32 debug_reg_address;
 
+	/* dump data to logbuffer periodically */
+	struct logbuffer *monitor_log;
+	u16 pre_repsoc;
+
 	struct power_supply_desc max1720x_psy_desc;
 };
 
 #define MAX1720_EMPTY_VOLTAGE(profile, temp, cycle) \
 	profile->empty_voltage[temp * NB_CYCLE_BUCKETS + cycle]
 
+
+static irqreturn_t max1720x_fg_irq_thread_fn(int irq, void *obj);
 
 static bool max17x0x_reglog_init(struct max1720x_chip *chip)
 {
@@ -1442,6 +1449,13 @@ static int max1720x_get_cycle_count(struct max1720x_chip *chip)
 	int err, cycle_count;
 	u16 reg_cycle;
 
+	/*
+	 * Corner case: battery under 3V hit POR without irq.
+	 * cycles reset in this situation, incorrect data
+	 */
+	if (chip->por)
+		return -ECANCELED;
+
 	err = REGMAP_READ(&chip->regmap, MAX1720X_CYCLES, &reg_cycle);
 	if (err < 0)
 		return err;
@@ -1580,7 +1594,7 @@ static void batt_ce_dump_data(const struct gbatt_capacity_estimation *cap_esti,
 			    " delta_cc_sum: %d"
 			    " delta_vfsoc_sum: %d"
 			    " state: %d"
-			    " cable: %d\n",
+			    " cable: %d",
 			    cap_esti->cap_filter_count,
 			    cap_esti->start_cc,
 			    cap_esti->start_vfsoc,
@@ -1709,7 +1723,7 @@ ioerr:
 
 exit:
 	logbuffer_log(chip->ce_log,
-		"valid=%d settle[cc=%d, vfsoc=%d], delta[cc=%d,vfsoc=%d] ce[%d]=%d\n",
+		"valid=%d settle[cc=%d, vfsoc=%d], delta[cc=%d,vfsoc=%d] ce[%d]=%d",
 		valid_estimate,
 		settle_cc, settle_vfsoc, delta_cc, delta_vfsoc,
 		cap_esti->cap_filter_count,
@@ -1925,6 +1939,7 @@ static int max1720x_get_property(struct power_supply *psy,
 		err = 0;
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
+
 		if (chip->gauge_type == -1) {
 			val->intval = 0;
 		} else if (chip->fake_battery != -1) {
@@ -1935,8 +1950,16 @@ static int max1720x_get_property(struct power_supply *psy,
 				break;
 
 			/* BST is 0 when the battery is present */
-			val->intval = (((u16) data) & MAX1720X_STATUS_BST)
-							? 0 : 1;
+			val->intval = !(data & MAX1720X_STATUS_BST);
+			if (!val->intval)
+				break;
+
+			/* chip->por prevent garbage in cycle count */
+			chip->por = data & MAX1720X_STATUS_POR;
+			if (chip->por && chip->model_ok) {
+				/* trigger reload model and clear of POR */
+				max1720x_fg_irq_thread_fn(-1, chip);
+			}
 		}
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
@@ -2129,6 +2152,82 @@ static int max1720x_property_is_writeable(struct power_supply *psy,
 	}
 
 	return 0;
+}
+
+static int max1720x_monitor_log_data(struct max1720x_chip *chip)
+{
+	u16 data, repsoc, vfsoc, avcap, repcap, fullcap, fullcaprep;
+	u16 fullcapnom, qh0, qh, dqacc, dpacc, qresidual, fstat;
+	int ret = 0;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_REPSOC, &data);
+	if (ret < 0)
+		return ret;
+
+	repsoc = (data >> 8) & 0x00FF;
+	if (repsoc == chip->pre_repsoc)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_VFSOC, &vfsoc);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_AVCAP, &avcap);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_REPCAP, &repcap);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_FULLCAP, &fullcap);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_FULLCAPREP, &fullcaprep);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_FULLCAPNOM, &fullcapnom);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_QH0, &qh0);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_QH, &qh);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_DQACC, &dqacc);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_DPACC, &dpacc);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_QRESIDUAL, &qresidual);
+	if (ret < 0)
+		return ret;
+
+	ret = REGMAP_READ(&chip->regmap, MAX1720X_FSTAT, &fstat);
+	if (ret < 0)
+		return ret;
+
+	logbuffer_log(chip->monitor_log, "%02X:%04X %02X:%04X %02X:%04X %02X:%04X"
+	" %02X:%04X %02X:%04X %02X:%04X %02X:%04X %02X:%04X %02X:%04X %02X:%04X"
+	" %02X:%04X %02X:%04X",
+		MAX1720X_REPSOC, data, MAX1720X_VFSOC, vfsoc, MAX1720X_AVCAP, avcap,
+		MAX1720X_REPCAP, repcap, MAX1720X_FULLCAP, fullcap, MAX1720X_FULLCAPREP,
+		fullcaprep, MAX1720X_FULLCAPNOM, fullcapnom, MAX1720X_QH0, qh0,
+		MAX1720X_QH, qh, MAX1720X_DQACC, dqacc, MAX1720X_DPACC, dpacc,
+		MAX1720X_QRESIDUAL, qresidual, MAX1720X_FSTAT, fstat);
+
+	chip->pre_repsoc = repsoc;
+
+	return ret;
 }
 
 /*
@@ -2401,6 +2500,9 @@ static irqreturn_t max1720x_fg_irq_thread_fn(int irq, void *obj)
 
 		if (storm)
 			pr_debug("Force power_supply_change in storm\n");
+		else
+			max1720x_monitor_log_data(chip);
+
 		storm = false;
 	}
 
@@ -3251,6 +3353,38 @@ BATTERY_DEBUG_ATTRIBUTE(debug_reg_data_fops, max1720x_show_debug_data,
 			max1720x_set_debug_data);
 
 
+
+static ssize_t max1720x_show_reg_all(struct file *filp, char __user *buf,
+					size_t count, loff_t *ppos)
+{
+	struct max1720x_chip *chip = (struct max1720x_chip *)filp->private_data;
+	u32 reg_address;
+	u16 data;
+	char *tmp;
+	int ret = 0, len = 0;
+
+	tmp = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	for (reg_address = 0; reg_address <= 0xFF; reg_address++) {
+		ret = REGMAP_READ(&chip->regmap, reg_address, &data);
+		if (ret < 0)
+			continue;
+
+		len += scnprintf(tmp + len, PAGE_SIZE - len, "%02x: %04x\n", reg_address, data);
+	}
+
+	if (len > 0)
+		len = simple_read_from_buffer(buf, count,  ppos, tmp, strlen(tmp));
+
+	kfree(tmp);
+
+	return len;
+}
+
+BATTERY_DEBUG_ATTRIBUTE(debug_reg_all_fops, max1720x_show_reg_all, NULL);
+
 /*
  * TODO: add the building blocks of google capacity
  *
@@ -3289,7 +3423,7 @@ static int max17x0x_init_debugfs(struct max1720x_chip *chip)
 					&debug_reglog_writes_fops);
 
 	if (chip->gauge_type == MAX_M5_GAUGE_TYPE)
-		debugfs_create_file("fg_model", 0440, de, chip,
+		debugfs_create_file("fg_model", 0444, de, chip,
 				    &debug_m5_custom_model_fops);
 	debugfs_create_bool("model_ok", 0444, de, &chip->model_ok);
 	debugfs_create_file("sync_model", 0400, de, chip,
@@ -3301,6 +3435,9 @@ static int max17x0x_init_debugfs(struct max1720x_chip *chip)
 	/* new debug interface */
 	debugfs_create_u32("address", 0600, de, &chip->debug_reg_address);
 	debugfs_create_file("data", 0600, de, chip, &debug_reg_data_fops);
+
+	/* dump all registers */
+	debugfs_create_file("registers", 0444, de, chip, &debug_reg_all_fops);
 
 	return 0;
 }
@@ -3503,13 +3640,14 @@ static int max1720x_clear_por(struct max1720x_chip *chip)
 /* read state from fg (if needed) and set the next update field */
 static int max1720x_set_next_update(struct max1720x_chip *chip)
 {
-	int rc, cycle_count;
+	int rc;
+	u16 reg_cycle;
 
-	cycle_count = max1720x_get_cycle_count(chip);
-	if (cycle_count < 0)
-		return cycle_count;
+	rc = REGMAP_READ(&chip->regmap, MAX1720X_CYCLES, &reg_cycle);
+	if (rc < 0)
+		return rc;
 
-	if (chip->model_next_update && cycle_count < chip->model_next_update)
+	if (chip->model_next_update && reg_cycle < chip->model_next_update)
 		return 0;
 
 	/* read new state from Fuel gauge, save to storage if needed */
@@ -3526,11 +3664,11 @@ static int max1720x_set_next_update(struct max1720x_chip *chip)
 	if (rc == 0 && chip->model_next_update)
 		rc = max_m5_save_state_data(chip->model_data);
 	if (rc == 0)
-		chip->model_next_update = (cycle_count + (1 << 6)) &
+		chip->model_next_update = (reg_cycle + (1 << 6)) &
 					  ~((1 << 6) - 1);
 
-	pr_debug("%s: cycle_count=%d next_update=%d rc=%d\n", __func__,
-		 cycle_count, chip->model_next_update, rc);
+	pr_debug("%s: reg_cycle=%d next_update=%d rc=%d\n", __func__,
+		 reg_cycle, chip->model_next_update, rc);
 
 	return 0;
 }
@@ -3581,7 +3719,8 @@ static void max1720x_model_work(struct work_struct *work)
 	struct max1720x_chip *chip = container_of(work, struct max1720x_chip,
 						  model_work.work);
 	bool new_model = false;
-	int rc, cycle_count;
+	u16 reg_cycle;
+	int rc;
 
 	if (!chip->model_data)
 		return;
@@ -3601,13 +3740,13 @@ static void max1720x_model_work(struct work_struct *work)
 			/* TODO: keep trying to clear POR if the above fail */
 
 			max1720x_restore_battery_cycle(chip);
-			cycle_count = max1720x_get_cycle_count(chip);
-			if (cycle_count >= 0) {
+			rc = REGMAP_READ(&chip->regmap, MAX1720X_CYCLES, &reg_cycle);
+			if (rc == 0 && reg_cycle >= 0) {
 				chip->model_reload = MAX_M5_LOAD_MODEL_IDLE;
 				chip->model_ok = true;
 				new_model = true;
 				/* saved new value in max1720x_set_next_update */
-				chip->model_next_update = cycle_count > 0 ? cycle_count - 1 : 0;
+				chip->model_next_update = reg_cycle > 0 ? reg_cycle - 1 : 0;
 			}
 		} else if (rc != -EAGAIN) {
 			chip->model_reload = MAX_M5_LOAD_MODEL_DISABLED;
@@ -5000,6 +5139,7 @@ static int max1720x_probe(struct i2c_client *client,
 	struct power_supply_config psy_cfg = { };
 	const struct max17x0x_reg *reg;
 	const char *psy_name = NULL;
+	char monitor_name[32];
 	int ret = 0;
 
 	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
@@ -5123,6 +5263,15 @@ static int max1720x_probe(struct i2c_client *client,
 		ret = PTR_ERR(chip->ce_log);
 		dev_err(dev, "failed to obtain logbuffer, ret=%d\n", ret);
 		chip->ce_log = NULL;
+	}
+
+	scnprintf(monitor_name, sizeof(monitor_name), "%s_%s",
+		  chip->max1720x_psy_desc.name, "monitor");
+	chip->monitor_log = logbuffer_register(monitor_name);
+	if (IS_ERR(chip->monitor_log)) {
+		ret = PTR_ERR(chip->monitor_log);
+		dev_err(dev, "failed to obtain logbuffer, ret=%d\n", ret);
+		chip->monitor_log = NULL;
 	}
 
 	/* use VFSOC until it can confirm that FG Model is running */

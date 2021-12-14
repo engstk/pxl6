@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,10 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, netlink.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/rtnetlink.h>
@@ -386,13 +383,89 @@ static int mcps802154_nl_call_region(struct sk_buff *skb,
 	call_id = nla_get_u32(attrs[MCPS802154_REGION_ATTR_CALL]);
 
 	mutex_lock(&local->fsm_lock);
+	local->cur_cmd_info = info;
 	r = mcps802154_ca_scheduler_call_region(
 		local, scheduler_name, region_id, region_name, call_id,
 		attrs[MCPS802154_REGION_ATTR_CALL_PARAMS], info);
+	local->cur_cmd_info = NULL;
 	mutex_unlock(&local->fsm_lock);
 
 	return r;
 }
+
+struct sk_buff *
+mcps802154_region_call_alloc_reply_skb(struct mcps802154_llhw *llhw,
+				       struct mcps802154_region *region,
+				       u32 call_id, int approx_len)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+	struct sk_buff *msg;
+	void *hdr;
+	struct nlattr *call, *params;
+
+	if (WARN_ON(!local->cur_cmd_info))
+		return NULL;
+
+	msg = nlmsg_new(approx_len + NLMSG_HDRLEN, GFP_KERNEL);
+	if (!msg)
+		return NULL;
+
+	hdr = genlmsg_put(msg, local->cur_cmd_info->snd_portid,
+			  local->cur_cmd_info->snd_seq, &mcps802154_nl_family,
+			  0, MCPS802154_CMD_CALL_REGION);
+	if (!hdr)
+		goto nla_put_failure;
+
+	if (nla_put_u32(msg, MCPS802154_ATTR_HW, local->hw_idx))
+		goto nla_put_failure;
+
+	call = nla_nest_start(msg, MCPS802154_ATTR_SCHEDULER_REGION_CALL);
+	if (!call)
+		goto nla_put_failure;
+
+	if (nla_put_string(msg, MCPS802154_REGION_ATTR_NAME,
+			   region->ops->name) ||
+	    nla_put_u32(msg, MCPS802154_REGION_ATTR_CALL, call_id))
+		goto nla_put_failure;
+
+	params = nla_nest_start(msg, MCPS802154_REGION_ATTR_CALL_PARAMS);
+	if (!params)
+		goto nla_put_failure;
+
+	((void **)msg->cb)[0] = hdr;
+	((void **)msg->cb)[1] = call;
+	((void **)msg->cb)[2] = params;
+
+	return msg;
+nla_put_failure:
+	kfree_skb(msg);
+	return NULL;
+}
+EXPORT_SYMBOL(mcps802154_region_call_alloc_reply_skb);
+
+int mcps802154_region_call_reply(struct mcps802154_llhw *llhw,
+				 struct sk_buff *skb)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+	void *hdr = ((void **)skb->cb)[0];
+	struct nlattr *call = ((void **)skb->cb)[1];
+	struct nlattr *params = ((void **)skb->cb)[2];
+
+	/* Clear CB data for netlink core to own from now on */
+	memset(skb->cb, 0, sizeof(skb->cb));
+
+	if (WARN_ON(!local->cur_cmd_info)) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+
+	nla_nest_end(skb, params);
+	nla_nest_end(skb, call);
+	genlmsg_end(skb, hdr);
+
+	return genlmsg_reply(skb, local->cur_cmd_info);
+}
+EXPORT_SYMBOL(mcps802154_region_call_reply);
 
 struct sk_buff *
 mcps802154_region_event_alloc_skb(struct mcps802154_llhw *llhw,
@@ -934,7 +1007,7 @@ static int mcps802154_nl_get_calibration(struct sk_buff *skb,
 	struct sk_buff *msg;
 	void *hdr;
 	char *key;
-	u32 tmp[7];
+	u32 tmp[32];
 	int err;
 	int r;
 

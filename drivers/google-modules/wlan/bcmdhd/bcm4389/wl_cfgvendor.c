@@ -5392,7 +5392,7 @@ wl_cfgvendor_nan_parse_args(struct wiphy *wiphy, const void *buf,
 				ret = -EINVAL;
 				goto exit;
 			}
-			cfg->nancfg->ranging_enable = nla_get_u32(iter);
+			cfg->nancfg->ranging_enable = nla_get_u32(iter) != 0 ? TRUE : FALSE;
 			break;
 		case NAN_ATTRIBUTE_DW_EARLY_TERM:
 			if (nla_len(iter) != sizeof(uint32)) {
@@ -6348,6 +6348,7 @@ wl_cfgvendor_nan_start_handler(struct wiphy *wiphy,
 
 	cmd_data->sid_beacon.sid_enable = NAN_SID_ENABLE_FLAG_INVALID; /* Setting to some default */
 	cmd_data->sid_beacon.sid_count = NAN_SID_BEACON_COUNT_INVALID; /* Setting to some default */
+	cfg->nancfg->ranging_enable = TRUE; /* by default enable ranging */
 
 	ret = wl_cfgvendor_nan_parse_args(wiphy, data, len, cmd_data, &nan_attr_mask);
 	if (ret) {

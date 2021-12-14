@@ -659,6 +659,18 @@ enum {
 };
 
 enum {
+	GRIP_PRESCREEN_OFF	= 0,
+	GRIP_PRESCREEN_MODE_1	= 1,
+	GRIP_PRESCREEN_MODE_2	= 2,
+	GRIP_PRESCREEN_MODE_3	= 3
+};
+
+enum {
+	GRIP_PRESCREEN_TIMEOUT_MIN	= 0,
+	GRIP_PRESCREEN_TIMEOUT_MAX	= 480
+};
+
+enum {
 	ENCODED_ENABLE_OFF	= 0,
 	ENCODED_ENABLE_ON	= 1
 };
@@ -1155,6 +1167,8 @@ struct sec_ts_plat_data {
 	int bringup;
 	int mis_cal_check;
 	int heatmap_mode;
+	int grip_prescreen_mode;
+	int grip_prescreen_timeout;
 	bool is_heatmap_enabled;
 	int encoded_enable;
 	int encoded_frame_counter;

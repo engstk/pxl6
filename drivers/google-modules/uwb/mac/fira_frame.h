@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * FiRa ranging, frame composition and parsing.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef FIRA_FRAME_H
@@ -79,6 +75,15 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 					  struct sk_buff *skb);
 
 /**
+ * fira_frame_rframe_payload_put() - Check availability of a custom data
+ * payload, write it to tx frame.
+ * @local: FiRa context.
+ * @skb: Frame buffer.
+ */
+void fira_frame_rframe_payload_put(struct fira_local *local,
+				   struct sk_buff *skb);
+
+/**
  * fira_frame_header_check() - Check and consume FiRa header.
  * @local: FiRa context.
  * @skb: Frame buffer.
@@ -100,13 +105,15 @@ bool fira_frame_header_check(const struct fira_local *local,
  * @skb: Frame buffer.
  * @ie_get: Context used to read IE, must have been used to read header first.
  * @n_slots: Pointer where to store number of used slots.
+ * @stop_ranging: True if the message indicates that the ranging must be stopped.
  *
  * Return: true if message is correct. Extra payload is accepted.
  */
 bool fira_frame_control_payload_check(struct fira_local *local,
 				      struct sk_buff *skb,
 				      struct mcps802154_ie_get_context *ie_get,
-				      unsigned int *n_slots);
+				      unsigned int *n_slots,
+				      bool *stop_ranging);
 
 /**
  * fira_frame_measurement_report_payload_check() - Check FiRa frame payload for
@@ -135,6 +142,20 @@ bool fira_frame_measurement_report_payload_check(
 bool fira_frame_result_report_payload_check(
 	struct fira_local *local, const struct fira_slot *slot,
 	struct sk_buff *skb, struct mcps802154_ie_get_context *ie_get);
+
+/**
+ * fira_frame_rframe_payload_check() - Parse custom data from ranging frame.
+ * @local: FiRa context.
+ * @slot: Slot information.
+ * @skb: Frame buffer.
+ * @ie_get: Context used to read IE, must have been used to read header first.
+ *
+ * Return: true if message is correct. Extra payload is accepted.
+ */
+bool fira_frame_rframe_payload_check(struct fira_local *local,
+				     const struct fira_slot *slot,
+				     struct sk_buff *skb,
+				     struct mcps802154_ie_get_context *ie_get);
 
 /**
  * fira_frame_encrypt() - Terminate a frame and encrypt.

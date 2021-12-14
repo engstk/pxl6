@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_MCPS_H
 #define __DW3000_MCPS_H
@@ -28,5 +27,11 @@ struct dw3000 *dw3000_mcps_alloc(struct device *dev);
 int dw3000_mcps_register(struct dw3000 *dw);
 void dw3000_mcps_unregister(struct dw3000 *dw);
 void dw3000_mcps_free(struct dw3000 *dw);
+
+/**
+ * dw3000_mcps_reset() - Hard reset of decawave.
+ * @dw: Driver context.
+ */
+void dw3000_mcps_reset(struct dw3000 *dw);
 
 #endif /* __DW3000_MCPS_H */

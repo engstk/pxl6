@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, fira ranging region.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_FIRA_REGION_H
@@ -36,6 +32,7 @@
 #define FIRA_SLOT_DURATION_RSTU_DEFAULT 2400
 #define FIRA_BLOCK_DURATION_MS_DEFAULT 200
 #define FIRA_ROUND_DURATION_SLOTS_DEFAULT 30
+#define FIRA_MAX_RR_RETRY_DEFAULT 0
 #define FIRA_PRIORITY_MAX 100
 #define FIRA_PRIORITY_DEFAULT 50
 #define FIRA_IN_BAND_TERMINATION_ATTEMPT_COUNT_MAX 10
@@ -43,6 +40,10 @@
 #define FIRA_BOOLEAN_MAX 1
 #define FIRA_FRAMES_MAX (3 + 3 * FIRA_CONTROLEES_MAX)
 #define FIRA_CONTROLEE_FRAMES_MAX (3 + 3 + 1)
+/* IEEE 802.15.4z 2020 section 6.9.7.2 */
+#define UWB_BLOCK_DURATION_MARGIN_PPM 100
+/* FiRa Tx should arrive between 0 and 10 us, always add 2 us. */
+#define FIRA_TX_MARGIN_US 2
 
 /**
  * enum fira_message_id - Message identifiers, used in internal state and in
@@ -175,10 +176,13 @@ struct fira_ranging_info {
 	 */
 	__le16 short_addr;
 	/**
-	 * @failed: true if this ranging is failed (frame not received, bad
-	 * frame, bad measurements...)
+	 * @status: Success or failure reason.
 	 */
-	bool failed;
+	enum fira_ranging_status status;
+	/**
+	 * @slot_index: In case of failure, the slot index where it has occured.
+	 */
+	u8 slot_index;
 	/**
 	 * @tof_present: true if time of flight information is present.
 	 */
@@ -195,6 +199,14 @@ struct fira_ranging_info {
 	 * @remote_aoa_fom_present: true if FoM AoA is present.
 	 */
 	bool remote_aoa_fom_present;
+	/**
+	 * @data_payload: Custom data payload.
+	 */
+	u8 data_payload[FIRA_DATA_PAYLOAD_SIZE_MAX];
+	/**
+	 * @data_payload_len: Custom data payload length.
+	 */
+	int data_payload_len;
 };
 
 /**
@@ -221,6 +233,10 @@ struct fira_local {
 	 * @sts_params: STS parameters for access frames.
 	 */
 	struct mcps802154_sts_params sts_params[FIRA_FRAMES_MAX];
+	/**
+	 * @channel: Channel parameters for access.
+	 */
+	struct mcps802154_channel channel;
 	/**
 	 * @current_session: Pointer to the current session.
 	 */
@@ -269,6 +285,22 @@ struct fira_local {
 	 * @active_sessions: List of active sessions.
 	 */
 	struct list_head active_sessions;
+	/**
+	 * @stopped_controlees_short_addr: Short addresses of the stopped
+	 * controlees for which an element must be added to the Device
+	 * Management List of the RCM message.
+	 */
+	__le16 stopped_controlees_short_addr[FIRA_CONTROLEES_MAX];
+	/**
+	 * @n_stopped_controlees_short_addr: Number of elements in the stopped
+	 * controlees short addr table.
+	 */
+	int n_stopped_controlees_short_addr;
+	/**
+	 * @block_duration_rx_margin_ppm: Block duration rx margin for
+	 * controlees.
+	 */
+	int block_duration_rx_margin_ppm;
 };
 
 static inline struct fira_local *
@@ -291,5 +323,13 @@ access_to_local(struct mcps802154_access *access)
  */
 void fira_report(struct fira_local *local, struct fira_session *session,
 		 bool add_measurements);
+
+/**
+ * fira_session_notify_state_change() - Notify session state change to upper layers.
+ * @local: FiRa context.
+ * @session_id: Fira session id.
+ * @state: Fira session state.
+ */
+void fira_session_notify_state_change(struct fira_local *local, u32 session_id, uint8_t state);
 
 #endif /* NET_FIRA_REGION_H */

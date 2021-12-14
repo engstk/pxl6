@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/atomic.h>
 #include <linux/errno.h>
@@ -38,6 +34,7 @@
 #include "default_region.h"
 #include "simple_ranging_region.h"
 #include "endless_scheduler.h"
+#include "on_demand_scheduler.h"
 #ifdef CONFIG_MCPS802154_TESTMODE
 #include "ping_pong_region.h"
 #endif
@@ -135,6 +132,11 @@ int mcps802154_register_llhw(struct mcps802154_llhw *llhw)
 	local->pib.mac_extended_addr = local->hw->phy->perm_extended_addr;
 	local->pib.mac_pan_id = IEEE802154_PAN_ID_BROADCAST;
 	local->pib.mac_short_addr = IEEE802154_ADDR_SHORT_BROADCAST;
+	local->pib.phy_current_channel.page = local->hw->phy->current_page;
+	local->pib.phy_current_channel.channel =
+		local->hw->phy->current_channel;
+	local->pib.phy_current_channel.preamble_code =
+		llhw->current_preamble_code;
 
 	mutex_lock(&registered_llhw_lock);
 	list_add(&local->registered_entry, &registered_llhw);
@@ -182,6 +184,15 @@ __le16 mcps802154_get_short_addr(struct mcps802154_llhw *llhw)
 }
 EXPORT_SYMBOL(mcps802154_get_short_addr);
 
+const struct mcps802154_channel *
+mcps802154_get_current_channel(struct mcps802154_llhw *llhw)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	return &local->pib.phy_current_channel;
+}
+EXPORT_SYMBOL(mcps802154_get_current_channel);
+
 int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 					 u32 *timestamp_dtu)
 {
@@ -193,24 +204,6 @@ int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 	return llhw_get_current_timestamp_dtu(local, timestamp_dtu);
 }
 EXPORT_SYMBOL(mcps802154_get_current_timestamp_dtu);
-
-u64 mcps802154_timestamp_dtu_to_rctu(struct mcps802154_llhw *llhw,
-				     u32 timestamp_dtu)
-{
-	struct mcps802154_local *local = llhw_to_local(llhw);
-
-	return llhw_timestamp_dtu_to_rctu(local, timestamp_dtu);
-}
-EXPORT_SYMBOL(mcps802154_timestamp_dtu_to_rctu);
-
-u32 mcps802154_timestamp_rctu_to_dtu(struct mcps802154_llhw *llhw,
-				     u64 timestamp_rctu)
-{
-	struct mcps802154_local *local = llhw_to_local(llhw);
-
-	return llhw_timestamp_rctu_to_dtu(local, timestamp_rctu);
-}
-EXPORT_SYMBOL(mcps802154_timestamp_rctu_to_dtu);
 
 u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
 						u32 tx_timestamp_dtu,
@@ -265,6 +258,8 @@ int __init mcps802154_init(void)
 	WARN_ON(r);
 	r = mcps802154_endless_scheduler_init();
 	WARN_ON(r);
+	r = mcps802154_on_demand_scheduler_init();
+	WARN_ON(r);
 #ifdef CONFIG_MCPS802154_TESTMODE
 	r = ping_pong_region_init();
 	WARN_ON(r);
@@ -277,6 +272,7 @@ void __exit mcps802154_exit(void)
 #ifdef CONFIG_MCPS802154_TESTMODE
 	ping_pong_region_exit();
 #endif
+	mcps802154_on_demand_scheduler_exit();
 	mcps802154_endless_scheduler_exit();
 	simple_ranging_region_exit();
 	mcps802154_default_region_exit();

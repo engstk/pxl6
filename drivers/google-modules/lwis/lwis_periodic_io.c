@@ -153,7 +153,7 @@ static void push_periodic_io_error_event_locked(struct lwis_periodic_io *periodi
 
 static int process_io_entries(struct lwis_client *client,
 			      struct lwis_periodic_io_proxy *periodic_io_proxy,
-			      struct list_head *list_node, struct list_head *pending_events)
+			      struct list_head *pending_events)
 {
 	int i;
 	int ret = 0;
@@ -262,14 +262,7 @@ event_push:
 	}
 	resp_size = sizeof(struct lwis_periodic_io_response_header) +
 		    periodic_io->batch_count * (resp->results_size_bytes / info->batch_size);
-	/* Always remove the process_queue_node from the client
-	 * periodic_io_process_queue */
-	if (list_node) {
-		spin_lock_irqsave(&client->periodic_io_lock, flags);
-		list_del(list_node);
-		kfree(periodic_io_proxy);
-		spin_unlock_irqrestore(&client->periodic_io_lock, flags);
-	}
+
 	/* Only push when the periodic io is executed for batch_size times or
 	 * there is an error */
 	if (!pending_events) {
@@ -319,20 +312,19 @@ static void periodic_io_work_func(struct work_struct *work)
 		periodic_io_proxy =
 			list_entry(it_period, struct lwis_periodic_io_proxy, process_queue_node);
 		periodic_io = periodic_io_proxy->periodic_io;
+		list_del(&periodic_io_proxy->process_queue_node);
 		/* Error indicates the cancellation of the periodic io */
 		if (periodic_io->resp->error_code || !periodic_io->active) {
 			error_code = periodic_io->resp->error_code ? periodic_io->resp->error_code :
 									   -ECANCELED;
-			list_del(&periodic_io_proxy->process_queue_node);
-			kfree(periodic_io_proxy);
 			push_periodic_io_error_event_locked(periodic_io, error_code,
 							    &pending_events);
 		} else {
 			spin_unlock_irqrestore(&client->periodic_io_lock, flags);
-			process_io_entries(client, periodic_io_proxy,
-					   &periodic_io_proxy->process_queue_node, &pending_events);
+			process_io_entries(client, periodic_io_proxy, &pending_events);
 			spin_lock_irqsave(&client->periodic_io_lock, flags);
 		}
+		kfree(periodic_io_proxy);
 	}
 	spin_unlock_irqrestore(&client->periodic_io_lock, flags);
 
