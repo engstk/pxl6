@@ -395,7 +395,9 @@
 			<0x0 0x1A820400 0x4>,     /* SYSREG G3AA */
 			<0x0 0x1AC40000 0x10000>, /* IPP CORE0 */
 			<0x0 0x1AC50000 0x10000>, /* IPP CORE1 */
-			<0x0 0x1AC60000 0x10000>; /* IPP CORE2 */
+			<0x0 0x1AC60000 0x10000>, /* IPP CORE2 */
+			<0x0 0x1A840000 0x20000>, /* G3AA */
+			<0x0 0x1A800000 0x10000>; /* G3AA CMU*/
 		reg-names =
 			"pdp-core0",
 			"pdp-core1",
@@ -404,7 +406,9 @@
 			"sysreg-g3aa",
 			"ipp-core0",
 			"ipp-core1",
-			"ipp-core2";
+			"ipp-core2",
+			"g3aa-core",
+			"g3aa-cmu";
 
 		clocks =
 			<&clock UMUX_CLKCMU_PDP_BUS>,
@@ -583,14 +587,14 @@
 		/* Register space */
 		reg =
 			<0x0 0x1BC40000 0x10000>,   /* TNR */
-			<0x0 0x1BE80000 0x10000>,   /* TNR SSMT D0 */
-			<0x0 0x1BE90000 0x10000>,   /* TNR SSMT D1 */
-			<0x0 0x1BEA0000 0x10000>,   /* TNR SSMT D2 */
-			<0x0 0x1BEB0000 0x10000>,   /* TNR SSMT D3 */
-			<0x0 0x1BEC0000 0x10000>,   /* TNR SSMT D4 */
-			<0x0 0x1BED0000 0x10000>,   /* TNR SSMT D5 */
-			<0x0 0x1BEE0000 0x10000>,   /* TNR SSMT D6 */
-			<0x0 0x1BEF0000 0x10000>,   /* TNR SSMT D7 */
+			<0x0 0x1BE84000 0xA00>,     /* TNR SSMT D0 */
+			<0x0 0x1BE94000 0xA00>,     /* TNR SSMT D1 */
+			<0x0 0x1BEA4000 0xA00>,     /* TNR SSMT D2 */
+			<0x0 0x1BEB4000 0xA00>,     /* TNR SSMT D3 */
+			<0x0 0x1BEC4000 0xA00>,     /* TNR SSMT D4 */
+			<0x0 0x1BED4000 0xA00>,     /* TNR SSMT D5 */
+			<0x0 0x1BEE4000 0xA00>,     /* TNR SSMT D6 */
+			<0x0 0x1BEF4000 0xA00>,     /* TNR SSMT D7 */
 			<0x0 0x1BC030E4 0x8>;       /* TNR_QCH */
 		reg-names =
 			"tnr",
@@ -678,14 +682,16 @@
 			<0x0 0x1B450000 0x10000>, /* ITP */
 			<0x0 0x1B040000 0x10000>, /* DNS */
 			<0x0 0x1B740000 0x10000>, /* ITSC */
-			<0x0 0x1B890000 0x10000>, /* SSMT D0 ITSC */
-			<0x0 0x1B8A0000 0x10000>; /* SSMT D1 ITSC */
+			<0x0 0x1B894000 0xA00>,   /* SSMT D0 ITSC */
+			<0x0 0x1B8A4000 0xA00>,   /* SSMT D1 ITSC */
+			<0x0 0x1B020000 0x10000>; /* SYSREG DNS */
 		reg-names =
 			"itp",
 			"dns",
 			"itsc",
 			"ssmt_d0_itsc",
-			"ssmt_d1_itsc";
+			"ssmt_d1_itsc",
+			"sysreg_dns";
 
 		clocks =
 			<&clock UMUX_CLKCMU_ITP_BUS>,
@@ -734,8 +740,8 @@
 		/* Register space */
 		reg =
 			<0x0 0x1B760000 0x10000>, /* MCSC */
-			<0x0 0x1B8C0000 0x10000>, /* SSMT D0 MCSC */
-			<0x0 0x1B8D0000 0x10000>; /* SSMT D1 MCSC */
+			<0x0 0x1B8C4000 0xA00>,   /* SSMT D0 MCSC */
+			<0x0 0x1B8D4000 0xA00>;   /* SSMT D1 MCSC */
 		reg-names =
 			"mcsc",
 			"ssmt_d0_mcsc",
@@ -767,7 +773,7 @@
 		/* Register space */
 		reg =
 			<0x0 0x1BA80000 0x10000>, /* SCSC */
-			<0x0 0x1BB50000 0x10000>; /* SSMT SCSC */
+			<0x0 0x1BB54000 0xA00>;   /* SSMT SCSC */
 		reg-names =
 			"scsc",
 			"ssmt_d_scsc";
@@ -796,7 +802,7 @@
 		/* Register space */
 		reg =
 			<0x0 0x1BA40000 0x10000>,	/* GDC0 */
-			<0x0 0x1BB30000 0x10000>;	/* GDC0 SSMT */
+			<0x0 0x1BB34000 0xA00>;		/* GDC0 SSMT */
 		reg-names =
 			"gdc",
 			"gdc_ssmt";
@@ -825,7 +831,7 @@
 		/* Register space */
 		reg =
 			<0x0 0x1BA60000 0x10000>,  /* GDC1 */
-			<0x0 0x1BB40000 0x10000>;  /* GDC1 SSMT */
+			<0x0 0x1BB44000 0xA00>;    /* GDC1 SSMT */
 		reg-names =
 			"gdc",
 			"gdc_ssmt";

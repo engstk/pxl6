@@ -665,6 +665,11 @@ static ssize_t link_state_show(struct device *dev, struct device_attribute *attr
 	u32 val;
 	struct exynos_pcie *exynos_pcie = dev_get_drvdata(dev);
 
+	if (exynos_pcie->phy_control == PCIE_PHY_ISOLATION) {
+		val = L2;   /* Not linked is equivalent to L2 */
+		goto exit;
+	}
+
 	val = exynos_phy_pcs_read(exynos_pcie, PM_POWER_STATE);
 	val &= PM_STATE_MASK;
 
@@ -694,6 +699,7 @@ static ssize_t link_state_show(struct device *dev, struct device_attribute *attr
 		val = UNKNOWN;
 	}
 
+exit:
 	ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%d\n", val);
 
 	return ret;
@@ -1944,13 +1950,16 @@ void exynos_pcie_rc_dislink_work(struct work_struct *work)
 	struct dw_pcie *pci = exynos_pcie->pci;
 	struct pcie_port *pp = &pci->pp;
 	struct device *dev = pci->dev;
+	unsigned long flags;
 
 	if (exynos_pcie->state == STATE_LINK_DOWN)
 		return;
 
+	spin_lock_irqsave(&exynos_pcie->conf_lock, flags);
 	exynos_pcie_rc_print_link_history(pp);
 	exynos_pcie_rc_dump_link_down_status(exynos_pcie->ch_num);
 	exynos_pcie_rc_register_dump(exynos_pcie->ch_num);
+	spin_unlock_irqrestore(&exynos_pcie->conf_lock, flags);
 
 	exynos_pcie->linkdown_cnt++;
 	dev_info(dev, "link down and recovery cnt: %d\n", exynos_pcie->linkdown_cnt);
@@ -2534,6 +2543,15 @@ retry:
 	val |= SOFT_PWR_RESET;
 	exynos_elbi_write(exynos_pcie, val, PCIE_SOFT_RESET);
 
+	val = exynos_phy_read(exynos_pcie, 0x0E18) & (1 << 7);
+	if (!val) {
+		dev_err(dev, "OC Fail after soft power reset!\n");
+		dev_err(dev, "PMA Info : 0x760(0x%x), 0xE0C(0x%x), 0x3F0(0x%x), 0xFC0(0x%x)\n",
+			exynos_phy_read(exynos_pcie, 0x760),
+			exynos_phy_read(exynos_pcie, 0xE0C),
+			exynos_phy_read(exynos_pcie, 0x3F0),
+			exynos_phy_read(exynos_pcie, 0xFC0));
+	}
 	/* Device Type (Sub Controller: DEVICE_TYPE offset: 0x80  */
 	exynos_elbi_write(exynos_pcie, 0x04, 0x80);
 

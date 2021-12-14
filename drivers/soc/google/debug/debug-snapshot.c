@@ -98,6 +98,12 @@ int dbg_snapshot_get_sjtag_status(void)
 }
 EXPORT_SYMBOL_GPL(dbg_snapshot_get_sjtag_status);
 
+bool dbg_snapshot_get_reboot_status(void)
+{
+	return dss_desc.in_reboot;
+}
+EXPORT_SYMBOL_GPL(dbg_snapshot_get_reboot_status);
+
 bool dbg_snapshot_get_panic_status(void)
 {
 	return dss_desc.in_panic;

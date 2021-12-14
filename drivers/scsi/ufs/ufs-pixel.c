@@ -627,7 +627,7 @@ static void pixel_ufs_compl_command(void *data, struct ufs_hba *hba,
 {
 	int result = 0;
 	int scsi_status;
-	u8 response_code;
+	u8 response_code, opcode;
 	u8 *asc, *sense_buffer;
 	int ocs;
 
@@ -635,7 +635,12 @@ static void pixel_ufs_compl_command(void *data, struct ufs_hba *hba,
 	pixel_ufs_update_req_stats(hba, lrbp);
 	pixel_ufs_trace_upiu_cmd(hba, lrbp, false);
 
-	if (!lrbp->cmd || !lrbp->sense_buffer)
+	if (!lrbp->cmd)
+		return;
+
+	opcode = lrbp->cmd->cmnd[0];
+	if (opcode != SYNCHRONIZE_CACHE && opcode != START_STOP &&
+			opcode != WRITE_10 && opcode != READ_10)
 		return;
 
 	ocs = ufshcd_get_tr_ocs(lrbp);
@@ -655,6 +660,13 @@ static void pixel_ufs_compl_command(void *data, struct ufs_hba *hba,
 	if (scsi_status != SAM_STAT_CHECK_CONDITION)
 		return;
 
+	/*
+	 * Clear the failfast flags to make the SCSI core retry
+	 * lrbp->cmd. The block layer core sets REQ_FAILFAST_MASK for
+	 * readahead requests.
+	 */
+	lrbp->cmd->request->cmd_flags &= ~REQ_FAILFAST_MASK;
+
 	sense_buffer = lrbp->ucd_rsp_ptr->sr.sense_data;
 	response_code = sense_buffer[0] & 0x7f;
 	if (response_code >= 0x72)
@@ -662,9 +674,15 @@ static void pixel_ufs_compl_command(void *data, struct ufs_hba *hba,
 	else
 		asc = sense_buffer + 12;
 
-	/*  Ignore piggybacked SCSI reset, since it prevents system suspend. */
-	if (*asc == 0x29)
-		*asc = 0;
+	/*
+	 * Ignore piggybacked SCSI reset, since it prevents system suspend.
+	 * 1) Make response_code deferred: 0x71
+	 * 2) Make scsi_report_sense not to send an uevent of UNIT ATTENTION
+	 */
+	if (*asc == 0x29) {
+		sense_buffer[0] = 0x71;
+		*(sense_buffer + 12) = 0;
+	}
 }
 
 static void pixel_ufs_prepare_command(void *data, struct ufs_hba *hba,
@@ -686,7 +704,8 @@ static void pixel_ufs_prepare_command(void *data, struct ufs_hba *hba,
 		copy_from_iter(&cur_wc, 4, &iter);
 		cur_wc = cpu_to_be32(cur_wc);
 		if (cur_wc)
-			pr_info("%s RPMB write counter = %8x\n", __func__, cur_wc);
+			pr_info("%s RPMB write counter = %8x; start time %lu\n",
+				__func__, cur_wc, lrbp->cmd->jiffies_at_alloc);
 		if (cur_wc != ufs->security_out_wc)
 			ufs->security_out_wc = cur_wc;
 		else if (cur_wc) {
@@ -1363,15 +1382,11 @@ static ssize_t _name##_show(struct device *dev,				\
 	struct ufs_event_hist *e = &hba->ufs_stats.event[_err_name];	\
 	unsigned long flags;						\
 	u64 val = 0;							\
-	int i, p;							\
+	int p;								\
 	spin_lock_irqsave(hba->host->host_lock, flags);			\
 	switch (_type) {						\
 	case PIXEL_ERR_COUNT:						\
-		for (i = 0; i < UFS_EVENT_HIST_LENGTH; i++) {		\
-			p = (i + e->pos) % UFS_EVENT_HIST_LENGTH;	\
-			if (e->tstamp[p] != 0)				\
-				val++;					\
-		}							\
+		val = e->cnt;						\
 		break;							\
 	case PIXEL_ERR_TIME:						\
 		p = (e->pos + UFS_EVENT_HIST_LENGTH - 1) %		\
