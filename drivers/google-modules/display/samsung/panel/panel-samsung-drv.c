@@ -736,6 +736,7 @@ void exynos_panel_set_binned_lp(struct exynos_panel *ctx, const u16 brightness)
 	const struct exynos_binned_lp *binned_lp;
 	struct backlight_device *bl = ctx->bl;
 	bool is_lp_state;
+	enum exynos_panel_state panel_state;
 
 	for (i = 0; i < ctx->desc->num_binned_lp; i++) {
 		binned_lp = &ctx->desc->binned_lp[i];
@@ -764,13 +765,14 @@ void exynos_panel_set_binned_lp(struct exynos_panel *ctx, const u16 brightness)
 
 	mutex_unlock(&ctx->lp_state_lock);
 
-	exynos_panel_set_backlight_state(ctx,
-		!binned_lp->bl_threshold ? PANEL_STATE_OFF : PANEL_STATE_LP);
+	panel_state = !binned_lp->bl_threshold ? PANEL_STATE_OFF : PANEL_STATE_LP;
+	exynos_panel_set_backlight_state(ctx, panel_state);
 
 	if (bl)
 		sysfs_notify(&bl->dev.kobj, NULL, "lp_state");
 
-	exynos_panel_update_te2(ctx);
+	if (panel_state != PANEL_STATE_OFF)
+		exynos_panel_update_te2(ctx);
 }
 EXPORT_SYMBOL(exynos_panel_set_binned_lp);
 
@@ -1338,7 +1340,7 @@ static void exynos_panel_commit_properties(
 
 		ctx->hbm.update_flags = update_flags;
 		update_flags = 0;
-		queue_work(ctx->hbm.wq, &ctx->hbm.hbm_work);
+		queue_work(system_highpri_wq, &ctx->hbm.hbm_work);
 		mutex_unlock(&ctx->hbm.hbm_work_lock);
 	}
 
@@ -2569,10 +2571,13 @@ static void exynos_panel_bridge_enable(struct drm_bridge *bridge,
 	} else {
 		const bool is_lp_mode = ctx->current_mode &&
 					ctx->current_mode->exynos_mode.is_lp_mode;
+		enum exynos_panel_state panel_state = is_lp_mode ? PANEL_STATE_LP : PANEL_STATE_ON;
 
-		exynos_panel_set_backlight_state(ctx, is_lp_mode ? PANEL_STATE_LP : PANEL_STATE_ON);
+		exynos_panel_set_backlight_state(ctx, panel_state);
 
-		exynos_panel_update_te2(ctx);
+		/* For the case of OFF->AOD, TE2 will be updated in backlight_update_status */
+		if (panel_state == PANEL_STATE_ON)
+			exynos_panel_update_te2(ctx);
 	}
 	mutex_unlock(&ctx->mode_lock);
 
@@ -2911,16 +2916,6 @@ static void hbm_work(struct work_struct *work)
 	}
 
 	usleep_range(delay_us, delay_us + 100);
-	if (ctx->hbm.update_flags & HBM_FLAG_LHBM_UPDATE) {
-		DPU_ATRACE_BEGIN("set_lhbm");
-		dev_info(ctx->dev, "%s: set LHBM to %d (%dHz)\n",
-			__func__, ctx->hbm.local_hbm.request_hbm_mode, fps);
-		mutex_lock(&ctx->mode_lock);
-		panel_update_local_hbm_locked(ctx, ctx->hbm.local_hbm.request_hbm_mode);
-		mutex_unlock(&ctx->mode_lock);
-		DPU_ATRACE_END("set_lhbm");
-	}
-
 	if (ctx->hbm.update_flags & HBM_FLAG_GHBM_UPDATE) {
 		DPU_ATRACE_BEGIN("set_hbm");
 		mutex_lock(&ctx->mode_lock);
@@ -2934,6 +2929,16 @@ static void hbm_work(struct work_struct *work)
 		DPU_ATRACE_BEGIN("set_bl");
 		backlight_update_status(ctx->bl);
 		DPU_ATRACE_END("set_bl");
+	}
+
+	if (ctx->hbm.update_flags & HBM_FLAG_LHBM_UPDATE) {
+		DPU_ATRACE_BEGIN("set_lhbm");
+		dev_info(ctx->dev, "%s: set LHBM to %d (%dHz)\n",
+			__func__, ctx->hbm.local_hbm.request_hbm_mode, fps);
+		mutex_lock(&ctx->mode_lock);
+		panel_update_local_hbm_locked(ctx, ctx->hbm.local_hbm.request_hbm_mode);
+		mutex_unlock(&ctx->mode_lock);
+		DPU_ATRACE_END("set_lhbm");
 	}
 
 	if (ctx->hbm.update_flags & HBM_FLAG_DIMMING_UPDATE) {

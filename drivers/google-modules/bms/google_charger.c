@@ -282,6 +282,7 @@ static void chg_psy_work(struct work_struct *work)
 {
 	struct chg_drv *chg_drv =
 		container_of(work, struct chg_drv, chg_psy_work);
+
 	reschedule_chg_work(chg_drv);
 }
 
@@ -918,14 +919,31 @@ static void chg_work_adapter_details(union gbms_ce_adapter_details *ad,
 		(void)info_usb_state(ad, chg_drv->usb_psy, chg_drv->tcpm_psy);
 }
 
+static bool chg_work_check_wlc_state(struct power_supply *wlc_psy)
+{
+	int wlc_online, wlc_present;
+
+	if (!wlc_psy)
+		return false;
+
+	wlc_online = GPSY_GET_PROP(wlc_psy, POWER_SUPPLY_PROP_ONLINE);
+	wlc_present = GPSY_GET_PROP(wlc_psy, POWER_SUPPLY_PROP_PRESENT);
+
+	return wlc_online == 1 || wlc_present == 1;
+}
+
 /* not executed when battery is NOT present */
 static int chg_work_roundtrip(struct chg_drv *chg_drv,
 			      union gbms_charger_state *chg_state)
 {
+	struct power_supply *chg_psy = chg_drv->chg_psy;
+	struct power_supply *wlc_psy = chg_drv->wlc_psy;
+	union gbms_charger_state batt_chg_state;
 	int fv_uv = -1, cc_max = -1;
 	int update_interval, rc;
+	bool wlc_on = 0;
 
-	rc = gbms_read_charger_state(chg_state, chg_drv->chg_psy);
+	rc = gbms_read_charger_state(chg_state, chg_psy);
 	if (rc < 0)
 		return rc;
 
@@ -936,8 +954,30 @@ static int chg_work_roundtrip(struct chg_drv *chg_drv,
 	if (chg_is_custom_enabled(chg_drv))
 		chg_state->f.flags |= GBMS_CS_FLAG_CCLVL;
 
+	/*
+	 * The trigger of DREAM-DEFEND might look like a short disconnect.
+	 * NOTE: This logic needs to be moved out of google_charger and fixed
+	 * when we take care of b/202216343. google_charger should not be made
+	 * aware of DD or other device-dependent low level tricks.
+	 */
+	batt_chg_state.v = chg_state->v;
+
+	/*
+	 * Sending _NOT_CHARGING down to the battery (with buck_en=0) while on
+	 * WLC will keep dream defend stats in the same charging session.
+	 */
+	wlc_on = chg_work_check_wlc_state(wlc_psy);
+	if (wlc_on && batt_chg_state.f.chg_status == POWER_SUPPLY_STATUS_DISCHARGING) {
+		batt_chg_state.f.chg_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		batt_chg_state.f.flags = gbms_gen_chg_flags(chg_state->f.chg_status,
+							    chg_state->f.chg_type);
+	}
+
+	pr_debug("%s: wlc_on=%d chg_state=%llx batt_chg_state=%llx\n", __func__,
+		 wlc_on, chg_state->v, batt_chg_state.v);
+
 	/* might return negative values in fv_uv and cc_max */
-	rc = chg_work_batt_roundtrip(chg_state, chg_drv->bat_psy,
+	rc = chg_work_batt_roundtrip(&batt_chg_state, chg_drv->bat_psy,
 				     &fv_uv, &cc_max);
 	if (rc < 0)
 		return rc;
@@ -1199,8 +1239,11 @@ static int bd_fan_calculate_level(struct bd_data *bd_state)
 	const ktime_t bd_fan_alarm = t * FAN_BD_LIMIT_ALARM / 100;
 	const ktime_t bd_fan_high = t * FAN_BD_LIMIT_HIGH / 100;
 	const ktime_t bd_fan_med = t * FAN_BD_LIMIT_MED / 100;
-	const long long temp_avg = bd_state->temp_sum / bd_state->time_sum;
+	long long temp_avg = 0;
 	int bd_fan_level = FAN_LVL_NOT_CARE;
+
+	if (bd_state->time_sum)
+		temp_avg = bd_state->temp_sum / bd_state->time_sum;
 
 	if (temp_avg < bd_state->bd_trigger_temp)
 		bd_fan_level = FAN_LVL_NOT_CARE;
@@ -1513,14 +1556,8 @@ static int chg_start_bd_work(struct chg_drv *chg_drv)
 
 	/* always track disconnect time */
 	if (!bd_state->disconnect_time) {
-		int ret;
-
-		ret = bd_batt_set_state(chg_drv, false, -1);
-		if (ret < 0) {
-			pr_err("MSC_BD set_batt_state (%d)\n", ret);
-			mutex_unlock(&chg_drv->bd_lock);
-			return ret;
-		}
+		gbms_temp_defend_dry_run(true,
+					 chg_drv->bd_state.bd_temp_dry_run);
 
 		bd_state->disconnect_time = get_boot_sec();
 	}
@@ -1766,6 +1803,9 @@ static void chg_work(struct work_struct *work)
 			else
 				chg_drv->stop_charging = 1;
 		}
+
+		if (chg_is_custom_enabled(chg_drv) && chg_drv->disable_pwrsrc)
+			chg_run_defender(chg_drv);
 
 		/* allow sleep (if disconnected) while draining */
 		if (chg_drv->disable_pwrsrc)
@@ -2494,16 +2534,13 @@ static ssize_t bd_clear_store(struct device *dev,
 
 	mutex_lock(&chg_drv->bd_lock);
 
+	bd_reset(&chg_drv->bd_state);
+
 	ret = bd_batt_set_state(chg_drv, false, -1);
 	if (ret < 0)
 		pr_err("MSC_BD set_batt_state (%d)\n", ret);
 
-	bd_reset(&chg_drv->bd_state);
-
 	mutex_unlock(&chg_drv->bd_lock);
-
-	if (chg_drv->bat_psy)
-		power_supply_changed(chg_drv->bat_psy);
 
 	return count;
 }
@@ -2541,6 +2578,11 @@ static int chg_vote_input_suspend(struct chg_drv *chg_drv,
 		dev_err(chg_drv->device, "Couldn't vote to %s DC rc=%d\n",
 			suspend ? "suspend" : "resume", rc);
 
+	rc = vote(chg_drv->msc_chg_disable_votable, voter, suspend, 0);
+	if (rc < 0)
+		dev_err(chg_drv->device, "Couldn't vote to %s USB rc=%d\n",
+			suspend ? "suspend" : "resume", rc);
+
 	return 0;
 }
 
@@ -2571,12 +2613,6 @@ static int chg_set_input_suspend(void *data, u64 val)
 	rc = chg_vote_input_suspend(chg_drv, USER_VOTER, val != 0);
 	if (rc < 0)
 		return rc;
-
-	/* make sure that power is disabled */
-	rc = vote(chg_drv->msc_chg_disable_votable, USER_VOTER, val != 0, 0);
-	if (rc < 0)
-		dev_err(chg_drv->device, "Couldn't vote to %s USB rc=%d\n",
-			val != 0 ? "suspend" : "resume", rc);
 
 	if (chg_drv->chg_psy)
 		power_supply_changed(chg_drv->chg_psy);
@@ -2960,7 +2996,7 @@ static int chg_init_fs(struct chg_drv *chg_drv)
 	debugfs_create_bool("usb_skip_probe", 0600, chg_drv->debug_entry,
 			    &chg_drv->usb_skip_probe);
 
-	debugfs_create_file("pps_cc_tolerance", 0600, chg_drv->debug_entry,
+	debugfs_create_file("pps_cc_tolerance", 0644, chg_drv->debug_entry,
 			    chg_drv, &debug_pps_cc_tolerance_fops);
 
 	debugfs_create_u32("bd_triggered", S_IRUGO | S_IWUSR, chg_drv->debug_entry,
@@ -3688,7 +3724,7 @@ static int chg_set_wlc_fcc_charge_cntl_limit(struct thermal_cooling_device *tcd,
 		if (wlc_state < 0)
 			pr_err("MSC_THERM_DC_FCC cannot offline ret=%d\n", wlc_state);
 
-		pr_info("MSC_THERM_DC lvl=%ld, dc disable wlc_state=%d\n",
+		pr_info("MSC_THERM_DC_FCC lvl=%ld, dc disable wlc_state=%d\n",
 			lvl, wlc_state);
 	} else {
 		wlc_state = chg_therm_set_wlc_online(chg_drv);

@@ -6,6 +6,7 @@ mcps802154-y := \
 	ca.o \
 	default_region.o \
 	endless_scheduler.o \
+	on_demand_scheduler.o \
 	fproc.o \
 	fproc_broken.o \
 	fproc_multi.o \

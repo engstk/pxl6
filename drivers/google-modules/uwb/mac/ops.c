@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, SoftMAC implementation.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -41,7 +37,11 @@ static int mcps802154_start(struct ieee802154_hw *hw)
 	WARN_ON(local->started);
 
 	mutex_lock(&local->fsm_lock);
-	r = mcps802154_ca_start(local);
+	r = llhw_set_channel(local, local->pib.phy_current_channel.page,
+			     local->pib.phy_current_channel.channel,
+			     local->pib.phy_current_channel.preamble_code);
+	if (!r)
+		r = mcps802154_ca_start(local);
 	mutex_unlock(&local->fsm_lock);
 
 	return r;
@@ -100,7 +100,12 @@ static int mcps802154_set_channel(struct ieee802154_hw *hw, u8 page, u8 channel)
 		return -EOPNOTSUPP;
 
 	mutex_lock(&local->fsm_lock);
-	r = llhw_set_channel(local, page, channel, 0);
+	r = llhw_set_channel(local, page, channel,
+			     local->pib.phy_current_channel.preamble_code);
+	if (!r) {
+		local->pib.phy_current_channel.page = page;
+		local->pib.phy_current_channel.channel = channel;
+	}
 	mutex_unlock(&local->fsm_lock);
 
 	return r;

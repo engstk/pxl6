@@ -161,18 +161,13 @@ static int aoc_audio_control(const char *cmd_channel, const uint8_t *cmd,
 
 	in_pcm_trigger_callback = irqs_disabled();
 
-	if (in_pcm_trigger_callback)
-		spin_lock(&chip->audio_lock);
-	else
-		spin_lock_bh(&chip->audio_lock);
+	if (mutex_lock_interruptible(&chip->audio_cmd_chan_mutex))
+		return -EINTR;
 
 	/* Get the aoc audio control channel at runtime */
 	err = alloc_aoc_audio_service(cmd_channel, &dev, NULL, NULL);
 	if (err < 0) {
-		if (in_pcm_trigger_callback)
-			spin_unlock(&chip->audio_lock);
-		else
-			spin_unlock_bh(&chip->audio_lock);
+		mutex_unlock(&chip->audio_cmd_chan_mutex);
 		return err;
 	}
 
@@ -259,10 +254,7 @@ exit:
 	kfree(buffer);
 	free_aoc_audio_service(cmd_channel, dev);
 
-	if (in_pcm_trigger_callback)
-		spin_unlock(&chip->audio_lock);
-	else
-		spin_unlock_bh(&chip->audio_lock);
+	mutex_unlock(&chip->audio_cmd_chan_mutex);
 
 	return err < 1 ? -EAGAIN : 0;
 }
@@ -358,6 +350,9 @@ int aoc_audio_capture_mic_prepare(struct aoc_chip *chip)
 		break;
 	case BT_MIC:
 		mic_input_source = AP_INPUT_PROCESSOR_BT_INPUT_INDEX;
+		break;
+	case ERASER:
+		mic_input_source = AP_INPUT_PROCESSOR_ERASER_INPUT_INDEX;
 		break;
 	default:
 		pr_err("ERR in mic input source for audio capture mic source=%d\n",
@@ -1942,6 +1937,21 @@ int aoc_mic_record_gain_set(struct aoc_chip *chip, long val)
 	err = aoc_audio_set_parameters(cmd_id, block, component, key, value, chip);
 	if (err < 0) {
 		pr_err("ERR:%d in mic record gain set\n", err);
+		return err;
+	}
+
+	return 0;
+}
+
+int aoc_audio_capture_eraser_enable(struct aoc_chip *chip, long enable)
+{
+	int cmd_id, err = 0;
+
+	cmd_id = (enable == 1) ? CMD_AUDIO_INPUT_MIC_RECORD_AP_ENABLE_AEC_ID :
+				       CMD_AUDIO_INPUT_MIC_RECORD_AP_DISABLE_AEC_ID;
+	err = aoc_audio_control_simple_cmd(CMD_INPUT_CHANNEL, cmd_id, chip);
+	if (err < 0) {
+		pr_err("ERR:%d in aduio capture eraser %s\n", err, (enable) ? "enable" : "disable");
 		return err;
 	}
 

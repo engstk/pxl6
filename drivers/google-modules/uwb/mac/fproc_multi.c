@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, FProc states: Multi.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/errno.h>
@@ -33,6 +29,42 @@
 static int mcps802154_fproc_multi_handle_frame(struct mcps802154_local *local,
 					       struct mcps802154_access *access,
 					       size_t frame_idx);
+
+static int
+mcps802154_fproc_multi_restore_hw_addr_filt(struct mcps802154_local *local,
+					    struct mcps802154_access *access)
+{
+	int r = 0;
+
+	if (access->hw_addr_filt_changed) {
+		struct ieee802154_hw_addr_filt hw_addr_filt;
+
+		hw_addr_filt.pan_id = local->pib.mac_pan_id;
+		hw_addr_filt.short_addr = local->pib.mac_short_addr;
+		hw_addr_filt.ieee_addr = local->pib.mac_extended_addr;
+		r = llhw_set_hw_addr_filt(local, &hw_addr_filt,
+					  access->hw_addr_filt_changed);
+	}
+
+	return r;
+}
+
+static int mcps802154_fproc_multi_restore(struct mcps802154_local *local,
+					  struct mcps802154_access *access)
+{
+	if (access->channel) {
+		int r;
+		const struct mcps802154_channel *channel =
+			&local->pib.phy_current_channel;
+
+		r = llhw_set_channel(local, channel->page, channel->channel,
+				     channel->preamble_code);
+		if (r)
+			return r;
+	}
+
+	return mcps802154_fproc_multi_restore_hw_addr_filt(local, access);
+}
 
 /**
  * mcps802154_fproc_multi_next() - Continue with the next frame, or next
@@ -54,21 +86,28 @@ static void mcps802154_fproc_multi_next(struct mcps802154_local *local,
 		r = mcps802154_fproc_multi_handle_frame(local, access,
 							frame_idx);
 		if (r) {
-			mcps802154_fproc_access_done(local);
-			if (r == -ETIME)
+			if (r == -ETIME) {
+				mcps802154_fproc_access_done(local, 0);
 				mcps802154_fproc_access_now(local);
-			else
+			} else {
+				mcps802154_fproc_access_done(local, r);
 				mcps802154_fproc_broken_handle(local);
+			}
 		}
 	} else {
+		r = mcps802154_fproc_multi_restore(local, access);
+		if (r) {
+			mcps802154_fproc_access_done(local, r);
+			mcps802154_fproc_broken_handle(local);
+			return;
+		}
 		/* Next access. */
+		mcps802154_fproc_access_done(local, 0);
 		if (access->duration_dtu) {
 			u32 next_access_dtu =
 				access->timestamp_dtu + access->duration_dtu;
-			mcps802154_fproc_access_done(local);
 			mcps802154_fproc_access(local, next_access_dtu);
 		} else {
-			mcps802154_fproc_access_done(local);
 			mcps802154_fproc_access_now(local);
 		}
 	}
@@ -88,10 +127,11 @@ static void mcps802154_fproc_multi_rx_rx_frame(struct mcps802154_local *local)
 	};
 	r = llhw_rx_get_frame(local, &skb, &info);
 	if (!r)
-		access->ops->rx_frame(access, frame_idx, skb, &info);
+		access->ops->rx_frame(access, frame_idx, skb, &info,
+				      MCPS802154_RX_ERROR_NONE);
 
 	if (r && r != -EBUSY) {
-		mcps802154_fproc_access_done(local);
+		mcps802154_fproc_access_done(local, r);
 		mcps802154_fproc_broken_handle(local);
 	} else {
 		/* Next. */
@@ -104,8 +144,8 @@ static void mcps802154_fproc_multi_rx_rx_timeout(struct mcps802154_local *local)
 	struct mcps802154_access *access = local->fproc.access;
 	size_t frame_idx = local->fproc.frame_idx;
 
-	/* TODO: better way to signal timeout. */
-	access->ops->rx_frame(access, frame_idx, NULL, NULL);
+	access->ops->rx_frame(access, frame_idx, NULL, NULL,
+			      MCPS802154_RX_ERROR_TIMEOUT);
 
 	/* Next. */
 	mcps802154_fproc_multi_next(local, access, frame_idx);
@@ -117,9 +157,12 @@ mcps802154_fproc_multi_rx_rx_error(struct mcps802154_local *local,
 {
 	struct mcps802154_access *access = local->fproc.access;
 	size_t frame_idx = local->fproc.frame_idx;
+	struct mcps802154_rx_frame_info info = {
+		.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU,
+	};
 
-	/* TODO: better way to signal error. */
-	access->ops->rx_frame(access, frame_idx, NULL, NULL);
+	llhw_rx_get_error_frame(local, &info);
+	access->ops->rx_frame(access, frame_idx, NULL, &info, error);
 
 	/* Next. */
 	mcps802154_fproc_multi_next(local, access, frame_idx);
@@ -141,9 +184,10 @@ mcps802154_fproc_multi_rx_schedule_change(struct mcps802154_local *local)
 			/* Wait for RX result. */
 			return;
 
-		access->ops->rx_frame(access, frame_idx, NULL, NULL);
+		access->ops->rx_frame(access, frame_idx, NULL, NULL,
+				      MCPS802154_RX_ERROR_TIMEOUT);
 		if (r) {
-			mcps802154_fproc_access_done(local);
+			mcps802154_fproc_access_done(local, r);
 			mcps802154_fproc_broken_handle(local);
 		} else {
 			/* Next. */
@@ -215,7 +259,7 @@ static int mcps802154_fproc_multi_handle_frame(struct mcps802154_local *local,
 				return r;
 		}
 
-		r = llhw_rx_enable(local, &frame->rx.info, 0);
+		r = llhw_rx_enable(local, &frame->rx.info, frame_idx, 0);
 		if (r)
 			return r;
 
@@ -239,7 +283,8 @@ static int mcps802154_fproc_multi_handle_frame(struct mcps802154_local *local,
 			}
 		}
 
-		r = llhw_tx_frame(local, skb, &frame->tx_frame_info, 0);
+		r = llhw_tx_frame(local, skb, &frame->tx_frame_info, frame_idx,
+				  0);
 		if (r) {
 			access->ops->tx_return(
 				access, frame_idx, skb,
@@ -260,6 +305,7 @@ int mcps802154_fproc_multi_handle(struct mcps802154_local *local,
 				  struct mcps802154_access *access)
 {
 	int i = 1;
+	int r;
 
 	if (access->n_frames == 0 || !access->frames)
 		return -EINVAL;
@@ -268,6 +314,22 @@ int mcps802154_fproc_multi_handle(struct mcps802154_local *local,
 		/* Only first Rx can be without timeout. */
 		if (!frame->is_tx && frame->rx.info.timeout_dtu == -1)
 			return -EINVAL;
+	}
+	if (access->hw_addr_filt_changed) {
+		r = llhw_set_hw_addr_filt(local, &access->hw_addr_filt,
+					  access->hw_addr_filt_changed);
+		if (r)
+			return r;
+	}
+	if (access->channel) {
+		r = llhw_set_channel(local, access->channel->page,
+				     access->channel->channel,
+				     access->channel->preamble_code);
+		if (r) {
+			mcps802154_fproc_multi_restore_hw_addr_filt(local,
+								    access);
+			return r;
+		}
 	}
 	return mcps802154_fproc_multi_handle_frame(local, access, 0);
 }

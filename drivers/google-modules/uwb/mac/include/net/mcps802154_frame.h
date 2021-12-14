@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * MCPS interface, tools to handle frames from a region handler.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_MCPS802154_FRAME_H
@@ -249,6 +245,15 @@ __le16 mcps802154_get_pan_id(struct mcps802154_llhw *llhw);
 __le16 mcps802154_get_short_addr(struct mcps802154_llhw *llhw);
 
 /**
+ * mcps802154_get_current_channel() - Get current channel.
+ * @llhw: Low-level device pointer.
+ *
+ * Return: Channel parameters.
+ */
+const struct mcps802154_channel *
+mcps802154_get_current_channel(struct mcps802154_llhw *llhw);
+
+/**
  * mcps802154_get_current_timestamp_dtu() - Get current timestamp in device time
  * unit.
  * @llhw: Low-level device pointer.
@@ -258,28 +263,6 @@ __le16 mcps802154_get_short_addr(struct mcps802154_llhw *llhw);
  */
 int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 					 u32 *timestamp_dtu);
-
-/**
- * mcps802154_timestamp_dtu_to_rctu() - Convert a timestamp in device time unit
- * to a timestamp in ranging counter time unit.
- * @llhw: Low-level device pointer.
- * @timestamp_dtu: Timestamp value in device time unit.
- *
- * Return: Timestamp value in ranging counter time unit.
- */
-u64 mcps802154_timestamp_dtu_to_rctu(struct mcps802154_llhw *llhw,
-				     u32 timestamp_dtu);
-
-/**
- * mcps802154_timestamp_rctu_to_dtu() - Convert a timestamp in ranging counter
- * time unit to a timestamp in device time unit.
- * @llhw: Low-level device pointer.
- * @timestamp_rctu: Timestamp value in ranging counter time unit.
- *
- * Return: Timestamp value in device time unit.
- */
-u32 mcps802154_timestamp_rctu_to_dtu(struct mcps802154_llhw *llhw,
-				     u64 timestamp_rctu);
 
 /**
  * mcps802154_tx_timestamp_dtu_to_rmarker_rctu() - Compute the RMARKER timestamp

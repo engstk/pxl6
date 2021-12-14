@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,7 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.  Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include "fira_aead_impl.h"
@@ -129,6 +129,14 @@ bool fira_aead_decrypt_scf_check(u8 scf)
 		       IEEE802154_SCF_NO_FRAME_COUNTER);
 }
 
+int fira_aead_decrypt_prepare(struct sk_buff *skb)
+{
+	if (skb->len < FIRA_AEAD_AUTHSIZE)
+		return -EBADMSG;
+	skb_trim(skb, skb->len - FIRA_AEAD_AUTHSIZE);
+	return 0;
+}
+
 int fira_aead_decrypt(struct fira_aead *aead, struct sk_buff *skb,
 		      unsigned int header_len, __le16 src_short_addr,
 		      u32 counter)
@@ -137,10 +145,9 @@ int fira_aead_decrypt(struct fira_aead *aead, struct sk_buff *skb,
 	struct scatterlist sg;
 	struct aead_request *req;
 	u8 *header;
-	int r;
+	int r, payload_auth_len;
 
-	if (skb->len < FIRA_AEAD_AUTHSIZE)
-		return -EBADMSG;
+	payload_auth_len = skb->len + FIRA_AEAD_AUTHSIZE;
 
 	fira_aead_fill_iv(iv, src_short_addr, counter);
 
@@ -149,10 +156,10 @@ int fira_aead_decrypt(struct fira_aead *aead, struct sk_buff *skb,
 		return -ENOMEM;
 
 	header = skb->data - header_len;
-	sg_init_one(&sg, header, header_len + skb->len);
+	sg_init_one(&sg, header, header_len + payload_auth_len);
 
 	aead_request_set_callback(req, 0, NULL, NULL);
-	aead_request_set_crypt(req, &sg, &sg, skb->len, iv);
+	aead_request_set_crypt(req, &sg, &sg, payload_auth_len, iv);
 	aead_request_set_ad(req, header_len);
 
 	r = crypto_aead_decrypt(req);
@@ -160,7 +167,6 @@ int fira_aead_decrypt(struct fira_aead *aead, struct sk_buff *skb,
 	aead_request_free(req);
 
 	if (!r) {
-		skb_trim(skb, skb->len - FIRA_AEAD_AUTHSIZE);
 		header[IEEE802154_FC_LEN + IEEE802154_SHORT_ADDR_LEN] =
 			IEEE802154_SCF_NO_FRAME_COUNTER;
 	}

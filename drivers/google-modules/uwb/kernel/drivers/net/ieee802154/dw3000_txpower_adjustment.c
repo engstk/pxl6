@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/types.h>
@@ -54,6 +53,11 @@
 /* The reference duration for a frame is 1000us. Longer frame will
  * have 0dB boost. */
 #define FRAME_DURATION_REF 1000
+
+#define MAX_BOOST_CH5 354
+#define MAX_BOOST_CH9 305
+#define TX_POWER_COARSE_GAIN_MASK 0x03
+#define TX_POWER_FINE_GAIN_MASK 0x3F
 
 /* Reference look-up table to calculate Txpower Dial Back depending on
  * frame duration. Each new entry in the table is relative to the previous one.
@@ -268,17 +272,16 @@ static const u8 fine_gain_lut_chan9[LUT_COMP_SIZE] = {
 static u8 calculate_power_boost(u16 frame_duration_us)
 {
 	const u8 *lut = NULL;
-	u8 lut_i;
-	u8 lut_num;
-	u8 lut_min;
-	u8 lut_step;
+	u16 lut_i;
+	u16 lut_num;
+	u16 lut_min;
+	u16 lut_step;
 	u16 limit;
 
 	/* Calculating the LUT index corresponding to the frameduration */
 	if (frame_duration_us >= FRAME_DURATION_REF) {
 		return LUT_1000_200_US_MIN_BST;
 	} else if (frame_duration_us < LUT_200_70_US_MIN) {
-		lut_i = LUT_200_70_US_NUM - 1;
 		return LUT_200_70_US_MAX_BST;
 	} else if (frame_duration_us > LUT_1000_200_US_MIN) {
 		lut_num = LUT_1000_200_US_NUM;
@@ -307,7 +310,9 @@ static u8 calculate_power_boost(u16 frame_duration_us)
  * adjust_tx_power() - actual TxPower setting calculation
  * @frame_duration_us: the frame (headers, payload, FCS) duration
  * @ref_tx_power: the power setting corresponding to a frame of 1ms (0dB)
- * @channel: the current RF channel used for transmition of UWB frames
+ * @channel: the current RF channel used for transmission of UWB frames
+ * @th_boost: pointer to store the theorical boost to be applied
+ * @applied_boost: pointer to store the calculated, actually applied boost
  *
  * The reference TxPower setting should correspond to a 1ms frame (or 0dB)
  * boost. The boost to be applied should be provided in unit of 0.1dB boost.
@@ -315,33 +320,42 @@ static u8 calculate_power_boost(u16 frame_duration_us)
  * Return: the adjusted_tx_power setting that can be used to configure the
  * chip transmission level
  */
-static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
+static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
+			   u16 *th_boost, u16 *applied_boost)
 {
 	u32 adjusted_tx_power;
-	u8 current_boost = 0;
-	u8 best_boost = 0;
-	u8 best_index = 0;
-	u8 upper_limit = 0;
-	u8 lower_limit = 0;
+	u16 target_boost = 0;
+	u16 current_boost = 0;
+	u16 best_boost_abs = 0;
+	u16 best_boost = 0;
+	u16 upper_limit = 0;
+	u16 lower_limit = 0;
 
 	const u8 *lut = NULL;
-	u8 ref_coarse_gain = ((u8)ref_tx_power) & 0x3;
-	u8 ref_fine_gain = ((u8)ref_tx_power) >> 2;
+	u8 best_index = 0;
+	u8 best_coarse_gain = 0;
+	u8 ref_coarse_gain = ((u8)ref_tx_power) & TX_POWER_COARSE_GAIN_MASK;
+	u8 ref_fine_gain = ((u8)ref_tx_power >> 2) & TX_POWER_FINE_GAIN_MASK;
 	bool within_margin_flag = false;
 	bool reached_max_fine_gain_flag = false;
 	u8 tx_power_byte = 0;
-	u8 target_boost = 0;
 	u8 unlock = 0;
 	u8 i = 0;
 
 	target_boost = calculate_power_boost(frame_duration_us);
-
+	if (th_boost) {
+		*th_boost = target_boost;
+	}
 	switch (channel) {
 	case 5:
 		lut = fine_gain_lut_chan5;
+		if (target_boost >= MAX_BOOST_CH5)
+			target_boost = MAX_BOOST_CH5;
 		break;
 	default:
 		lut = fine_gain_lut_chan9;
+		if (target_boost >= MAX_BOOST_CH9)
+			target_boost = MAX_BOOST_CH9;
 		break;
 	}
 
@@ -350,8 +364,10 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
 	lower_limit = (target_boost > TXPOWER_ADJUSTMENT_MARGIN ?
 			       target_boost - TXPOWER_ADJUSTMENT_MARGIN :
 			       0);
-	best_boost = TXPOWER_ADJUSTMENT_MARGIN;
+	best_boost_abs = TXPOWER_ADJUSTMENT_MARGIN;
 
+	if (applied_boost)
+		*applied_boost = 0;
 	if (target_boost < TXPOWER_ADJUSTMENT_MARGIN &&
 	    target_boost < lut[i + 1] - TXPOWER_ADJUSTMENT_MARGIN) {
 		return ref_tx_power;
@@ -372,6 +388,7 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
 
 	/* Increase current_boost until reaching value closest to target_boot */
 	while (current_boost != target_boost) {
+		unlock++;
 		/* Ensure loop does not got "locked" */
 		if (unlock > 2 * LUT_COMP_SIZE) {
 			return ref_tx_power;
@@ -379,14 +396,17 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
 
 		if (current_boost > lower_limit &&
 		    current_boost < upper_limit) {
-			if (abs((s8)(target_boost - current_boost)) <
-			    best_boost) {
-				best_boost =
-					abs((s8)(target_boost - current_boost));
+			if (abs((s16)(target_boost - current_boost)) <=
+			    best_boost_abs) {
+				best_boost_abs =
+					abs((s16)target_boost - current_boost);
+				best_boost = current_boost;
 				best_index = i;
+				best_coarse_gain = ref_coarse_gain;
 				within_margin_flag = true;
 			} else if (within_margin_flag) {
 				i = best_index;
+				ref_coarse_gain = best_coarse_gain;
 				break;
 			}
 		} else if (within_margin_flag) {
@@ -395,40 +415,61 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
 			break;
 		}
 
-		/* All fine setting tried but no fit found
-		 * try with another coarse gain */
-		if (i == LUT_COMP_SIZE - 1) {
-			if (ref_coarse_gain != 0x3) {
-				if (ref_coarse_gain == 0x2 && channel == 9) {
-					break;
-				}
+		/* Corner case: when fine gain setting is very low, it can happend that
+		 * current boost is already larger than target_boost but not within margin.
+		 * Then, just return current solution.
+		 */
+		if (current_boost >= upper_limit &&
+		    !reached_max_fine_gain_flag) {
+			break;
+		}
 
-				if (current_boost +
-					    lut_coarse_gain[ref_coarse_gain] <=
-				    target_boost) {
-					current_boost +=
-						lut_coarse_gain[ref_coarse_gain];
-					ref_coarse_gain++;
-					break;
-				} else {
-					reached_max_fine_gain_flag = true;
-					current_boost +=
-						lut_coarse_gain[ref_coarse_gain];
-					ref_coarse_gain++;
-				}
+		/* Search for max fine gain value */
+		if (i == LUT_COMP_SIZE - 1) {
+			reached_max_fine_gain_flag = true;
+
+			/* return previously found solution */
+			if (within_margin_flag) {
+				i = best_index;
+				ref_coarse_gain = best_coarse_gain;
+				current_boost = best_boost;
+				break;
+			}
+
+			if ((ref_coarse_gain == 0x3) ||
+			    (ref_coarse_gain == 0x2 && channel == 9)) {
+				break;
+			}
+
+			if (current_boost + lut_coarse_gain[ref_coarse_gain] <=
+			    target_boost) {
+				current_boost +=
+					lut_coarse_gain[ref_coarse_gain];
+				ref_coarse_gain++;
+				break;
+			} else {
+				current_boost +=
+					lut_coarse_gain[ref_coarse_gain];
+				ref_coarse_gain++;
 			}
 		}
 
 		/* Adjust fine gain */
 		if (!reached_max_fine_gain_flag) {
 			i++;
+			i &= TX_POWER_FINE_GAIN_MASK;
 			current_boost += lut[i];
 		} else {
 			current_boost -= lut[i];
 			i--;
+			i &= TX_POWER_FINE_GAIN_MASK;
+			if (i == 0)
+				reached_max_fine_gain_flag = false;
 		}
-		unlock++;
 	}
+
+	if (applied_boost)
+		*applied_boost = current_boost;
 
 	tx_power_byte = (i << 2) | ref_coarse_gain;
 	adjusted_tx_power = (u32)tx_power_byte << 24 |
@@ -451,14 +492,16 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel)
  */
 int dw3000_adjust_tx_power(struct dw3000 *dw, int payload_bytes)
 {
-	u32 adjusted_tx_power;
+	u16 th_boost, app_boost;
+	u8 chan = dw->config.chan;
+	u16 frm_dur =
+		DTU_TO_US(dw3000_frame_duration_dtu(dw, payload_bytes, true));
+	u32 adjusted_tx_power = adjust_tx_power(frm_dur, dw->txconfig.power,
+						chan, &th_boost, &app_boost);
 
-	adjusted_tx_power = adjust_tx_power(
-		DTU_TO_US(dw3000_frame_duration_dtu(dw, payload_bytes, true)),
-		dw->txconfig.power, dw->config.chan);
-
-	trace_dw3000_adjust_tx_power(dw, payload_bytes, dw->txconfig.power,
-				     adjusted_tx_power);
+	trace_dw3000_adjust_tx_power(dw, dw->txconfig.power, adjusted_tx_power,
+				     frm_dur, payload_bytes, chan, th_boost,
+				     app_boost);
 
 	return dw3000_set_tx_power_register(dw, adjusted_tx_power);
 }

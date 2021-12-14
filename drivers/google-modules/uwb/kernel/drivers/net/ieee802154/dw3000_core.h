@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,15 +18,20 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_CORE_H
 #define __DW3000_CORE_H
 
 #include "dw3000.h"
 
+/* Maximum SPI bus speed when PLL is not yet locked */
+#define DW3000_SPI_SLOW_HZ 3000000
+
 #define DW3000_GPIO_COUNT 9 /* GPIO0 to GPIO8 */
+
+/* DW3000 wake-up latency. At least 2ms is required. */
+#define DW3000_WAKEUP_LATENCY_US 15000
 
 /* Define DW3000 PDOA modes */
 #define DW3000_PDOA_M0 0x0 /* PDOA mode is off */
@@ -96,31 +101,6 @@ enum spi_modes {
 	DW3000_SPI_AND_OR_32 = 0x8003U,
 	DW3000_SPI_AND_OR_MSK = 0x0003U,
 };
-
-/* Defined constants for "mode" bitmask parameter passed into dw3000_starttx()
-   function. */
-#define DW3000_START_TX_IMMEDIATE 0x00 /* Send the frame immediately */
-#define DW3000_START_TX_DELAYED \
-	0x01 /* Send the frame at specified time (time
-					must be less that half period away) */
-#define DW3000_RESPONSE_EXPECTED \
-	0x02 /* Will enable the receiver after TX has
-					 completed */
-#define DW3000_START_TX_DLY_REF \
-	0x04 /* Send the frame at specified time (time
-					in DREF_TIME register + any time in
-					DX_TIME register) */
-#define DW3000_START_TX_DLY_RS \
-	0x08 /* Send the frame at specified time (time
-				       in RX_TIME_0 register + any time in
-				       DX_TIME register) */
-#define DW3000_START_TX_DLY_TS \
-	0x10 /* Send the frame at specified time (time
-				       in TX_TIME_LO register + any time in
-				       DX_TIME register) */
-#define DW3000_START_TX_CCA \
-	0x20 /* Send the frame if no preamble detected
-				    within PTO time */
 
 /* Frame filtering configuration options */
 #define DW3000_FF_ENABLE_802_15_4 0x2 /* use 802.15.4 filtering rules */
@@ -218,6 +198,7 @@ enum spi_modes {
 #define DW3000_OTPREV_ADDRESS (0x1F)
 #define DW3000_BIAS_TUNE_ADDRESS (0xA)
 #define DW3000_DGC_TUNE_ADDRESS (0x20)
+#define DW3000_PLL_CC_ADDRESS (0x35)
 
 #define DW3000_GPIO0_FUNC_MASK 0x0000007
 #define DW3000_GPIO1_FUNC_MASK 0x0000038
@@ -248,20 +229,26 @@ int dw3000_transfers_init(struct dw3000 *dw);
 void dw3000_transfers_free(struct dw3000 *dw);
 
 void dw3000_spitests(struct dw3000 *dw);
+bool dw3000_spitests_enabled(struct dw3000 *dw);
 
 int dw3000_hardreset(struct dw3000 *dw);
 int dw3000_softreset(struct dw3000 *dw);
+int dw3000_check_devid(struct dw3000 *dw);
 
 void dw3000_setup_regulators(struct dw3000 *dw);
 int dw3000_setup_reset_gpio(struct dw3000 *dw);
 int dw3000_setup_irq(struct dw3000 *dw);
 
+int dw3000_reg_read_fast(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
+			 u16 length, void *buffer);
 int dw3000_reg_read32(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 		      u32 *val);
 int dw3000_reg_read16(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 		      u16 *val);
 int dw3000_reg_read8(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 		     u8 *val);
+int dw3000_reg_write_fast(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
+			  u16 length, const void *buffer, enum spi_modes mode);
 int dw3000_reg_write32(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 		       u32 val);
 int dw3000_reg_write16(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
@@ -275,7 +262,7 @@ int dw3000_reg_modify16(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 int dw3000_reg_modify8(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 		       u8 _and, u8 _or);
 
-int dw3000_write_fastcmd(struct dw3000 *dw, u32 cmd);
+int dw3000_write_fastcmd(struct dw3000 *dw, u8 cmd);
 
 int dw3000_xfer(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset, u16 length,
 		void *buffer, enum spi_modes mode);
@@ -294,22 +281,28 @@ int dw3000_xfer(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset, u16 length,
 #define dw3000_reg_and32(dw, addr, offset, and_val) \
 	dw3000_reg_modify32(dw, addr, offset, and_val, 0)
 
+#define sts_to_pdoa(s, pdoa_enabled) \
+	((s) && (pdoa_enabled) ? DW3000_PDOA_M1 : DW3000_PDOA_M0)
+
+#define dw3000_get_chip_name(dw) (dw3000_chip_versions[dw->chip_idx].name)
+
 int dw3000_enable(struct dw3000 *dw);
 int dw3000_disable(struct dw3000 *dw);
 
 int dw3000_configure_chan(struct dw3000 *dw);
+int dw3000_configure_pcode(struct dw3000 *dw);
 
 int dw3000_set_eui64(struct dw3000 *dw, __le64 val);
 int dw3000_set_panid(struct dw3000 *dw, __le16 val);
 int dw3000_set_shortaddr(struct dw3000 *dw, __le16 val);
 int dw3000_set_pancoord(struct dw3000 *dw, bool active);
 int dw3000_set_promiscuous(struct dw3000 *dw, bool on);
-int dw3000_set_pdoa(struct dw3000 *dw, u8 mode);
-int dw3000_set_sts(struct dw3000 *dw, u8 mode);
+int dw3000_set_sts_pdoa(struct dw3000 *dw, u8 sts_mode, u8 pdoa_mode);
 int dw3000_set_sts_length(struct dw3000 *dw, enum dw3000_sts_lengths len);
 int dw3000_configure_sts_key(struct dw3000 *dw, const u8 *key);
 int dw3000_configure_sts_iv(struct dw3000 *dw, const u8 *iv);
 int dw3000_load_sts_iv(struct dw3000 *dw);
+int dw3000_configure_hw_addr_filt(struct dw3000 *dw, unsigned long changed);
 
 int dw3000_clear_sys_status(struct dw3000 *dw, u32 clear_bits);
 int dw3000_clear_dss_status(struct dw3000 *dw, u8 clear_bits);
@@ -319,29 +312,39 @@ int dw3000_read_rdb_status(struct dw3000 *dw, u8 *status);
 int dw3000_read_sys_status(struct dw3000 *dw, u32 *status);
 int dw3000_read_sys_time(struct dw3000 *dw, u32 *sys_time);
 
+u32 dw3000_get_dtu_time(struct dw3000 *dw);
+
 int dw3000_poweron(struct dw3000 *dw);
 int dw3000_poweroff(struct dw3000 *dw);
 
 int dw3000_forcetrxoff(struct dw3000 *dw);
 
+int dw3000_do_rx_enable(struct dw3000 *dw,
+			const struct mcps802154_rx_info *info, int frame_idx);
 int dw3000_rx_enable(struct dw3000 *dw, bool rx_delayed, u32 date_dtu,
 		     u32 timeout_pac);
 int dw3000_rx_disable(struct dw3000 *dw);
+
 int dw3000_rx_stats_enable(struct dw3000 *dw, bool on);
 void dw3000_rx_stats_clear(struct dw3000 *dw);
 
 int dw3000_enable_autoack(struct dw3000 *dw, bool force);
 int dw3000_disable_autoack(struct dw3000 *dw, bool force);
 
-int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
-		    u32 tx_date_dtu, int rx_delay_dly, u32 rx_timeout_pac);
+struct mcps802154_tx_frame_info;
+int dw3000_do_tx_frame(struct dw3000 *dw,
+		       const struct mcps802154_tx_frame_info *info,
+		       struct sk_buff *skb, int frame_idx);
+
 int dw3000_tx_setcwtone(struct dw3000 *dw, bool on);
 
 int dw3000_config_antenna_gpios(struct dw3000 *dw);
 int dw3000_set_tx_antenna(struct dw3000 *dw, int antidx);
-int dw3000_set_rx_antennas(struct dw3000 *dw, int antpairidx);
+int dw3000_set_rx_antennas(struct dw3000 *dw, int antpairidx,
+			   bool pdoa_enabled);
 
 s16 dw3000_read_pdoa(struct dw3000 *dw);
+s16 dw3000_pdoa_to_aoa_lut(struct dw3000 *dw, s16 pdoa_rad_q11);
 int dw3000_read_sts_timestamp(struct dw3000 *dw, u64 *sts_ts);
 int dw3000_read_sts_quality(struct dw3000 *dw, s16 *acc_qual);
 
@@ -356,9 +359,17 @@ void dw3000_sysfs_init(struct dw3000 *dw);
 void dw3000_sysfs_remove(struct dw3000 *dw);
 
 void dw3000_isr(struct dw3000 *dw);
-void dw3000_wakeup_timer(struct timer_list *timer);
-int dw3000_go_to_deep_sleep_and_wakeup_after_ms(struct dw3000 *dw,
-						int delay_ms);
+enum hrtimer_restart dw3000_wakeup_timer(struct hrtimer *timer);
+void dw3000_wakeup_timer_start(struct dw3000 *dw, int delay_us);
+void dw3000_wakeup_and_wait(struct dw3000 *dw);
+int dw3000_deep_sleep_and_wakeup(struct dw3000 *dw, int delay_us);
+int dw3000_can_deep_sleep(struct dw3000 *dw, int delay_us);
+int dw3000_trace_rssi_info(struct dw3000 *dw, u32 regid, char *chipver);
+
+int dw3000_testmode_continuous_tx_start(struct dw3000 *dw, u32 frame_length,
+					u32 rate);
+int dw3000_testmode_continuous_tx_stop(struct dw3000 *dw);
+
 /* Preamble length related information. */
 struct dw3000_plen_info {
 	/* Preamble length in symbols. */
@@ -374,8 +385,6 @@ extern const struct dw3000_plen_info _plen_info[];
 
 /* Bitrate related information. */
 struct dw3000_bitrate_info {
-	/* Standard and Decawave non standard SFD length in symbols. */
-	int sfd_symb[2];
 	/* Chips per symbol for PHR. */
 	int phr_chip_per_symb;
 	/* Chips per symbol for data part. */
@@ -390,6 +399,15 @@ struct dw3000_prf_info {
 };
 extern const struct dw3000_prf_info _prf_info[];
 
+static inline int dw3000_get_sfd_symb(struct dw3000 *dw)
+{
+	/*
+	 * SFD_TYPE_STD, SFD_TYPE_DW_8, SFD_TYPE_4Z : 8 symbols
+	 * SFD_TYPE_DW_16 : 16 symbols
+	 */
+	return dw->config.sfdType == DW3000_SFD_TYPE_DW_16 ? 16 : 8;
+}
+
 static inline int dw3000_compute_shr_dtu(struct dw3000 *dw)
 {
 	const struct dw3000_plen_info *plen_info =
@@ -398,14 +416,7 @@ static inline int dw3000_compute_shr_dtu(struct dw3000 *dw)
 		_prf_info[dw->config.txCode >= 9 ? DW3000_PRF_64M :
 						   DW3000_PRF_16M]
 			.chip_per_symb;
-	const struct dw3000_bitrate_info *bitrate_info =
-		&_bitrate_info[dw->config.dataRate];
-	const int shr_symb =
-		plen_info->symb +
-		bitrate_info
-			->sfd_symb[dw->config.sfdType ?
-					   1 :
-					   0]; /* TODO: support type 2 & 3 ? */
+	const int shr_symb = plen_info->symb + dw3000_get_sfd_symb(dw);
 	return shr_symb * chip_per_symb / DW3000_CHIP_PER_DTU;
 }
 
@@ -449,16 +460,18 @@ static inline int dw3000_frame_duration_dtu(struct dw3000 *dw,
 	const struct dw3000_bitrate_info *bitrate_info =
 		&_bitrate_info[dw->config.dataRate];
 	/* STS part */
-	const int sts_symb = dw->config.stsMode == DW3000_STS_MODE_OFF ?
-				     0 :
-				     8 << dw->config.stsLength;
+	const u8 sts_mode = dw->config.stsMode & DW3000_STS_BASIC_MODES_MASK;
+	const int sts_symb =
+		sts_mode == DW3000_STS_MODE_OFF ? 0 : 8 << dw->config.stsLength;
 	const int sts_chips = sts_symb * prf_info->chip_per_symb;
 	/* PHR part. */
-	static const int phr_tail_bits = 19 + 2;
+	const int phr_tail_bits = sts_mode == DW3000_STS_MODE_ND ? 0 : 19 + 2;
 	const int phr_chips = phr_tail_bits /* 1 bit/symbol */
 			      * bitrate_info->phr_chip_per_symb;
 	/* Data part, 48 Reed-Solomon bits per 330 bits. */
-	const int data_bits = (payload_bytes + IEEE802154_FCS_LEN) * 8;
+	const int data_bits = sts_mode == DW3000_STS_MODE_ND ?
+				      0 :
+				      (payload_bytes + IEEE802154_FCS_LEN) * 8;
 
 	const int data_rs_bits = data_bits + (data_bits + 329) / 330 * 48;
 	const int data_chips = data_rs_bits /* 1 bit/symbol */
@@ -480,6 +493,122 @@ static inline void dw3000_update_timings(struct dw3000 *dw)
 	llhw->cca_dtu = 8 * llhw->symbol_dtu;
 	dw->chips_per_pac = dw3000_compute_chips_per_pac(dw);
 	dw->pre_timeout_pac = dw3000_compute_pre_timeout_pac(dw);
+}
+
+/**
+ * dw3000_dtu_to_ktime() - compute absolute ktime for the specified DTU time
+ * @dw: the DW device
+ * @ts_dtu: timestamp in DTU unit to convert
+ *
+ * Formula:
+ * ktime = (ts_dtu - dtu0) * D / N + ktime0
+ * Where:
+ * N = DW3000_DTU_FREQ = 15600000
+ * D = 1000000000
+ *
+ * D/N = 1000000000/15600000 = 10000/156
+ * dtu0 always 0.
+ *
+ * Return: the computed kernel time in ns
+ */
+static inline s64 dw3000_dtu_to_ktime(struct dw3000 *dw, u32 ts_dtu)
+{
+	return dw->time_zero_ns +
+	       (10000ll * ts_dtu / (DW3000_DTU_FREQ / 100000));
+}
+
+/**
+ * dw3000_ktime_to_dtu() - compute current DTU time
+ * @dw: the DW device
+ * @timestamp_ns: kernel time in ns
+ *
+ * Formula:
+ * dtu = (ktime - ktime0) * N / D + dtu0
+ * Where:
+ * N = DW3000_DTU_FREQ = 15600000
+ * D = 1000000000
+ *
+ * N/D = 15600000/1000000000 = 156/10000
+ * dtu0 always 0.
+ *
+ * Return: driver DTU time
+ */
+static inline u32 dw3000_ktime_to_dtu(struct dw3000 *dw, s64 timestamp_ns)
+{
+	timestamp_ns -= dw->time_zero_ns;
+	return (u32)(timestamp_ns * (DW3000_DTU_FREQ / 100000) / 10000);
+}
+
+/**
+ * dw3000_dtu_to_sys_time() - compute DW SYS_TIME from DTU time
+ * @dw: the DW device
+ * @dtu: the DTU timestamp to convert to SYS_TIME
+ *
+ * Return: the value to write to SYS_TIME register
+ */
+static inline u32 dw3000_dtu_to_sys_time(struct dw3000 *dw, u32 dtu)
+{
+	const int N = DW3000_DTU_PER_SYS_POWER;
+	u32 dtu_sync = dw->dtu_sync;
+	u32 sys_time_sync = dw->sys_time_sync;
+	return ((dtu - dtu_sync) << N) + sys_time_sync;
+}
+
+/**
+ * dw3000_sys_time_to_dtu() - compute current DTU time from SYS_TIME
+ * @dw: the DW device
+ * @sys_time: the DW device SYS_TIME register value to convert to DTU
+ * @dtu_near: a DTU time which must be in the past relative to sys_time, at less
+ * than half the SYS_TIME rollover period
+ *
+ * Return: the corresponding DTU time
+ */
+static inline u32 dw3000_sys_time_to_dtu(struct dw3000 *dw, u32 sys_time,
+					 u32 dtu_near)
+{
+	const int N = DW3000_DTU_PER_SYS_POWER;
+	u32 dtu_sync = dw->dtu_sync;
+	u32 sys_time_sync = dw->sys_time_sync;
+	u32 dtu_lsb = (sys_time - (sys_time_sync - (dtu_sync << N))) >> N;
+	u32 dtu_add = ((~dtu_lsb & dtu_near) & (1 << (31 - N))) << 1;
+	u32 mask = (1 << (32 - N)) - 1;
+	return ((dtu_near & ~mask) | dtu_lsb) + dtu_add;
+}
+
+/**
+ * dw3000_reset_rctu_conv_state() - reset RCTU converter
+ * @dw: the DW device
+ *
+ * Called during a stop, rx_disable, reset and idle.
+ */
+static inline void dw3000_reset_rctu_conv_state(struct dw3000 *dw)
+{
+	dw->rctu_conv.state = UNALIGNED;
+}
+
+/**
+ * dw3000_resync_rctu_conv_state() - resync RCTU converter
+ * @dw: the DW device
+ *
+ * Called during a wake-up from deep sleep.
+ */
+static inline void dw3000_resync_rctu_conv_state(struct dw3000 *dw)
+{
+	if (dw->rctu_conv.state == ALIGNED_SYNCED)
+		dw->rctu_conv.state = ALIGNED;
+}
+
+static inline int dtu_to_pac(struct mcps802154_llhw *llhw, int timeout_dtu)
+{
+	struct dw3000 *dw = llhw->priv;
+
+	return (timeout_dtu * DW3000_CHIP_PER_DTU + dw->chips_per_pac - 1) /
+	       dw->chips_per_pac;
+}
+
+static inline int dtu_to_dly(struct mcps802154_llhw *llhw, int dtu)
+{
+	return (dtu * DW3000_CHIP_PER_DTU / DW3000_CHIP_PER_DLY);
 }
 
 #endif /* __DW3000_CORE_H */

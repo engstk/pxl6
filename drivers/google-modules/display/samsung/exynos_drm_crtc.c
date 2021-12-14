@@ -910,3 +910,18 @@ void exynos_drm_crtc_te_handler(struct drm_crtc *crtc)
 	if (exynos_crtc->ops->te_handler)
 		exynos_crtc->ops->te_handler(exynos_crtc);
 }
+
+void exynos_crtc_wait_for_flip_done(struct drm_atomic_state *old_state)
+{
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
+	int i;
+
+	for_each_oldnew_crtc_in_state(old_state, crtc, old_crtc_state, new_crtc_state, i) {
+		struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
+
+		if (exynos_crtc->ops->wait_for_flip_done)
+			exynos_crtc->ops->wait_for_flip_done(exynos_crtc,
+							old_crtc_state, new_crtc_state);
+	}
+}

@@ -3,21 +3,21 @@
 # You can get help with `make -f Recipes help`.
 
 all:
-	ninja -C build
+	ninja -C utest/build
 
 test: all
-	./build/utest/test_mac
+	./utest/build/test_mac
 
 cov:
-	ninja -C build-cov test_mac_coverage
+	ninja -C utest/build-cov test_mac_coverage
 
 cmake:
-	cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_MAC_UTEST=on
-	cmake -B build-cov -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_MAC_UTEST=on -DENABLE_TEST_COVERAGE=on -DDISABLE_SANITIZE=on
+	cmake -S utest -B utest/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	cmake -S utest -B utest/build-cov -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TEST_COVERAGE=on
 
 clean:
-	test -d build && ninja -C build clean
-	test -d build-cov && ninja -C build-cov clean
+	test -d utest/build && ninja -C utest/build clean
+	test -d utest/build-cov && ninja -C utest/build-cov clean
 
 check: check_format check_doc
 
