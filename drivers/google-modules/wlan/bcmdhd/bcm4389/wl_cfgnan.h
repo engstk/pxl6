@@ -751,6 +751,9 @@ typedef struct wl_nancfg
 	uint32 nmi_rand_intvl; /* nmi randomization interval */
 } wl_nancfg_t;
 
+#define NAN_RTT_ENABLED(cfg) (wl_cfgnan_is_enabled(cfg) && \
+		(cfg->nancfg->ranging_enable == TRUE))
+
 bool wl_cfgnan_is_enabled(struct bcm_cfg80211 *cfg);
 int wl_cfgnan_check_nan_disable_pending(struct bcm_cfg80211 *cfg,
 bool force_disable, bool is_sync_reqd);

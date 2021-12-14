@@ -4702,6 +4702,13 @@ wl_cfgnan_trigger_geofencing_ranging(struct net_device *dev,
 				/* TODO: Attempt again over a timer */
 				err_at = 2;
 			} else {
+				/*
+				 * Report disc result
+				 * without ranging result,
+				 * on ranging failure
+				 */
+				wl_cfgnan_disc_result_on_geofence_cancel(cfg,
+					ranging_inst);
 				/* Remove target and clean ranging inst */
 				wl_cfgnan_remove_ranging_instance(cfg, ranging_inst);
 				err_at = 3;
@@ -4743,8 +4750,15 @@ wl_cfgnan_check_disc_result_for_ranging(struct bcm_cfg80211 *cfg,
 	bool add_target;
 
 	*send_disc_result = TRUE;
-	svc = wl_cfgnan_get_svc_inst(cfg, nan_event_data->sub_id, 0);
 
+	if (cfg->nancfg->ranging_enable == FALSE) {
+		WL_INFORM_MEM(("Nan Ranging not enabled, skip geofence ranging\n"));
+		*send_disc_result = TRUE;
+		ret = BCME_NOTENABLED;
+		goto exit;
+	}
+
+	svc = wl_cfgnan_get_svc_inst(cfg, nan_event_data->sub_id, 0);
 	if (svc && svc->ranging_required) {
 		nan_ranging_inst_t *ranging_inst;
 		ranging_inst = wl_cfgnan_get_ranging_inst(cfg,
@@ -4906,12 +4920,19 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 		geofence_cfg->geofence_sessions_cnt, geofence_cfg->geofence_target_cnt,
 		geofence_cfg->cur_target_idx));
 
+	if (cfg->nancfg->ranging_enable == FALSE) {
+		WL_ERR(("Nan Ranging not enabled..reject request\n"));
+		ret = BCME_NOTENABLED;
+		err_at = 1;
+		goto done;
+	}
+
 	/* Check if ranging is allowed */
 	rtt_invalid_state = dhd_rtt_invalid_states(ndev, peer_addr);
 	if (rtt_invalid_state != RTT_STATE_VALID) {
 		WL_INFORM_MEM(("Cannot allow ranging due to reason %d \n", rtt_invalid_state));
 		ret = BCME_NORESOURCE;
-		err_at = 1;
+		err_at = 2;
 		goto done;
 	}
 
@@ -4920,7 +4941,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 	if (rtt_status && !RTT_IS_STOPPED(rtt_status)) {
 		WL_INFORM_MEM(("Direcetd RTT in progress..reject RNG_REQ\n"));
 		ret = BCME_NORESOURCE;
-		err_at = 2;
+		err_at = 3;
 		goto done;
 	}
 
@@ -4928,7 +4949,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 	if (dhd_rtt_is_geofence_setup_inprog(dhd)) {
 		WL_INFORM_MEM(("Ranging set up already in progress, "
 			"RNG IND event dropped\n"));
-		err_at = 3;
+		err_at = 4;
 		ret = BCME_NOTREADY;
 		goto done;
 	}
@@ -4955,7 +4976,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 						RTT_GEO_SUSPN_PEER_RTT_TRIGGER, cancel_flags);
 			} else {
 				WL_ERR(("Reject the RNG_REQ_IND in direct rtt initiator role\n"));
-				err_at = 4;
+				err_at = 5;
 				ret = BCME_BUSY;
 				goto done;
 			}
@@ -4963,7 +4984,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 			/* Check if new Ranging session is allowed */
 			if (dhd_rtt_geofence_sessions_maxed_out(dhd)) {
 				WL_ERR(("Cannot allow more ranging sessions\n"));
-				err_at = 5;
+				err_at = 6;
 				ret = BCME_NORESOURCE;
 				goto done;
 			}
@@ -4976,7 +4997,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 		/* Check if new Ranging session is allowed */
 		if (dhd_rtt_geofence_sessions_maxed_out(dhd)) {
 			WL_ERR(("Cannot allow more ranging sessions\n"));
-			err_at = 6;
+			err_at = 7;
 			ret = BCME_NORESOURCE;
 			goto done;
 		}
@@ -4986,7 +5007,7 @@ wl_cfgnan_handle_ranging_ind(struct bcm_cfg80211 *cfg,
 		ASSERT(ranging_inst);
 		if (!ranging_inst) {
 			WL_ERR(("Failed to create ranging instance \n"));
-			err_at = 7;
+			err_at = 8;
 			ret = BCME_NORESOURCE;
 			goto done;
 		}

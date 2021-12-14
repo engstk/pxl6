@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, fira ranging region.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/slab.h>
@@ -54,6 +50,7 @@ static struct mcps802154_region *fira_open(struct mcps802154_llhw *llhw)
 	local->region.ops = &fira_region_ops;
 	INIT_LIST_HEAD(&local->inactive_sessions);
 	INIT_LIST_HEAD(&local->active_sessions);
+	local->block_duration_rx_margin_ppm = UWB_BLOCK_DURATION_MARGIN_PPM;
 	return &local->region;
 }
 
@@ -62,6 +59,17 @@ static void fira_close(struct mcps802154_region *region)
 	struct fira_local *local = region_to_local(region);
 
 	kfree_sensitive(local);
+}
+
+static void fira_notify_stop(struct mcps802154_region *region)
+{
+	struct fira_local *local = region_to_local(region);
+	struct fira_session *session, *s;
+
+	list_for_each_entry_safe (session, s, &local->active_sessions, entry) {
+		session->stop_request = true;
+		fira_session_access_done(local, session, false);
+	}
 }
 
 static int fira_call(struct mcps802154_region *region, u32 call_id,
@@ -77,12 +85,34 @@ static int fira_call(struct mcps802154_region *region, u32 call_id,
 	case FIRA_CALL_SESSION_STOP:
 	case FIRA_CALL_SESSION_DEINIT:
 	case FIRA_CALL_SESSION_SET_PARAMS:
+	case FIRA_CALL_SESSION_GET_STATE:
+	case FIRA_CALL_SESSION_GET_COUNT:
 	case FIRA_CALL_NEW_CONTROLEE:
 	case FIRA_CALL_DEL_CONTROLEE:
+	case FIRA_CALL_SESSION_GET_PARAMS:
 		return fira_session_control(local, call_id, attrs, info);
 	default:
 		return -EINVAL;
 	}
+}
+
+static int fira_get_demand(struct mcps802154_region *region,
+			   u32 next_timestamp_dtu,
+			   struct mcps802154_region_demand *demand)
+{
+	struct fira_local *local = region_to_local(region);
+	struct fira_session *session;
+
+	session = fira_session_next(
+		local, next_timestamp_dtu + local->llhw->anticip_dtu, 0);
+
+	if (session) {
+		fira_session_get_demand(local, session, demand);
+		demand->duration_dtu = session->last_access_duration_dtu;
+		local->current_session = session;
+		return 1;
+	}
+	return 0;
 }
 
 static int fira_report_local_aoa(struct fira_local *local, struct sk_buff *msg,
@@ -107,22 +137,26 @@ static int fira_report_measurement(struct fira_local *local,
 				   struct sk_buff *msg,
 				   const struct fira_ranging_info *ranging_info)
 {
+	const struct fira_session *session = local->current_session;
 	struct nlattr *aoa;
 #define A(x) FIRA_RANGING_DATA_MEASUREMENTS_ATTR_##x
 
 	if (nla_put_u16(msg, A(SHORT_ADDR), ranging_info->short_addr) ||
-	    nla_put_u8(msg, A(STATUS), ranging_info->failed ? 1 : 0))
+	    nla_put_u8(msg, A(STATUS), ranging_info->status))
 		goto nla_put_failure;
 
-	if (ranging_info->failed)
+	if (ranging_info->status) {
+		if (nla_put_u8(msg, A(SLOT_INDEX), ranging_info->slot_index))
+			goto nla_put_failure;
 		return 0;
+	}
 
 	if (ranging_info->tof_present) {
-		static const u64 speed_of_light_mm_per_s = 299702547000ull;
-		u32 distance_mm = div64_u64(
+		static const s64 speed_of_light_mm_per_s = 299702547000ull;
+		s32 distance_mm = div64_s64(
 			ranging_info->tof_rctu * speed_of_light_mm_per_s,
-			(u64)local->llhw->dtu_freq_hz * local->llhw->dtu_rctu);
-		if (nla_put_u32(msg, A(DISTANCE_MM), distance_mm))
+			(s64)local->llhw->dtu_freq_hz * local->llhw->dtu_rctu);
+		if (nla_put_s32(msg, A(DISTANCE_MM), distance_mm))
 			goto nla_put_failure;
 	}
 
@@ -172,6 +206,33 @@ static int fira_report_measurement(struct fira_local *local,
 				goto nla_put_failure;
 		}
 	}
+	if (ranging_info->data_payload_len > 0) {
+		if (nla_put(msg, A(DATA_PAYLOAD_RECV),
+			    ranging_info->data_payload_len,
+			    ranging_info->data_payload))
+			goto nla_put_failure;
+	}
+	if (session->data_payload_seq_sent > 0) {
+		if (nla_put_u32(msg, A(DATA_PAYLOAD_SEQ_SENT),
+				session->data_payload_seq_sent))
+			goto nla_put_failure;
+	}
+
+#undef A
+	return 0;
+nla_put_failure:
+	return -EMSGSIZE;
+}
+
+static int fira_report_measurement_stopped_controlee(struct fira_local *local,
+						     struct sk_buff *msg,
+						     __le16 short_addr)
+{
+#define A(x) FIRA_RANGING_DATA_MEASUREMENTS_ATTR_##x
+
+	if (nla_put_u16(msg, A(SHORT_ADDR), short_addr) ||
+	    nla_put_u8(msg, A(STOPPED), 1))
+		goto nla_put_failure;
 
 #undef A
 	return 0;
@@ -185,6 +246,7 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 	struct sk_buff *msg;
 	struct nlattr *data, *measurements, *measurement;
 	int block_duration_ms, i, r;
+	bool stop_completed;
 
 	msg = mcps802154_region_event_alloc_skb(local->llhw, &local->region,
 						FIRA_CALL_SESSION_NOTIFICATION,
@@ -208,13 +270,25 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 			block_duration_ms))
 		goto nla_put_failure;
 
-	if (session->stop_request) {
+	stop_completed = session->stop_request &&
+			 !(session->controlee_management_flags &
+			   FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_STOP);
+	if (stop_completed || session->stop_inband ||
+	    session->stop_no_response) {
+		enum fira_ranging_data_attrs_stopped_values stopped_value =
+			stop_completed ?
+				FIRA_RANGING_DATA_ATTR_STOPPED_REQUEST :
+				session->stop_inband ?
+				FIRA_RANGING_DATA_ATTR_STOPPED_IN_BAND :
+				FIRA_RANGING_DATA_ATTR_STOPPED_NO_RESPONSE;
+
 		if (nla_put_u8(msg, FIRA_RANGING_DATA_ATTR_STOPPED,
-			       FIRA_RANGING_DATA_ATTR_STOPPED_REQUEST))
+			       stopped_value))
 			goto nla_put_failure;
 	}
 
-	if (add_measurements) {
+	if (add_measurements && (local->n_ranging_info +
+				 local->n_stopped_controlees_short_addr) != 0) {
 		measurements = nla_nest_start(
 			msg, FIRA_RANGING_DATA_ATTR_MEASUREMENTS);
 		if (!measurements)
@@ -224,6 +298,15 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 			measurement = nla_nest_start(msg, 1);
 			if (fira_report_measurement(local, msg,
 						    &local->ranging_info[i]))
+				goto nla_put_failure;
+			nla_nest_end(msg, measurement);
+		}
+
+		for (i = 0; i < local->n_stopped_controlees_short_addr; i++) {
+			measurement = nla_nest_start(msg, 1);
+			if (fira_report_measurement_stopped_controlee(
+				    local, msg,
+				    local->stopped_controlees_short_addr[i]))
 				goto nla_put_failure;
 			nla_nest_end(msg, measurement);
 		}
@@ -242,13 +325,44 @@ nla_put_failure:
 	kfree_skb(msg);
 }
 
+void fira_session_notify_state_change(struct fira_local *local, u32 session_id, uint8_t state)
+{
+	int r;
+	static struct sk_buff *msg;
+
+	/* TODO: reenable when state notification supported by the HAL */
+	return;
+
+	msg = mcps802154_region_call_alloc_reply_skb(
+			local->llhw, &local->region, FIRA_CALL_SESSION_STATE_NOTIFICATION,
+			NLMSG_DEFAULT_SIZE);
+	if (!msg)
+		return;
+
+	if (nla_put_u32(msg, FIRA_CALL_ATTR_SESSION_ID, session_id))
+		goto nla_put_failure;
+
+	if (nla_put_u8(msg, FIRA_CALL_ATTR_SESSION_STATE, state))
+		goto nla_put_failure;
+
+	r = mcps802154_region_call_reply(local->llhw, msg);
+	if (r == -ECONNREFUSED)
+		/* TODO stop. */
+		;
+	return;
+nla_put_failure:
+	kfree_skb(msg);
+}
+
 static struct mcps802154_region_ops fira_region_ops = {
 	.owner = THIS_MODULE,
 	.name = "fira",
 	.open = fira_open,
 	.close = fira_close,
+	.notify_stop = fira_notify_stop,
 	.call = fira_call,
 	.get_access = fira_get_access,
+	.get_demand = fira_get_demand,
 };
 
 int __init fira_region_init(void)

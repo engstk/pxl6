@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_CALIB_H
 #define __DW3000_CALIB_H
@@ -31,6 +30,9 @@
 
 /**
  * enum dw3000_calibration_channels - calibration channel number.
+ * @DW3000_CALIBRATION_CHANNEL_5: index in array for channel 5
+ * @DW3000_CALIBRATION_CHANNEL_9: index in array for channel 9
+ * @DW3000_CALIBRATION_CHANNEL_MAX: channel array size
  */
 enum dw3000_calibration_channel {
 	DW3000_CALIBRATION_CHANNEL_5,
@@ -41,6 +43,9 @@ enum dw3000_calibration_channel {
 
 /**
  * enum dw3000_calibration_prfs - calibration Pulse Repetition Frequency.
+ * @DW3000_CALIBRATION_PRF_16MHZ: index in array for prf 16
+ * @DW3000_CALIBRATION_PRF_64MHZ: index in array for prf 64
+ * @DW3000_CALIBRATION_PRF_MAX: prf array size
  */
 enum dw3000_calibration_prf {
 	DW3000_CALIBRATION_PRF_16MHZ,
@@ -52,7 +57,16 @@ enum dw3000_calibration_prf {
 /**
  * DW3000_CALIBRATION_PDOA_LUT_MAX - number of value in PDOA LUT table
  */
-#define DW3000_CALIBRATION_PDOA_LUT_MAX 7
+#define DW3000_CALIBRATION_PDOA_LUT_MAX 31
+
+/**
+ * typedef dw3000_pdoa_lut_t - PDoA LUT array type
+ */
+typedef s16 dw3000_pdoa_lut_t[DW3000_CALIBRATION_PDOA_LUT_MAX][2];
+
+/* Default LUTs, theorical values for Monalisa antenna (20.8mm) */
+extern const dw3000_pdoa_lut_t dw3000_default_lut_ch5;
+extern const dw3000_pdoa_lut_t dw3000_default_lut_ch9;
 
 /**
  * DW3000_DEFAULT_ANT_DELAY - antenna delay default value
@@ -116,7 +130,7 @@ struct dw3000_antenna_calib {
  */
 struct dw3000_antenna_pair_calib_chan {
 	s16 pdoa_offset;
-	u32 pdoa_lut[DW3000_CALIBRATION_PDOA_LUT_MAX];
+	dw3000_pdoa_lut_t pdoa_lut;
 };
 
 /**

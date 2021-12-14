@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,10 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * MCPS schedule interface.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_MCPS802154_SCHEDULE_H
@@ -45,7 +42,8 @@ struct mcps802154_nl_ranging_request;
 /**
  * enum mcps802154_access_method - Method to implement an access.
  * @MCPS802154_ACCESS_METHOD_NOTHING:
- *      Nothing to do, wait for a schedule change.
+ *      Nothing to do, wait for end of region, or a schedule change. Internal,
+ *      region handlers must return a NULL access if no access is possible.
  * @MCPS802154_ACCESS_METHOD_IMMEDIATE_RX:
  *	RX as soon as possible, without timeout, with auto-ack.
  * @MCPS802154_ACCESS_METHOD_IMMEDIATE_TX:
@@ -149,7 +147,13 @@ struct mcps802154_access {
 	enum mcps802154_access_method method;
 	union {
 		/**
-		 * @ops: Callbacks to implement the access.
+		 * @common_ops: Callbacks to implement the access, common part
+		 * to all access methods.
+		 */
+		struct mcps802154_access_common_ops *common_ops;
+		/**
+		 * @ops: Callbacks to implement access with frames, unless
+		 * a more specific structure is defined.
 		 */
 		struct mcps802154_access_ops *ops;
 		/**
@@ -181,33 +185,65 @@ struct mcps802154_access {
 	 * &mcps802154_access_ops.rx_frame() callback.
 	 */
 	struct mcps802154_access_frame *frames;
+	/**
+	 * @hw_addr_filt: Hardware address filter parameters. This is used at the
+	 * start of multiple frames access to change the filter for this access.
+	 * The filter is restored after the access.
+	 */
+	struct ieee802154_hw_addr_filt hw_addr_filt;
+	/**
+	 * @hw_addr_filt_changed: Hardware address filter parameters flags,
+	 * see &enum ieee802154_hw_addr_filt_flags.
+	 */
+	unsigned long hw_addr_filt_changed;
+	/**
+	 * @channel: If not %NULL, channel parameters for this access. This is
+	 * set at the start of multiple frames access. Parameters are restored
+	 * after the access. If %NULL, use default parameters set through
+	 * ieee802154 interface.
+	 */
+	const struct mcps802154_channel *channel;
+};
+
+/**
+ * struct mcps802154_access_ops - Callbacks to implement an access, common part
+ * to all access methods.
+ */
+struct mcps802154_access_common_ops {
+	/**
+	 * @access_done: Called when the access is done, successfully or
+	 * not, ignored if NULL.
+	 * @error: Code used to signal internal MAC/driver/config error.
+	 */
+	void (*access_done)(struct mcps802154_access *access, int error);
 };
 
 /**
  * struct mcps802154_access_ops - Callbacks to implement an access.
+ *
+ * This is used for all accesses with frames unless a more specific structure is
+ * defined.
  */
 struct mcps802154_access_ops {
-	/*
-	 * Anonymous structure which must be declared at the beginning of all
-	 * access ops.
+	/**
+	 * @common: Common part of callbacks.
 	 */
-	struct {
-		/**
-		 * @access_done: Called when the access is done, successfully or
-		 * not.
-		 */
-		void (*access_done)(struct mcps802154_access *access);
-	};
+	struct mcps802154_access_common_ops common;
 	/**
 	 * @rx_frame: Once a frame is received, it is given to this function.
 	 * Buffer ownership is transferred to the callee.
 	 *
-	 * For multiple frames access method, this is called with NULL pointers
-	 * to report RX timeout or error.
+	 * For multiple frames access method, the error parameter is used to
+	 * inform of RX timeout or error. In case of RX timeout, info is NULL.
+	 * In case of RX error, info can give some information about the error
+	 * frame.
+	 *
+	 * The skb parameter can be NULL for frame without data.
 	 */
 	void (*rx_frame)(struct mcps802154_access *access, int frame_idx,
 			 struct sk_buff *skb,
-			 const struct mcps802154_rx_frame_info *info);
+			 const struct mcps802154_rx_frame_info *info,
+			 enum mcps802154_rx_error_type error);
 	/**
 	 * @tx_get_frame: Return a frame to send, the buffer is lend to caller
 	 * and should be returned with &mcps802154_access_ops.tx_return().
@@ -235,21 +271,15 @@ struct mcps802154_access_ops {
  * In case of error, the devices transition to the broken state.
  *
  * If the callback is missing this is treated like an error, except for
- * &mcps802154_access_vendor_ops.handle and
+ * &mcps802154_access_vendor_ops.handle,
+ * &mcps802154_access_vendor_ops.timer_expired and
  * &mcps802154_access_vendor_ops.schedule_change which are ignored.
  */
 struct mcps802154_access_vendor_ops {
-	/*
-	 * Anonymous structure which must be declared at the beginning of all
-	 * access ops.
+	/**
+	 * @common: Common part of callbacks.
 	 */
-	struct {
-		/**
-		 * @access_done: Called when the access is done, successfully or
-		 * not.
-		 */
-		void (*access_done)(struct mcps802154_access *access);
-	};
+	struct mcps802154_access_common_ops common;
 	/**
 	 * @handle: Called once to start the access, ignored if NULL.
 	 */
@@ -268,13 +298,18 @@ struct mcps802154_access_vendor_ops {
 	int (*rx_error)(struct mcps802154_access *access,
 			enum mcps802154_rx_error_type error);
 	/**
-	 * @tx_done: Called when end of transmission is signaled.
+	 * @tx_done: Called when end of transmission is signaled, error if NULL.
 	 */
 	int (*tx_done)(struct mcps802154_access *access);
 	/**
 	 * @broken: Called when a unrecoverable error is signaled, error if NULL.
 	 */
 	int (*broken)(struct mcps802154_access *access);
+	/**
+	 * @timer_expired: Called when a timer expired event is signaled,
+	 * ignored if NULL.
+	 */
+	int (*timer_expired)(struct mcps802154_access *access);
 	/**
 	 * @schedule_change: Called to handle schedule change, ignored if NULL.
 	 */
@@ -320,6 +355,10 @@ struct mcps802154_region_ops {
 	 */
 	void (*close)(struct mcps802154_region *region);
 	/**
+	 * @notify_stop: Notify a region that device has been stopped.
+	 */
+	void (*notify_stop)(struct mcps802154_region *region);
+	/**
 	 * @set_parameters: Set region parameters, may be NULL.
 	 */
 	int (*set_parameters)(struct mcps802154_region *region,
@@ -330,6 +369,12 @@ struct mcps802154_region_ops {
 	 */
 	int (*call)(struct mcps802154_region *region, u32 call_id,
 		    const struct nlattr *attrs, const struct genl_info *info);
+	/**
+	 * @get_demand: Get access demand from a region, may be NULL.
+	 */
+	int (*get_demand)(struct mcps802154_region *region,
+			  u32 next_timestamp_dtu,
+			  struct mcps802154_region_demand *demand);
 	/**
 	 * @get_access: Get access for a given region at the given timestamp.
 	 * Access is valid until &mcps802154_access_ops.access_done() callback
@@ -405,6 +450,10 @@ struct mcps802154_scheduler_ops {
 	 * @close: Detach and close a scheduler.
 	 */
 	void (*close)(struct mcps802154_scheduler *scheduler);
+	/**
+	 * @notify_stop: Notify a scheduler that device has been stopped.
+	 */
+	void (*notify_stop)(struct mcps802154_scheduler *scheduler);
 	/**
 	 * @set_parameters: Configure the scheduler.
 	 */
@@ -486,6 +535,15 @@ void mcps802154_region_close(struct mcps802154_llhw *llhw,
 			     struct mcps802154_region *region);
 
 /**
+ * mcps802154_region_notify_stop() - Notify a region that device has been
+ * stopped.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ */
+void mcps802154_region_notify_stop(struct mcps802154_llhw *llhw,
+				   struct mcps802154_region *region);
+
+/**
  * mcps802154_region_set_parameters() - Set parameters of an open region.
  * @llhw: Low-level device pointer.
  * @region: Pointer to the open region.
@@ -513,6 +571,50 @@ int mcps802154_region_call(struct mcps802154_llhw *llhw,
 			   struct mcps802154_region *region, u32 call_id,
 			   const struct nlattr *params_attr,
 			   const struct genl_info *info);
+
+/**
+ * mcps802154_region_get_demand() - Get access demand from a region in order to
+ * help building a schedule.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ * @next_timestamp_dtu: Date of next access opportunity.
+ * @demand: Where to write the demand.
+ *
+ * If the region does not implement access demand, this function will request an
+ * endless demand starting at the next access opportunity.
+ *
+ * Return: 1 if data is available, 0 if no demand (do not want access) or error.
+ */
+int mcps802154_region_get_demand(struct mcps802154_llhw *llhw,
+				 struct mcps802154_region *region,
+				 u32 next_timestamp_dtu,
+				 struct mcps802154_region_demand *demand);
+
+/**
+ * mcps802154_region_call_alloc_reply_skb() - Allocate buffer to send
+ * a response for a region call.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ * @call_id: Identifier of the procedure, region specific.
+ * @approx_len: Upper bound of the data to be put into the buffer.
+ *
+ * Return: An allocated and pre-filled buffer, or NULL on error.
+ */
+struct sk_buff *
+mcps802154_region_call_alloc_reply_skb(struct mcps802154_llhw *llhw,
+				       struct mcps802154_region *region,
+				       u32 call_id, int approx_len);
+
+/**
+ * mcps802154_region_call_reply() - Send a previously allocated and filled
+ * reply buffer.
+ * @llhw: Low-level device pointer.
+ * @skb: Buffer to send.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_region_call_reply(struct mcps802154_llhw *llhw,
+				 struct sk_buff *skb);
 
 /**
  * mcps802154_region_event_alloc_skb() - Allocate buffer to send a notification

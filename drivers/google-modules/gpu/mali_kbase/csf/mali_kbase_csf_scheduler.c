@@ -2676,7 +2676,7 @@ static void program_suspending_csg_slots(struct kbase_device *kbdev)
 
 				kbase_csf_add_group_fatal_error(group,
 								&err_payload);
-				kbase_event_wakeup(group->kctx);
+				kbase_event_wakeup_nosync(group->kctx);
 
 				/* TODO GPUCORE-25328: The CSG can't be
 				 * terminated, the GPU will be reset as a
@@ -4103,7 +4103,7 @@ static int suspend_active_queue_groups_on_reset(struct kbase_device *kbdev)
  *                                              groups when reset is done during
  *                                              protected mode execution.
  *
- * @group: Pointer to the device.
+ * @kbdev: Pointer to the device.
  *
  * This function is called at the time of GPU reset, before the suspension of
  * queue groups, to handle the case when the reset is getting performed whilst

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer internal definitions.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_MCPS802154_MCPS802154_I_H
@@ -63,6 +59,10 @@ struct mcps802154_pib {
 	 * @mac_max_frame_retries: Number of retries on TX.
 	 */
 	s8 mac_max_frame_retries;
+	/**
+	 * @phy_current_channel: Current channel parameters.
+	 */
+	struct mcps802154_channel phy_current_channel;
 };
 
 /**

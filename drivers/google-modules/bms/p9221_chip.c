@@ -839,6 +839,33 @@ static int p9221_send_eop(struct p9221_charger_data *chgr, u8 reason)
 	mutex_unlock(&chgr->cmd_lock);
 	return ret;
 }
+/* 3 times to make sure it works */
+static int p9412_send_3eop(struct p9221_charger_data *chgr, u8 reason)
+{
+	int count, ret = 0;
+	u8 val;
+
+	for (count = 0; count < 3; count++) {
+		/* Command P9412 to send EPT */
+		ret = chgr->reg_write_8(chgr, P9221R5_EPT_REG, reason);
+		if (ret == 0)
+			ret = chgr->chip_set_cmd(chgr, P9221R5_COM_SENDEPT);
+		if (ret < 0) {
+			dev_err(&chgr->client->dev, "fail send eop%d (%d)\n",
+				count, ret);
+			return ret;
+		} else
+			dev_info(&chgr->client->dev, "send eop command success\n");
+
+		mdelay(500);
+
+		ret = chgr->reg_read_8(chgr, P9221_STATUS_REG, &val);
+		if (ret < 0)
+			return ret;
+	}
+
+	return ret;
+}
 
 static int p9412_send_eop(struct p9221_charger_data *chgr, u8 reason)
 {
@@ -848,16 +875,13 @@ static int p9412_send_eop(struct p9221_charger_data *chgr, u8 reason)
 
 	mutex_lock(&chgr->cmd_lock);
 
-	/* Command P9412 to send EPT */
-	ret = chgr->reg_write_8(chgr, P9221R5_EPT_REG, reason);
-	if (ret == 0)
-		ret = chgr->chip_set_cmd(chgr, P9221R5_COM_SENDEPT);
-
-	/* Change P9412 mode to Disable Mode */
-	ret = p9412_capdiv_en(chgr, 0);
-	if (ret < 0)
-		dev_err(&chgr->client->dev,
-			"fail to switch cap to disable mode\n");
+	if (reason == P9221_EOP_REVERT_TO_BPP) {
+		ret = chgr->reg_write_8(chgr, P9221R5_EPT_REG, reason);
+		if (ret == 0)
+			ret = chgr->chip_set_cmd(chgr, P9221R5_COM_SENDEPT);
+	} else {
+		ret = p9412_send_3eop(chgr, reason);
+	}
 
 	mutex_unlock(&chgr->cmd_lock);
 
@@ -1650,12 +1674,13 @@ int p9221_chip_init_funcs(struct p9221_charger_data *chgr, u16 chip_id)
 }
 
 
-#define P9XXX_NUM_GPIOS			5
+#define P9XXX_NUM_GPIOS			16
 #define P9XXX_MIN_GPIO			0
-#define P9XXX_MAX_GPIO			5
+#define P9XXX_MAX_GPIO			15
 #define P9XXX_GPIO_CPOUT_EN		1
 #define P9412_GPIO_CPOUT21_EN		2
 #define P9XXX_GPIO_CPOUT_CTL_EN		3
+#define P9XXX_GPIO_VBUS_EN		15
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int p9xxx_gpio_get_direction(struct gpio_chip *chip,
@@ -1689,13 +1714,13 @@ static int p9xxx_gpio_get(struct gpio_chip *chip, unsigned int offset)
 static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
 {
 	struct p9221_charger_data *charger = gpiochip_get_data(chip);
-	int ret = -EINVAL;
+	int ret = 0;
 	u8 mode;
 
 	switch (offset) {
 	case P9XXX_GPIO_CPOUT_EN:
 		/* take offline (if online) and set/reset QI_EN_L */
-		ret = p9221_wlc_disable(charger, !value, EPT_END_OF_CHARGE);
+		ret = vote(charger->wlc_disable_votable, CPOUT_EN_VOTER, !value, 0);
 		break;
 	case P9412_GPIO_CPOUT21_EN:
 		/* TODO: no-op for FW38+ */
@@ -1703,19 +1728,20 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 		ret = p9412_capdiv_en(charger, mode);
 		break;
 	case P9XXX_GPIO_CPOUT_CTL_EN:
-		if (p9221_is_epp(charger)) {
-			ret = 0;
+		if (p9221_is_epp(charger))
 			break;
-		}
 		/* b/174068520: set vout to 5.2 for BPP_WLC_RX+OTG */
 		if (value)
 			ret = charger->chip_set_vout_max(charger, P9412_BPP_WLC_OTG_VOUT);
 		else if (value == 0)
 			ret = charger->chip_set_vout_max(charger, P9412_BPP_VOUT_DFLT);
-		else
-			ret = 0;
+		break;
+	case P9XXX_GPIO_VBUS_EN:
+		if (charger->pdata->qi_vbus_en >= 0)
+			gpio_direction_output(charger->pdata->qi_vbus_en, !!value);
 		break;
 	default:
+		ret = -EINVAL;
 		break;
 	}
 

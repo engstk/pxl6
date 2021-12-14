@@ -130,8 +130,7 @@ static int cs40l2x_swap_ext_clk(struct cs40l2x_codec *priv,
 {
 	struct device *dev = priv->dev;
 	struct regmap *regmap = priv->regmap;
-	struct cs40l2x_private *core = priv->core;
-	int clk_cfg, ret;
+	int clk_cfg;
 
 	if (src == CS40L2X_32KHZ_CLK)
 		clk_cfg = cs40l2x_get_clk_config(CS40L2X_MCLK_FREQ);
@@ -142,11 +141,6 @@ static int cs40l2x_swap_ext_clk(struct cs40l2x_codec *priv,
 		dev_err(dev, "Invalid SYS Clock Frequency\n");
 		return -EINVAL;
 	}
-
-	ret = cs40l2x_ack_write(core, CS40L2X_MBOX_POWERCONTROL,
-				CS40L2X_PWRCTL_FORCE_STBY, CS40L2X_PWRCTL_NONE);
-	if (ret)
-		return ret;
 
 	regmap_update_bits(regmap, CS40L2X_PLL_CLK_CTRL,
 			   CS40L2X_PLL_OPEN_LOOP_MASK,
@@ -173,8 +167,7 @@ static int cs40l2x_swap_ext_clk(struct cs40l2x_codec *priv,
 
 	usleep_range(1000, 1500);
 
-	return cs40l2x_ack_write(core, CS40L2X_MBOX_POWERCONTROL,
-				 CS40L2X_PWRCTL_WAKE, CS40L2X_PWRCTL_NONE);
+	return 0;
 }
 
 static int cs40l2x_clk_en(struct snd_soc_dapm_widget *w,
@@ -191,10 +184,8 @@ static int cs40l2x_clk_en(struct snd_soc_dapm_widget *w,
 		dev_info(dev, "%s: SND_SOC_DAPM_POST_PMU\n", __func__);
 		mutex_lock(&core->lock);
 		core->a2h_enable = true;
+                cs40l2x_set_state(core, CS40L2X_VIBE_STATE_RUNNING);
 		mutex_unlock(&core->lock);
-
-		if (!completion_done(&core->hap_done))
-			wait_for_completion(&core->hap_done);
 
 		ret = cs40l2x_swap_ext_clk(priv, CS40L2X_SCLK);
 		if (ret)
@@ -208,6 +199,7 @@ static int cs40l2x_clk_en(struct snd_soc_dapm_widget *w,
 
 		mutex_lock(&core->lock);
 		core->a2h_enable = false;
+                cs40l2x_set_state(core, CS40L2X_VIBE_STATE_STOPPED);
 		mutex_unlock(&core->lock);
 		break;
 	default:
