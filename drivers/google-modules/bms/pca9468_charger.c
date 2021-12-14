@@ -1941,6 +1941,9 @@ static void pca9468_return_to_loop(struct pca9468_charger *pca9468)
 {
 	pca9468->new_iin = 0;
 
+	dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+		 pca9468->charging_state, pca9468->ret_state);
+
 	/* Go to return state  */
 	pca9468->charging_state = pca9468->ret_state;
 	if (pca9468->charging_state == DC_STATE_CC_MODE)
@@ -1978,6 +1981,10 @@ static int pca9468_adjust_ta_current(struct pca9468_charger *pca9468)
 			__func__, iin, pca9468->iin_cc, ta_limit, pca9468->pdata->iin_cfg,
 			icn, ibat, pca9468->cc_max, rc);
 
+	if (pca9468->charging_state != DC_STATE_ADJUST_TACUR)
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_ADJUST_TACUR);
+
 	pca9468->charging_state = DC_STATE_ADJUST_TACUR;
 
 	if (pca9468->ta_cur == ta_limit) {
@@ -2011,6 +2018,9 @@ static int pca9468_adjust_ta_current(struct pca9468_charger *pca9468)
 				pca9468->chg_mode);
 
 		pca9468->new_iin = 0;
+
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_ADJUST_CC);
 
 		/* Send PD Message and go to Adjust CC mode */
 		pca9468->charging_state = DC_STATE_ADJUST_CC;
@@ -2050,6 +2060,10 @@ static int pca9468_adjust_ta_voltage(struct pca9468_charger *pca9468)
 	int rc, ibat, icn = -EINVAL, iin = -EINVAL;
 	bool ovc_flag;
 
+	if (pca9468->charging_state != DC_STATE_ADJUST_TAVOL)
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_ADJUST_TAVOL);
+
 	pca9468->charging_state = DC_STATE_ADJUST_TAVOL;
 
 	rc = pca9468_get_ibatt(pca9468, &ibat);
@@ -2087,7 +2101,16 @@ static int pca9468_adjust_ta_voltage(struct pca9468_charger *pca9468)
 	} else if (iin < (pca9468->iin_cc - PD_MSG_TA_CUR_STEP)) {
 		/* TA current is lower than the target input current */
 
-		if (pca9468->ta_vol == pca9468->ta_max_vol) {
+		if (pca9468_check_status(pca9468) == STS_MODE_VFLT_LOOP) {
+			/* IIN current may not able to increase in CV */
+
+			logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
+					"End1-1, skip adjust for cv, ta_cur=%u, ta_vol=%u, iin_cc=%u, chg_mode=%u",
+					pca9468->ta_cur, pca9468->ta_vol,
+					pca9468->iin_cc, pca9468->chg_mode);
+
+			pca9468_return_to_loop(pca9468);
+		} else if (pca9468->ta_vol == pca9468->ta_max_vol) {
 			/* TA TA voltage is already at the maximum voltage */
 
 			logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
@@ -2133,6 +2156,10 @@ static int pca9468_adjust_rx_voltage(struct pca9468_charger *pca9468)
 	int rc, ibat, icn = -EINVAL, iin = -EINVAL;
 	bool ovc_flag;
 
+	if (pca9468->charging_state != DC_STATE_ADJUST_TAVOL)
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_ADJUST_TAVOL);
+
 	pca9468->charging_state = DC_STATE_ADJUST_TAVOL;
 
 	rc = pca9468_get_ibatt(pca9468, &ibat);
@@ -2168,7 +2195,14 @@ static int pca9468_adjust_rx_voltage(struct pca9468_charger *pca9468)
 	} else if (iin < iin_low) {
 		/* RX current is lower than the target input current */
 
-		if (pca9468->ta_vol == pca9468->ta_max_vol) {
+		if (pca9468_check_status(pca9468) == STS_MODE_VFLT_LOOP) {
+			/* RX current may not able to increase in CV */
+			logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
+					"End1-1, skip adjust for cv, rx_vol=%u, iin_cc=%u",
+					pca9468->ta_vol, pca9468->iin_cc);
+
+			pca9468_return_to_loop(pca9468);
+		} else if (pca9468->ta_vol == pca9468->ta_max_vol) {
 			/* RX current is already the maximum voltage */
 			logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
 					"End1, rx_vol=%u, iin_cc=%u, chg_mode=%u",
@@ -2359,6 +2393,9 @@ static int pca9468_apply_new_vfloat(struct pca9468_charger *pca9468)
 	if (ret < 0) {
 		pr_err("%s: cannot reset dcmode (%d)\n", __func__, ret);
 	} else {
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_ADJUST_CC);
+
 		pca9468->charging_state = DC_STATE_ADJUST_CC;
 		pca9468->timer_id = TIMER_PDMSG_SEND;
 		pca9468->timer_period = 0;
@@ -2415,6 +2452,9 @@ static int pca9468_ajdust_ccmode_wireless(struct pca9468_charger *pca9468, int i
 		/* Input current is already over IIN_CC */
 		/* End RX voltage adjustment */
 
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_CC_MODE);
+
 		/* change charging state to CC mode */
 		pca9468->charging_state = DC_STATE_CC_MODE;
 
@@ -2463,6 +2503,10 @@ static int pca9468_ajdust_ccmode_wired(struct pca9468_charger *pca9468, int iin)
 		/* IIN_ADC > IIN_CC -20mA ? */
 		/* Input current is already over IIN_CC */
 		/* End TA voltage and current adjustment */
+
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_CC_MODE);
+
 		/* change charging state to CC mode */
 		pca9468->charging_state = DC_STATE_CC_MODE;
 
@@ -2648,6 +2692,9 @@ static int pca9468_charge_adjust_ccmode(struct pca9468_charger *pca9468)
 		}
 
 		pca9468->prev_inc = INC_NONE;
+
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_CC_MODE);
 
 		/* Send PD Message and then go to CC mode */
 		pca9468->charging_state = DC_STATE_CC_MODE;
@@ -3106,6 +3153,12 @@ static int pca9468_charge_cvmode(struct pca9468_charger *pca9468)
 	case STS_MODE_CHG_DONE: {
 		const bool done_already = pca9468->charging_state ==
 					  DC_STATE_CHARGING_DONE;
+
+		if (!done_already)
+			dev_info(pca9468->dev, "%s: charging_state=%u->%u\n",
+				 __func__, pca9468->charging_state,
+				 DC_STATE_CHARGING_DONE);
+
 
 		/* Keep CV mode until driver send stop charging */
 		pca9468->charging_state = DC_STATE_CHARGING_DONE;
@@ -4199,6 +4252,9 @@ static int pca9468_set_charging_enabled(struct pca9468_charger *pca9468, int ind
 		pca9468->irdrop_comp_ok = false;
 		pca9468->pps_index = index;
 
+		dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
+			 pca9468->charging_state, DC_STATE_CHECK_VBAT);
+
 		/* PD is already in PE_SNK_STATE */
 		pca9468->charging_state = DC_STATE_CHECK_VBAT;
 		pca9468->timer_id = TIMER_VBATMIN_CHECK;
@@ -4775,12 +4831,33 @@ static ssize_t p9468_set_chg_stats(struct device *dev, struct device_attribute *
 
 static DEVICE_ATTR(chg_stats, 0644, p9468_show_chg_stats, p9468_set_chg_stats);
 
+static ssize_t show_dump_reg(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct pca9468_charger *pca9468 = dev_get_drvdata(dev);
+	u8 tmp[PCA9468_MAX_REGISTER + 1];
+	int ret, i;
+	int len = 0;
+
+	ret = regmap_bulk_read(pca9468->regmap, PCA9468_REG_DEVICE_INFO, &tmp,
+			       PCA9468_MAX_REGISTER + 1);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i <= PCA9468_MAX_REGISTER; i++)
+		len += scnprintf(&buf[len], PAGE_SIZE - len, "%02x: %02x\n", i, tmp[i]);
+
+	return len;
+}
+
+static DEVICE_ATTR(registers_dump, 0444, show_dump_reg, NULL);
 
 static int pca9468_create_fs_entries(struct pca9468_charger *chip)
 {
 
 	device_create_file(chip->dev, &dev_attr_sts_ab);
 	device_create_file(chip->dev, &dev_attr_chg_stats);
+	device_create_file(chip->dev, &dev_attr_registers_dump);
 
 	chip->debug_root = debugfs_create_dir("charger-pca9468", NULL);
 	if (IS_ERR_OR_NULL(chip->debug_root)) {

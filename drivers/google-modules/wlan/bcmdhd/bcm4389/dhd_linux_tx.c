@@ -1105,6 +1105,9 @@ dhd_eap_txcomplete(dhd_pub_t *dhdp, void *txp, bool success, int ifidx)
 }
 #endif /* DHD_4WAYM4_FAIL_DISCONNECT */
 
+#ifdef DHD_PKT_LOGGING_DBGRING
+extern void dhd_os_dbg_urgent_pullreq(void *os_priv, int ring_id);
+#endif /* DHD_PKT_LOGGING_DBGRING */
 void
 dhd_handle_pktdata(dhd_pub_t *dhdp, int ifidx, void *pkt, uint8 *pktdata, uint32 pktid,
 	uint32 pktlen, uint16 *pktfate, uint8 *dhd_udr, uint8 *dhd_igmp,
@@ -1156,11 +1159,14 @@ dhd_handle_pktdata(dhd_pub_t *dhdp, int ifidx, void *pkt, uint8 *pktdata, uint32
 			pktlog_ring = dhdp->pktlog->pktlog_ring;
 			if (pktlog_ring->pktcount <= DHD_PACKET_LOG_RING_RESUME_THRESHOLD) {
 				dhd_pktlog_resume(dhdp);
-			}
-			/* If pktlog disabled(suspeneded), only allowed TXS update */
-			if (tx && pktfate) {
-				DHD_PKTLOG_TXS(dhdp, pkt, pktdata, pktid, *pktfate);
-				pkthash = __dhd_dbg_pkt_hash((uintptr_t)pkt, pktid);
+			} else {
+				/* If pktlog disabled(suspeneded), only allowed TXS update */
+				if (tx && pktfate) {
+					DHD_PKTLOG_TXS(dhdp, pkt, pktdata, pktid, *pktfate);
+					pkthash = __dhd_dbg_pkt_hash((uintptr_t)pkt, pktid);
+				}
+				dhd_os_dbg_urgent_pullreq(dhdp->dbg->private,
+					PACKET_LOG_RING_ID);
 				break;
 			}
 		}

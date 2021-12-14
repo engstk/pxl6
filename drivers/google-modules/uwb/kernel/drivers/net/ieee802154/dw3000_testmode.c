@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/slab.h>
@@ -30,7 +29,7 @@
 #include "dw3000_trc.h"
 #include "dw3000_testmode.h"
 #include "dw3000_testmode_nl.h"
-#include "dw3000_ccc.h"
+#include "dw3000_nfcc_coex_testmode.h"
 
 static const struct nla_policy dw3000_tm_policy[DW3000_TM_ATTR_MAX + 1] = {
 	[DW3000_TM_ATTR_CMD] = { .type = NLA_U32 },
@@ -50,6 +49,9 @@ static const struct nla_policy dw3000_tm_policy[DW3000_TM_ATTR_MAX + 1] = {
 	[DW3000_TM_ATTR_CCC_OFFSET_MS] = { .type = NLA_U32 },
 	[DW3000_TM_ATTR_CCC_CONFLICT_SLOT_IDX] = { .type = NLA_U32 },
 	[DW3000_TM_ATTR_DEEP_SLEEP_DELAY_MS] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_CONTTX_FRAME_LENGHT] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_CONTTX_RATE] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_CONTTX_DURATION] = { .type = NLA_S32 },
 };
 
 struct do_tm_cmd_params {
@@ -354,7 +356,7 @@ static int do_tm_cmd_ccc_test_spi2(struct dw3000 *dw, const void *in, void *out)
 	 * TODO: test SPI2
 	 * - enable SPI2
 	 * - wait for release (from other side code or watchdog?)
-        */
+	 */
 	ccc_cmd_rc = 1;
 
 	return tm_ccc_cmd_done(dw, params->llhw, ccc_cmd_rc);
@@ -490,10 +492,10 @@ static int do_tm_cmd_ccc_test_conflict(struct dw3000 *dw, const void *in,
 	conf.session_time0 =
 		nla_get_u32(params->nl_attr[DW3000_TM_ATTR_CCC_TIME0]);
 
-	/* conflit_slot_idx is mandatory */
+	/* conflict_slot_idx is mandatory */
 	if (!params->nl_attr[DW3000_TM_ATTR_CCC_CONFLICT_SLOT_IDX])
 		return -EINVAL;
-	conf.conflit_slot_idx = nla_get_u32(
+	conf.conflict_slot_idx = nla_get_u32(
 		params->nl_attr[DW3000_TM_ATTR_CCC_CONFLICT_SLOT_IDX]);
 
 	/* RRcount is optional */
@@ -578,7 +580,53 @@ static int do_tm_cmd_deep_sleep(struct dw3000 *dw, const void *in, void *out)
 		return -EINVAL;
 	delay = nla_get_u32(
 		params->nl_attr[DW3000_TM_ATTR_DEEP_SLEEP_DELAY_MS]);
-	return dw3000_go_to_deep_sleep_and_wakeup_after_ms(dw, delay);
+	dw->deep_sleep_state.next_operational_state = DW3000_OP_STATE_IDLE_PLL;
+	return dw3000_deep_sleep_and_wakeup(dw, delay * 1000);
+}
+
+static int do_tm_cmd_start_cont_tx(struct dw3000 *dw, const void *in, void *out)
+{
+	const struct do_tm_cmd_params *params = in;
+	u32 frame_length;
+	u32 rate;
+	s32 duration;
+	int rc;
+
+	/* Verify mandatory attributes */
+	if (!params->nl_attr[DW3000_TM_ATTR_CONTTX_FRAME_LENGHT] ||
+	    !params->nl_attr[DW3000_TM_ATTR_CONTTX_RATE])
+		return -EINVAL;
+
+	frame_length = nla_get_u32(
+		params->nl_attr[DW3000_TM_ATTR_CONTTX_FRAME_LENGHT]);
+	if (frame_length < 4)
+		return -EINVAL;
+	rate = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_CONTTX_RATE]);
+
+	/* Disable receiver */
+	rc = dw3000_rx_disable(dw);
+	if (rc)
+		return rc;
+
+	dw->config.stsMode = DW3000_STS_MODE_OFF;
+
+	rc = dw3000_testmode_continuous_tx_start(dw, frame_length, rate);
+	if (rc)
+		return rc;
+
+	if (params->nl_attr[DW3000_TM_ATTR_CONTTX_DURATION]) {
+		duration = nla_get_s32(
+			params->nl_attr[DW3000_TM_ATTR_CONTTX_DURATION]);
+		msleep(duration * 1000);
+		rc = dw3000_testmode_continuous_tx_stop(dw);
+	}
+
+	return rc;
+}
+
+static int do_tm_cmd_stop_cont_tx(struct dw3000 *dw, const void *in, void *out)
+{
+	return dw3000_testmode_continuous_tx_stop(dw);
 }
 
 int dw3000_tm_cmd(struct mcps802154_llhw *llhw, void *data, int len)
@@ -593,10 +641,12 @@ int dw3000_tm_cmd(struct mcps802154_llhw *llhw, void *data, int len)
 		[DW3000_TM_CMD_STOP_RX_DIAG] = do_tm_cmd_stop_rx_diag,
 		[DW3000_TM_CMD_GET_RX_DIAG] = do_tm_cmd_get_rx_diag,
 		[DW3000_TM_CMD_CLEAR_RX_DIAG] = do_tm_cmd_clear_rx_diag,
-		[DW3000_TM_CMD_START_TX_CWTONE] = do_tm_cmd_start_tx_cwtone,
-		[DW3000_TM_CMD_STOP_TX_CWTONE] = do_tm_cmd_stop_tx_cwtone,
 		[DW3000_TM_CMD_OTP_READ] = do_tm_cmd_otp_read,
 		[DW3000_TM_CMD_OTP_WRITE] = do_tm_cmd_otp_write,
+		[DW3000_TM_CMD_START_TX_CWTONE] = do_tm_cmd_start_tx_cwtone,
+		[DW3000_TM_CMD_STOP_TX_CWTONE] = do_tm_cmd_stop_tx_cwtone,
+		[DW3000_TM_CMD_START_CONTINUOUS_TX] = do_tm_cmd_start_cont_tx,
+		[DW3000_TM_CMD_STOP_CONTINUOUS_TX] = do_tm_cmd_stop_cont_tx,
 		[DW3000_TM_CMD_CCC_START] = do_tm_cmd_ccc_start,
 		[DW3000_TM_CMD_CCC_TEST_SCRATCH] = do_tm_cmd_ccc_test_scratch,
 		[DW3000_TM_CMD_CCC_TEST_SPI1] = do_tm_cmd_ccc_test_spi1,

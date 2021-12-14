@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, channel access internal definitions.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_MCPS802154_CA_H
@@ -73,6 +69,10 @@ struct mcps802154_ca {
 	 * @retries: Number of retries done on the current tx frame.
 	 */
 	int retries;
+	/**
+	 * @idle_access: Access used to wait when there is nothing to do.
+	 */
+	struct mcps802154_access idle_access;
 };
 
 /**
@@ -106,6 +106,15 @@ int mcps802154_ca_start(struct mcps802154_local *local);
  * This is asynchronous, caller needs to wait !local->started.
  */
 void mcps802154_ca_stop(struct mcps802154_local *local);
+
+/**
+ * mcps802154_ca_notify_stop() - Notify that device has been stopped.
+ * @local: MCPS private data.
+ *
+ * FSM mutex should be locked.
+ *
+ */
+void mcps802154_ca_notify_stop(struct mcps802154_local *local);
 
 /**
  * mcps802154_ca_close() - Request to close all the schedules.

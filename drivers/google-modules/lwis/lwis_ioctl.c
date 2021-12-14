@@ -664,6 +664,7 @@ static int ioctl_device_reset(struct lwis_client *lwis_client, struct lwis_io_en
 	struct lwis_io_entries k_msg;
 	struct lwis_io_entry *k_entries = NULL;
 	unsigned long flags;
+	bool device_enabled = false;
 
 	ret = copy_io_entries(lwis_dev, user_msg, &k_msg, &k_entries);
 	if (ret) {
@@ -674,6 +675,7 @@ static int ioctl_device_reset(struct lwis_client *lwis_client, struct lwis_io_en
 	mutex_lock(&lwis_dev->client_lock);
 	lwis_client_event_states_clear(lwis_client);
 	lwis_client_event_queue_clear(lwis_client);
+	device_enabled = lwis_dev->enabled;
 	mutex_unlock(&lwis_dev->client_lock);
 
 	/* Flush all periodic io to complete */
@@ -689,8 +691,13 @@ static int ioctl_device_reset(struct lwis_client *lwis_client, struct lwis_io_en
 	}
 
 	/* Perform reset routine defined by the io_entries */
-	ret = synchronous_process_io_entries(lwis_dev, k_msg.num_io_entries, k_entries,
-					     k_msg.io_entries);
+	if (device_enabled) {
+		ret = synchronous_process_io_entries(lwis_dev, k_msg.num_io_entries, k_entries,
+						     k_msg.io_entries);
+	} else {
+		dev_warn(lwis_dev->dev,
+			 "Device is not enabled, IoEntries will not be executed in DEVICE_RESET\n");
+	}
 
 	spin_lock_irqsave(&lwis_dev->lock, flags);
 	lwis_device_event_states_clear_locked(lwis_dev);
@@ -980,6 +987,7 @@ static int ioctl_transaction_submit(struct lwis_client *client,
 	int ret;
 	unsigned long flags;
 	struct lwis_transaction *k_transaction = NULL;
+	struct lwis_transaction_info k_transaction_info;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
 	ret = construct_transaction(client, msg, &k_transaction);
@@ -998,15 +1006,16 @@ static int ioctl_transaction_submit(struct lwis_client *client,
 		free_transaction(k_transaction);
 		return ret;
 	}
+	k_transaction_info = k_transaction->info;
+	spin_unlock_irqrestore(&client->transaction_lock, flags);
 
-	if (copy_to_user((void __user *)msg, &k_transaction->info,
+	if (copy_to_user((void __user *)msg, &k_transaction_info,
 			 sizeof(struct lwis_transaction_info))) {
 		ret = -EFAULT;
 		dev_err_ratelimited(lwis_dev->dev,
 				    "Failed to copy transaction results to userspace\n");
 	}
 
-	spin_unlock_irqrestore(&client->transaction_lock, flags);
 	return ret;
 }
 
@@ -1016,6 +1025,7 @@ static int ioctl_transaction_replace(struct lwis_client *client,
 	int ret;
 	unsigned long flags;
 	struct lwis_transaction *k_transaction;
+	struct lwis_transaction_info k_transaction_info;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
 	ret = construct_transaction(client, msg, &k_transaction);
@@ -1035,15 +1045,16 @@ static int ioctl_transaction_replace(struct lwis_client *client,
 		free_transaction(k_transaction);
 		return ret;
 	}
+	k_transaction_info = k_transaction->info;
+	spin_unlock_irqrestore(&client->transaction_lock, flags);
 
-	if (copy_to_user((void __user *)msg, &k_transaction->info,
+	if (copy_to_user((void __user *)msg, &k_transaction_info,
 			 sizeof(struct lwis_transaction_info))) {
 		ret = -EFAULT;
 		dev_err_ratelimited(lwis_dev->dev,
 				    "Failed to copy transaction results to userspace\n");
 	}
 
-	spin_unlock_irqrestore(&client->transaction_lock, flags);
 	return ret;
 }
 
@@ -1336,6 +1347,12 @@ int lwis_ioctl_handler(struct lwis_client *lwis_client, unsigned int type, unsig
 	bool device_disabled;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
 
+	// Skip the lock for LWIS_EVENT_DEQUEUE because we want to emit events ASAP. The internal
+	// handler function of LWIS_EVENT_DEQUEUE will acquire the necessary lock.
+	if (type != LWIS_EVENT_DEQUEUE) {
+		mutex_lock(&lwis_client->lock);
+	}
+
 	mutex_lock(&lwis_dev->client_lock);
 	device_disabled = (lwis_dev->enabled == 0);
 	mutex_unlock(&lwis_dev->client_lock);
@@ -1349,7 +1366,7 @@ int lwis_ioctl_handler(struct lwis_client *lwis_client, unsigned int type, unsig
 	    type != LWIS_DPM_QOS_UPDATE && type != LWIS_DPM_GET_CLOCK) {
 		ret = -EBADFD;
 		dev_err_ratelimited(lwis_dev->dev, "Unsupported IOCTL on disabled device.\n");
-		return ret;
+		goto out;
 	}
 
 	switch (type) {
@@ -1425,5 +1442,9 @@ int lwis_ioctl_handler(struct lwis_client *lwis_client, unsigned int type, unsig
 		ret = -EINVAL;
 	};
 
+out:
+	if (type != LWIS_EVENT_DEQUEUE) {
+		mutex_unlock(&lwis_client->lock);
+	}
 	return ret;
 }

@@ -449,17 +449,6 @@ static void exynos_atomic_bts_post_update(struct drm_device *dev,
 	}
 }
 
-#define TIMEOUT	msecs_to_jiffies(100)
-
-/* wait at least one frame time on top of common timeout */
-static inline unsigned long fps_timeout(int fps)
-{
-	/* default to 60 fps, if fps is not provided */
-	const frame_time_ms = DIV_ROUND_UP(MSEC_PER_SEC, fps ? : 60);
-
-	return msecs_to_jiffies(frame_time_ms) + TIMEOUT;
-}
-
 static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 {
 	int i;
@@ -565,47 +554,9 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 		}
 	}
 
-	for_each_oldnew_crtc_in_state(old_state, crtc, old_crtc_state, new_crtc_state, i) {
-		struct decon_mode *mode;
-		struct drm_crtc_commit *commit = new_crtc_state->commit;
-		int fps, recovering;
-
-		decon = crtc_to_decon(crtc);
-
-		if (!new_crtc_state->active)
-			continue;
-
-		if (WARN_ON(!commit))
-			continue;
-
-		fps = drm_mode_vrefresh(&new_crtc_state->mode);
-		if (old_crtc_state->active)
-			fps = min(fps, drm_mode_vrefresh(&old_crtc_state->mode));
-
-		DPU_ATRACE_BEGIN("wait_for_crtc_flip");
-		if (!wait_for_completion_timeout(&commit->flip_done, fps_timeout(fps))) {
-			DPU_EVENT_LOG(DPU_EVT_FRAMESTART_TIMEOUT, decon->id, NULL);
-			recovering = atomic_read(&decon->recovery.recovering);
-			pr_warn("decon%u framestart timeout (%d fps). recovering(%d)\n",
-					decon->id, fps, recovering);
-			if (!recovering)
-				decon_dump_all(decon, DPU_EVT_CONDITION_ALL, false);
-
-			decon_force_vblank_event(decon);
-
-			if (!recovering)
-				decon_trigger_recovery(decon);
-		}
-		DPU_ATRACE_END("wait_for_crtc_flip");
-
-		mode = &decon->config.mode;
-		if (mode->op_mode == DECON_COMMAND_MODE && !decon->keep_unmask) {
-			DPU_EVENT_LOG(DPU_EVT_DECON_TRIG_MASK,
-					decon->id, NULL);
-			decon_reg_set_trigger(decon->id, mode,
-					DECON_TRIG_MASK);
-		}
-	}
+	DPU_ATRACE_BEGIN("wait_for_crtc_flip");
+	exynos_crtc_wait_for_flip_done(old_state);
+	DPU_ATRACE_END("wait_for_crtc_flip");
 
 	DPU_ATRACE_BEGIN("wait_for_flip_done");
 	drm_atomic_helper_wait_for_flip_done(dev, old_state);

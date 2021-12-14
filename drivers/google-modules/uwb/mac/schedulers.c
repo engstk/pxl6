@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, scheduler management.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -121,6 +117,18 @@ void mcps802154_scheduler_close(struct mcps802154_scheduler *scheduler)
 	ops = scheduler->ops;
 	ops->close(scheduler);
 	module_put(ops->owner);
+}
+
+void mcps802154_scheduler_notify_stop(struct mcps802154_scheduler *scheduler)
+{
+	const struct mcps802154_scheduler_ops *ops;
+
+	if (!scheduler)
+		return;
+
+	ops = scheduler->ops;
+	if (ops->notify_stop)
+		ops->notify_stop(scheduler);
 }
 
 int mcps802154_scheduler_set_parameters(struct mcps802154_scheduler *scheduler,

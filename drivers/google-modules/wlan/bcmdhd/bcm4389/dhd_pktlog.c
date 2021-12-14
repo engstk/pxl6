@@ -267,7 +267,7 @@ void dhd_pktlog_resume(dhd_pub_t *dhdp)
 	pktlog_ring = dhdp->pktlog->pktlog_ring;
 	if (!OSL_ATOMIC_READ(dhdp->osh, &dhdp->pktlog->enable)) {
 		OSL_ATOMIC_SET(dhdp->osh, &dhdp->pktlog->enable, TRUE);
-		DHD_ERROR(("pktlog ring is resumed. pktcount(%d)\n",
+		DHD_INFO(("pktlog ring is resumed. pktcount(%d)\n",
 			pktlog_ring->pktcount));
 	}
 }
@@ -291,7 +291,7 @@ void dhd_pktlog_suspend(dhd_pub_t *dhdp)
 	pktlog_ring = dhdp->pktlog->pktlog_ring;
 	if (OSL_ATOMIC_READ(dhdp->osh, &dhdp->pktlog->enable)) {
 		OSL_ATOMIC_SET(dhdp->osh, &dhdp->pktlog->enable, FALSE);
-		DHD_ERROR(("pktlog ring is suspended. pktcount(%d)\n",
+		DHD_INFO(("pktlog ring is suspended. pktcount(%d)\n",
 			pktlog_ring->pktcount));
 	}
 }
@@ -1275,7 +1275,7 @@ dhd_pktlog_get_item_length(dhd_pktlog_ring_info_t *report_ptr)
 	return len;
 }
 
-uint32
+int
 dhd_pktlog_get_dump_length(dhd_pub_t *dhdp)
 {
 	dhd_pktlog_ring_info_t *report_ptr;

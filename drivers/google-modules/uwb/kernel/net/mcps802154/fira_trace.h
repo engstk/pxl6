@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,10 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, trace points definitions.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #undef TRACE_SYSTEM
@@ -32,6 +29,7 @@
 
 #include <linux/tracepoint.h>
 #include "fira_session.h"
+#include "fira_region_params.h"
 
 /* clang-format off */
 
@@ -91,6 +89,26 @@
 	{ FIRA_RX_ANTENNA_SWITCH_BETWEEN_ROUND, "between_round" },  \
 	{ FIRA_RX_ANTENNA_SWITCH_DURING_ROUND, "during_round" },    \
 	{ FIRA_RX_ANTENNA_SWITCH_TWO_RANGING, "two_ranging" }
+
+#define FIRA_MESSAGE_TYPE                              \
+	{ FIRA_MESSAGE_ID_RANGING_INITIATION, "RIM" }, \
+	{ FIRA_MESSAGE_ID_RANGING_RESPONSE, "RRM" },   \
+	{ FIRA_MESSAGE_ID_RANGING_FINAL, "RFM" },      \
+	{ FIRA_MESSAGE_ID_CONTROL, "RCM" },            \
+	{ FIRA_MESSAGE_ID_MEASUREMENT_REPORT, "MRM" }, \
+	{ FIRA_MESSAGE_ID_RESULT_REPORT, "RRRM" },     \
+	{ FIRA_MESSAGE_ID_CONTROL_UPDATE, "CMU" }
+
+#define FIRA_RANGING_STATUS                                                   \
+	{ FIRA_STATUS_RANGING_SUCCESS, "success" },                           \
+	{ FIRA_STATUS_RANGING_TX_FAILED, "tx_failed" },                       \
+	{ FIRA_STATUS_RANGING_RX_TIMEOUT, "rx_timeout" },                     \
+	{ FIRA_STATUS_RANGING_RX_PHY_DEC_FAILED, "rx_phy_dec_failed" },       \
+	{ FIRA_STATUS_RANGING_RX_PHY_TOA_FAILED, "rx_phy_toa_failed" },       \
+	{ FIRA_STATUS_RANGING_RX_PHY_STS_FAILED, "rx_phy_sts_failed" },       \
+	{ FIRA_STATUS_RANGING_RX_MAC_DEC_FAILED, "rx_mac_dec_failed" },       \
+	{ FIRA_STATUS_RANGING_RX_MAC_IE_DEC_FAILED, "rx_mac_ie_dec_failed" }, \
+	{ FIRA_STATUS_RANGING_RX_MAC_IE_MISSING, "rx_mac_ie_missing" }
 
 TRACE_EVENT(region_fira_session_params,
 	TP_PROTO(const struct fira_session *session,
@@ -199,6 +217,46 @@ TRACE_EVENT(region_fira_session_params,
 		  __entry->rx_antenna_pair_elevation,
 		  __entry->tx_antenna_selection,
 		  __print_symbolic(__entry->rx_antenna_switch, FIRA_RX_ANTENNA_SWITCH_SYMBOLS)
+		)
+	);
+
+TRACE_EVENT(region_fira_rx_message_type,
+	TP_PROTO(const struct fira_session *session,
+		 enum fira_message_id msg_id,
+		 enum fira_ranging_status status),
+	TP_ARGS(session, msg_id, status),
+	TP_STRUCT__entry(
+		FIRA_SESSION_ENTRY
+		__field(enum fira_message_id, msg_id)
+		__field(enum fira_ranging_status, status)
+		),
+	TP_fast_assign(
+		FIRA_SESSION_ASSIGN;
+		__entry->msg_id = msg_id;
+		__entry->status = status;
+		),
+	TP_printk(FIRA_SESSION_PR_FMT " message_type=%s status=%s",
+		FIRA_SESSION_PR_ARG,
+		__print_symbolic(__entry->msg_id, FIRA_MESSAGE_TYPE),
+		__print_symbolic(__entry->status, FIRA_RANGING_STATUS)
+		)
+	);
+
+TRACE_EVENT(region_fira_tx_message_type,
+	TP_PROTO(const struct fira_session *session,
+		 enum fira_message_id msg_id),
+	TP_ARGS(session, msg_id),
+	TP_STRUCT__entry(
+		FIRA_SESSION_ENTRY
+		__field(enum fira_message_id, msg_id)
+		),
+	TP_fast_assign(
+		FIRA_SESSION_ASSIGN;
+		__entry->msg_id = msg_id;
+		),
+	TP_printk(FIRA_SESSION_PR_FMT " message_type=%s",
+		FIRA_SESSION_PR_ARG,
+		__print_symbolic(__entry->msg_id, FIRA_MESSAGE_TYPE)
 		)
 	);
 

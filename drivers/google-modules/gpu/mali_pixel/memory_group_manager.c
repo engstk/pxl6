@@ -94,6 +94,7 @@ struct mgm_group {
  * struct mgm_groups - Structure for groups of memory group manager
  *
  * @groups: To keep track of the number of allocated pages of all groups
+ * @ngroups: Number of groups actually used
  * @dev: device attached
  * @pt_handle: Link to SLC partition data
  * @kobj: &sruct kobject used for linking to pixel_stats_sysfs node
@@ -104,6 +105,7 @@ struct mgm_group {
  */
 struct mgm_groups {
 	struct mgm_group groups[MEMORY_GROUP_MANAGER_NR_GROUPS];
+	size_t ngroups;
 	struct device *dev;
 	struct pt_handle *pt_handle;
 	struct kobject kobj;
@@ -397,6 +399,10 @@ static struct page *mgm_alloc_page(
 	if (INVALID_GROUP_ID(group_id))
 		return NULL;
 
+	if (WARN_ON_ONCE((group_id != MGM_RESERVED_GROUP_ID) &&
+			 (GROUP_ID_TO_PT_IDX(group_id) >= data->ngroups)))
+		return NULL;
+
 	/* We don't expect to be allocting pages into the group used for
 	 * external or imported memory
 	 */
@@ -595,6 +601,14 @@ static void mgm_resize_callback(void *data, int id, size_t size_allocated)
 static int mgm_initialize_data(struct mgm_groups *mgm_data)
 {
 	int i, ret;
+
+	const int ngroups = of_property_count_strings(mgm_data->dev->of_node, "pt_id");
+	if (WARN_ON(ngroups < 0) ||
+	    WARN_ON(ngroups > MEMORY_GROUP_MANAGER_NR_GROUPS)) {
+		mgm_data->ngroups = 0;
+	} else {
+		mgm_data->ngroups = ngroups;
+	}
 
 	for (i = 0; i < MEMORY_GROUP_MANAGER_NR_GROUPS; i++) {
 		atomic_set(&mgm_data->groups[i].size, 0);

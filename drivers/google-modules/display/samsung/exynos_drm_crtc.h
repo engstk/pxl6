@@ -58,4 +58,5 @@ void exynos_drm_crtc_te_handler(struct drm_crtc *crtc);
 
 void exynos_crtc_handle_event(struct exynos_drm_crtc *exynos_crtc);
 
+void exynos_crtc_wait_for_flip_done(struct drm_atomic_state *old_state);
 #endif

@@ -9317,7 +9317,7 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 #if defined(LINUX) || defined(linux)
 				dhdpcie_dump_resource(bus);
 #endif /* LINUX || linux */
-				DHD_ERROR(("lpm_mode %d, fw_lpm_support %d\n", bus->lpm_mode,
+				DHD_RPM(("lpm_mode %d, fw_lpm_support %d\n", bus->lpm_mode,
 					bus->dhd->fw_lpm_support));
 				/* Once LPM mode is entered, recovery is only through WL_REG_ON */
 				if (bus->lpm_mode && bus->dhd->fw_lpm_support) {
@@ -9339,12 +9339,12 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 						dhd_pcie_handle_lpm_memkill(bus);
 					}
 				}
-				DHD_ERROR(("Doing the D3\n"));
+				DHD_RPM(("Doing the D3\n"));
 				rc = dhdpcie_pci_suspend_resume(bus, state);
 				if (!rc) {
 					bus->last_suspend_end_time = OSL_LOCALTIME_NS();
 				}
-				DHD_ERROR(("Doing the FLR, lpm_mode %d, lpm_force_flr %d,"
+				DHD_RPM(("Doing the FLR, lpm_mode %d, lpm_force_flr %d,"
 					" fwsupport %d\n",
 					bus->lpm_mode, bus->lpm_force_flr,
 					bus->dhd->fw_lpm_support));
@@ -9355,9 +9355,9 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 					bus->lpm_keep_in_reset = FALSE;
 				}
 				else {
-					DHD_ERROR(("NO FLR\n"));
+					DHD_RPM(("NO FLR\n"));
 				}
-				DHD_ERROR(("FLR done\n"));
+				DHD_RPM(("FLR done\n"));
 			}
 		} else if (timeleft == 0) { /* D3 ACK Timeout */
 #ifdef DHD_FW_COREDUMP
