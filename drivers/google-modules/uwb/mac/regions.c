@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, handle regions.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include <linux/errno.h>
@@ -125,6 +121,17 @@ void mcps802154_region_close(struct mcps802154_llhw *llhw,
 }
 EXPORT_SYMBOL(mcps802154_region_close);
 
+void mcps802154_region_notify_stop(struct mcps802154_llhw *llhw,
+				   struct mcps802154_region *region)
+{
+	const struct mcps802154_region_ops *ops;
+
+	ops = region->ops;
+	if (ops->notify_stop)
+		ops->notify_stop(region);
+}
+EXPORT_SYMBOL(mcps802154_region_notify_stop);
+
 int mcps802154_region_set_parameters(struct mcps802154_llhw *llhw,
 				     struct mcps802154_region *region,
 				     const struct nlattr *params_attr,
@@ -151,3 +158,15 @@ int mcps802154_region_call(struct mcps802154_llhw *llhw,
 	return region->ops->call(region, call_id, params_attr, info);
 }
 EXPORT_SYMBOL(mcps802154_region_call);
+
+int mcps802154_region_get_demand(struct mcps802154_llhw *llhw,
+				 struct mcps802154_region *region,
+				 u32 next_timestamp_dtu,
+				 struct mcps802154_region_demand *demand)
+{
+	if (!region->ops->get_demand)
+		return -EOPNOTSUPP;
+
+	return region->ops->get_demand(region, next_timestamp_dtu, demand);
+}
+EXPORT_SYMBOL(mcps802154_region_get_demand);

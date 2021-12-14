@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,8 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #ifndef __DW3000_CHIP_E0_H
 #define __DW3000_CHIP_E0_H
@@ -31,6 +30,29 @@ enum dw3000_timer { DW3000_TIMER0 = 0, DW3000_TIMER1 };
 
 enum dw3000_timer_mode { DW3000_SINGLE_MODE = 0, DW3000_REPEAT_MODE };
 
+/* Register PLL_COARSE_CODE */
+#define DW3000_PLL_COARSE_CODE_ID 0x90004
+#define DW3000_PLL_COARSE_CODE_LEN (4U)
+#define DW3000_PLL_COARSE_CODE_MASK 0xFFFFFFFFUL
+#define DW3000_PLL_COARSE_CODE_CH9_CAL_WITH_PREBUF_BIT_OFFSET (27U)
+#define DW3000_PLL_COARSE_CODE_CH9_CAL_WITH_PREBUF_BIT_LEN (1U)
+#define DW3000_PLL_COARSE_CODE_CH9_CAL_WITH_PREBUF_BIT_MASK 0x8000000UL
+#define DW3000_PLL_COARSE_CODE_CH5_CAL_WITH_PREBUF_BIT_OFFSET (26U)
+#define DW3000_PLL_COARSE_CODE_CH5_CAL_WITH_PREBUF_BIT_LEN (1U)
+#define DW3000_PLL_COARSE_CODE_CH5_CAL_WITH_PREBUF_BIT_MASK 0x4000000UL
+#define DW3000_PLL_COARSE_CODE_CH9_ICAS_BIT_OFFSET (25U)
+#define DW3000_PLL_COARSE_CODE_CH9_ICAS_BIT_LEN (1U)
+#define DW3000_PLL_COARSE_CODE_CH9_ICAS_BIT_MASK 0x2000000UL
+#define DW3000_PLL_COARSE_CODE_CH9_RCAS_BIT_OFFSET (24U)
+#define DW3000_PLL_COARSE_CODE_CH9_RCAS_BIT_LEN (1U)
+#define DW3000_PLL_COARSE_CODE_CH9_RCAS_BIT_MASK 0x1000000UL
+#define DW3000_PLL_COARSE_CODE_CH5_VCO_COARSE_TUNE_BIT_OFFSET (8U)
+#define DW3000_PLL_COARSE_CODE_CH5_VCO_COARSE_TUNE_BIT_LEN (14U)
+#define DW3000_PLL_COARSE_CODE_CH5_VCO_COARSE_TUNE_BIT_MASK 0x3fff00UL
+#define DW3000_PLL_COARSE_CODE_CH9_VCO_COARSE_TUNE_BIT_OFFSET (0U)
+#define DW3000_PLL_COARSE_CODE_CH9_VCO_COARSE_TUNE_BIT_LEN (7U)
+#define DW3000_PLL_COARSE_CODE_CH9_VCO_COARSE_TUNE_BIT_MASK 0x7fU
+
 /* Delay to wait after RX enable to calibrate the ADC on E0 chip */
 #define DW3000_E0_ADC_CALIBRATION_DELAY_US (200)
 
@@ -41,6 +63,8 @@ enum dw3000_timer_mode { DW3000_SINGLE_MODE = 0, DW3000_REPEAT_MODE };
 #define DW3000_E0_PLL_CALIBRATION_FROM_SCRATCH_DELAY_US (400)
 
 #define DW3000_TIMER_FREQ 38400000
+
+#define DW3000_E0_DGC_DBG_ID 0x30054
 
 enum dw3000_timer_period {
 	/* 38.4 MHz */

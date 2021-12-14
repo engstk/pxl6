@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,17 +18,19 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
+#ifndef __DW3000_PM_H
+#define __DW3000_PM_H
+
 #include <linux/pm_qos.h>
 #include <linux/version.h>
 
 #include "dw3000.h"
 
-#if (KERNEL_VERSION(5, 7, 0) > LINUX_VERSION_CODE)
-#define FREQ_QOS_MIN_DEFAULT_VALUE 0
-#define FREQ_QOS_MAX_DEFAULT_VALUE S32_MAX
+
+#if (KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE)
+#define PM_QOS_RESUME_LATENCY_NO_CONSTRAINT S32_MAX
 #endif
 
 extern int dw3000_qos_latency;
@@ -53,3 +55,5 @@ static inline void dw3000_pm_qos_remove_request(struct dw3000 *dw)
 	cpu_latency_qos_remove_request(&dw->pm_qos_req);
 #endif
 }
+
+#endif /* __DW3000_PM_H  */

@@ -1535,6 +1535,8 @@ int cs40l2x_coeff_file_parse(struct cs40l2x_private *cs40l2x,
 int cs40l2x_ack_write(struct cs40l2x_private *cs40l2x, unsigned int reg,
 			unsigned int write_val, unsigned int reset_val);
 
+void cs40l2x_set_state(struct cs40l2x_private *cs40l2x, bool state);
+
 struct cs40l2x_virtual_waveform {
 	bool is_xm;
 	unsigned int index;

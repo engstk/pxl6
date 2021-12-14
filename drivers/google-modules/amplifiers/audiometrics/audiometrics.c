@@ -226,6 +226,7 @@ static ssize_t speaker_excursion_show(struct device *dev,
 {
 	struct audiometrics_priv_type *priv = NULL;
 	int counts = 0;
+	int scale = 100000;
 
 	if (IS_ERR_OR_NULL(dev))
 		return -EINVAL;
@@ -237,9 +238,11 @@ static ssize_t speaker_excursion_show(struct device *dev,
 
 	mutex_lock(&priv->lock);
 
-	counts = scnprintf(buf, PAGE_SIZE, "%d,%d",
-			priv->sz.speaker_excursion[0],
-			priv->sz.speaker_excursion[1]);
+	counts = scnprintf(buf, PAGE_SIZE, "%d.%05d,%d.%05d",
+			priv->sz.speaker_excursion[0] / scale,
+			priv->sz.speaker_excursion[0] % scale,
+			priv->sz.speaker_excursion[1] / scale,
+			priv->sz.speaker_excursion[1] % scale);
 
 	mutex_unlock(&priv->lock);
 

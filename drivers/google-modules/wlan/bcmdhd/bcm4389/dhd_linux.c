@@ -19842,15 +19842,17 @@ dhd_os_get_pktlog_lock(dhd_pub_t *dhdp)
 uint32
 dhd_os_get_pktlog_dump_size(struct net_device *dev)
 {
-	uint32 size = 0;
+	int ret = 0;
 	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(dev);
 	dhd_pub_t *dhdp = &dhd->pub;
 
-	size = dhd_pktlog_get_dump_length(dhdp);
-	if (size == 0) {
-		DHD_ERROR(("%s(): fail to get pktlog size, err = %d\n", __FUNCTION__, size));
+	ret = dhd_pktlog_get_dump_length(dhdp);
+	if (ret < 0) {
+		DHD_ERROR(("%s(): fail to get pktlog size, err = %d\n",
+			__FUNCTION__, ret));
+		return 0;
 	}
-	return size;
+	return ret;
 }
 
 void

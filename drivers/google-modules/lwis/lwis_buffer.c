@@ -152,6 +152,21 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 		return -EINVAL;
 	}
 
+	if (buffer->info.dma_read && buffer->info.dma_write) {
+		buffer->dma_direction = DMA_BIDIRECTIONAL;
+	} else if (buffer->info.dma_read) {
+		buffer->dma_direction = DMA_TO_DEVICE;
+	} else if (buffer->info.dma_write) {
+		buffer->dma_direction = DMA_FROM_DEVICE;
+	} else {
+		buffer->dma_direction = DMA_NONE;
+	}
+
+	if (!valid_dma_direction(buffer->dma_direction)) {
+		dev_err(lwis_client->lwis_dev->dev, "Enroll: buffer->dma_direction is invalid\n");
+		return -EINVAL;
+	}
+
 	buffer->dma_buf = dma_buf_get(buffer->info.fd);
 	if (IS_ERR_OR_NULL(buffer->dma_buf)) {
 		dev_err(lwis_client->lwis_dev->dev,
@@ -168,16 +183,6 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 			PTR_ERR(buffer->dma_buf_attachment));
 		dma_buf_put(buffer->dma_buf);
 		return PTR_ERR(buffer->dma_buf_attachment);
-	}
-
-	if (buffer->info.dma_read && buffer->info.dma_write) {
-		buffer->dma_direction = DMA_BIDIRECTIONAL;
-	} else if (buffer->info.dma_read) {
-		buffer->dma_direction = DMA_TO_DEVICE;
-	} else if (buffer->info.dma_write) {
-		buffer->dma_direction = DMA_FROM_DEVICE;
-	} else {
-		buffer->dma_direction = DMA_NONE;
 	}
 
 	buffer->sg_table =

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, FProc state RX.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include <linux/errno.h>
 
@@ -33,7 +29,7 @@ static void
 mcps802154_fproc_rx_wait_tx_done_tx_done(struct mcps802154_local *local)
 {
 	/* End current access and ask for next one. */
-	mcps802154_fproc_access_done(local);
+	mcps802154_fproc_access_done(local, 0);
 	mcps802154_fproc_access_now(local);
 }
 
@@ -61,7 +57,8 @@ static void mcps802154_fproc_rx_rx_frame(struct mcps802154_local *local)
 	};
 	r = llhw_rx_get_frame(local, &skb, &info);
 	if (!r) {
-		access->ops->rx_frame(access, 0, skb, &info);
+		access->ops->rx_frame(access, 0, skb, &info,
+				      MCPS802154_RX_ERROR_NONE);
 		/* If auto-ack was sent, wait for tx_done. */
 		if (info.flags & MCPS802154_RX_FRAME_INFO_AACK) {
 			mcps802154_fproc_change_state(
@@ -69,7 +66,7 @@ static void mcps802154_fproc_rx_rx_frame(struct mcps802154_local *local)
 			return;
 		}
 	}
-	mcps802154_fproc_access_done(local);
+	mcps802154_fproc_access_done(local, r);
 
 	if (r && r != -EBUSY)
 		mcps802154_fproc_broken_handle(local);
@@ -81,7 +78,7 @@ static void mcps802154_fproc_rx_rx_frame(struct mcps802154_local *local)
 static void mcps802154_fproc_rx_rx_error(struct mcps802154_local *local,
 					 enum mcps802154_rx_error_type error)
 {
-	mcps802154_fproc_access_done(local);
+	mcps802154_fproc_access_done(local, -EINVAL);
 
 	/* Next access. */
 	mcps802154_fproc_access_now(local);
@@ -97,7 +94,7 @@ static void mcps802154_fproc_rx_schedule_change(struct mcps802154_local *local)
 		/* Wait for RX result. */
 		return;
 
-	mcps802154_fproc_access_done(local);
+	mcps802154_fproc_access_done(local, r);
 	if (r)
 		mcps802154_fproc_broken_handle(local);
 	else
@@ -120,7 +117,7 @@ int mcps802154_fproc_rx_handle(struct mcps802154_local *local,
 		.flags = MCPS802154_RX_INFO_AACK,
 		.timeout_dtu = -1,
 	};
-	r = llhw_rx_enable(local, &rx_info, 0);
+	r = llhw_rx_enable(local, &rx_info, 0, 0);
 	if (r)
 		return r;
 

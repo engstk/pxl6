@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, low level driver operations.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef LLHW_OPS_H
@@ -54,24 +50,26 @@ static inline void llhw_stop(struct mcps802154_local *local)
 static inline int llhw_tx_frame(struct mcps802154_local *local,
 				struct sk_buff *skb,
 				const struct mcps802154_tx_frame_info *info,
-				int next_delay_dtu)
+				int frame_idx, int next_delay_dtu)
 {
 	int r;
 
-	trace_llhw_tx_frame(local, info, next_delay_dtu);
-	r = local->ops->tx_frame(&local->llhw, skb, info, next_delay_dtu);
+	trace_llhw_tx_frame(local, info, frame_idx, next_delay_dtu);
+	r = local->ops->tx_frame(&local->llhw, skb, info, frame_idx,
+				 next_delay_dtu);
 	trace_llhw_return_int(local, r);
 	return r;
 }
 
 static inline int llhw_rx_enable(struct mcps802154_local *local,
 				 const struct mcps802154_rx_info *info,
-				 int next_delay_dtu)
+				 int frame_idx, int next_delay_dtu)
 {
 	int r;
 
-	trace_llhw_rx_enable(local, info, next_delay_dtu);
-	r = local->ops->rx_enable(&local->llhw, info, next_delay_dtu);
+	trace_llhw_rx_enable(local, info, frame_idx, next_delay_dtu);
+	r = local->ops->rx_enable(&local->llhw, info, frame_idx,
+				  next_delay_dtu);
 	trace_llhw_return_int(local, r);
 	return r;
 }
@@ -142,18 +140,6 @@ static inline int llhw_get_current_timestamp_dtu(struct mcps802154_local *local,
 	r = local->ops->get_current_timestamp_dtu(&local->llhw, timestamp_dtu);
 	trace_llhw_return_timestamp_dtu(local, r, *timestamp_dtu);
 	return r;
-}
-
-static inline u64 llhw_timestamp_dtu_to_rctu(struct mcps802154_local *local,
-					     u32 timestamp_dtu)
-{
-	return local->ops->timestamp_dtu_to_rctu(&local->llhw, timestamp_dtu);
-}
-
-static inline u32 llhw_timestamp_rctu_to_dtu(struct mcps802154_local *local,
-					     u64 timestamp_rctu)
-{
-	return local->ops->timestamp_rctu_to_dtu(&local->llhw, timestamp_rctu);
 }
 
 static inline u64

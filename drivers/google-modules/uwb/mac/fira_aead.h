@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,7 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.  Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef FIRA_AEAD_H
@@ -62,6 +62,14 @@ int fira_aead_encrypt(struct fira_aead *aead, struct sk_buff *skb,
 bool fira_aead_decrypt_scf_check(u8 scf);
 
 /**
+ * fira_aead_decrypt_prepare() - Prepare the frame before decryption.
+ * @skb: Buffer containing the frame to decrypt.
+ *
+ * Return: 0 or error.
+ */
+int fira_aead_decrypt_prepare(struct sk_buff *skb);
+
+/**
  * fira_aead_decrypt() - Decrypt payload.
  * @aead: Context.
  * @skb: Buffer containing the frame to decrypt. MAC header should be present
@@ -69,6 +77,8 @@ bool fira_aead_decrypt_scf_check(u8 scf);
  * @header_len: Length of the MAC header, used for authentication.
  * @src_short_addr: Source short address.
  * @counter: Counter used for the nonce.
+ *
+ * NOTE: This function must be called after calling fira_aead_decrypt_prepare.
  *
  * Return: 0 or error. In particular, -EBADMSG is returned if authentication tag
  * is wrong.

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,18 +18,23 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 #include "dw3000.h"
 #include "dw3000_txpower_adjustment.h"
+
+/* UWB High band 802.15.4a-2007. Only channels 5 & 9 for DW3000. */
+#define DW3000_SUPPORTED_CHANNELS ((1 << 5) | (1 << 9))
 
 /* clang-format off */
 #define CHAN_PRF_PARAMS (4 * DW3000_CALIBRATION_PRF_MAX)
 #define ANT_CHAN_PARAMS (CHAN_PRF_PARAMS * DW3000_CALIBRATION_CHANNEL_MAX)
 #define ANT_OTHER_PARAMS (3) /* port, selector_gpio... */
 #define ANTPAIR_CHAN_PARAMS (2 * DW3000_CALIBRATION_CHANNEL_MAX + 1)
-#define OTHER_PARAMS (3) /* xtal_trim, temperature_reference, smart_tx_power */
+#define OTHER_PARAMS (9) /* xtal_trim, temperature_reference, smart_tx_power,
+			    spi_pid, dw3000_pid, auto_sleep_margin,
+ 			    restricted_channels, alternate_pulse_shape,
+			    phrMode */
 
 #define MAX_CALIB_KEYS ((ANTMAX * (ANT_CHAN_PARAMS + ANT_OTHER_PARAMS)) + \
 			(ANTPAIR_MAX * ANTPAIR_CHAN_PARAMS) +		\
@@ -89,9 +94,16 @@ static const struct {
 	CAL_INFO(ch[1].pll_locking_code),
 	/* other with direct access in struct dw3000 */
 	DW_INFO(txconfig.smart),
+	DW_INFO(auto_sleep_margin_us),
+	DW_INFO(spi_pid),
+	DW_INFO(dw3000_pid),
+	DW_INFO(restricted_channels),
+	/* country */
+	DW_INFO(config.alternate_pulse_shape),
+	DW_INFO(config.phrMode),
 	/* other with defaults from OTP */
 	OTP_INFO(xtal_trim),
-	OTP_INFO(tempP)
+	OTP_INFO(tempP),
 };
 
 #define PRF_CAL_LABEL(a,c,p)				\
@@ -118,8 +130,8 @@ static const struct {
 	PDOA_CAL_LABEL(x, y, 9),		\
 	"ant" #x ".ant" #y ".spacing_mm_q11"
 
-/**
- * dw3000_calib_keys - calibration parameters keys table
+/*
+ * calibration parameters keys table
  */
 static const char *const dw3000_calib_keys[MAX_CALIB_KEYS + 1] = {
 	/* antX */
@@ -139,6 +151,13 @@ static const char *const dw3000_calib_keys[MAX_CALIB_KEYS + 1] = {
 	"ch9.pll_locking_code",
 	/* other */
 	"smart_tx_power",
+	"auto_sleep_margin",
+	"spi_pid",
+	"dw3000_pid",
+	"restricted_channels",
+	/* country */
+	"alternate_pulse_shape",
+	"phr_mode",
 	/* other (OTP) */
 	"xtal_trim",
 	"temperature_reference",
@@ -146,6 +165,78 @@ static const char *const dw3000_calib_keys[MAX_CALIB_KEYS + 1] = {
 	NULL
 };
 /* clang-format on */
+
+const dw3000_pdoa_lut_t dw3000_default_lut_ch5 = {
+	/* clang-format off */
+	{ 0xe6de, 0xf36f },
+	{ 0xe88b, 0xf36f },
+	{ 0xea38, 0xf5b0 },
+	{ 0xebe5, 0xf747 },
+	{ 0xed92, 0xf869 },
+	{ 0xef3f, 0xf959 },
+	{ 0xf0ec, 0xfa2e },
+	{ 0xf299, 0xfaf1 },
+	{ 0xf445, 0xfba7 },
+	{ 0xf5f2, 0xfc53 },
+	{ 0xf79f, 0xfcf9 },
+	{ 0xf94c, 0xfd9a },
+	{ 0xfaf9, 0xfe36 },
+	{ 0xfca6, 0xfed0 },
+	{ 0xfe53, 0xff69 },
+	{ 0x0000, 0x0000 },
+	{ 0x01ad, 0x0097 },
+	{ 0x035a, 0x0130 },
+	{ 0x0507, 0x01ca },
+	{ 0x06b4, 0x0266 },
+	{ 0x0861, 0x0307 },
+	{ 0x0a0e, 0x03ad },
+	{ 0x0bbb, 0x0459 },
+	{ 0x0d67, 0x050f },
+	{ 0x0f14, 0x05d2 },
+	{ 0x10c1, 0x06a7 },
+	{ 0x126e, 0x0797 },
+	{ 0x141b, 0x08b9 },
+	{ 0x15c8, 0x0a50 },
+	{ 0x1775, 0x0c91 },
+	{ 0x1922, 0x0c91 }
+	/* clang-format on */
+};
+
+const dw3000_pdoa_lut_t dw3000_default_lut_ch9 = {
+	/* clang-format off */
+	{ 0xe6de, 0xf701 },
+	{ 0xe88b, 0xf7ff },
+	{ 0xea38, 0xf8d2 },
+	{ 0xebe5, 0xf98d },
+	{ 0xed92, 0xfa38 },
+	{ 0xef3f, 0xfad7 },
+	{ 0xf0ec, 0xfb6d },
+	{ 0xf299, 0xfbfc },
+	{ 0xf445, 0xfc86 },
+	{ 0xf5f2, 0xfd0c },
+	{ 0xf79f, 0xfd8f },
+	{ 0xf94c, 0xfe0f },
+	{ 0xfaf9, 0xfe8d },
+	{ 0xfca6, 0xff09 },
+	{ 0xfe53, 0xff85 },
+	{ 0x0000, 0x0000 },
+	{ 0x01ad, 0x007b },
+	{ 0x035a, 0x00f7 },
+	{ 0x0507, 0x0173 },
+	{ 0x06b4, 0x01f1 },
+	{ 0x0861, 0x0271 },
+	{ 0x0a0e, 0x02f4 },
+	{ 0x0bbb, 0x037a },
+	{ 0x0d67, 0x0404 },
+	{ 0x0f14, 0x0493 },
+	{ 0x10c1, 0x0529 },
+	{ 0x126e, 0x05c8 },
+	{ 0x141b, 0x0673 },
+	{ 0x15c8, 0x072e },
+	{ 0x1775, 0x0801 },
+	{ 0x1922, 0x08ff }
+	/* clang-format on */
+};
 
 int dw3000_calib_parse_key(struct dw3000 *dw, const char *key, void **param)
 {
@@ -207,6 +298,16 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 		return -1;
 	ant_calib = &dw->calib_data.ant[ant_rf1];
 
+	dw->llhw->hw->phy->supported.channels[4] = DW3000_SUPPORTED_CHANNELS &
+						   ~dw->restricted_channels;
+	/* Change channel if the current one is restricted. */
+	if ((1 << dw->llhw->hw->phy->current_channel) &
+	    dw->restricted_channels) {
+		config->chan =
+			ffs(dw->llhw->hw->phy->supported.channels[4]) - 1;
+		dw->llhw->hw->phy->current_channel = config->chan;
+	}
+
 	/* Convert config into index of array. */
 	chanidx = config->chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :
 				      DW3000_CALIBRATION_CHANNEL_5;
@@ -237,13 +338,19 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 	antpair_calib = &dw->calib_data.antpair[antpair];
 	/* Update PDOA offset */
 	config->pdoaOffset = antpair_calib->ch[chanidx].pdoa_offset;
+	config->pdoaLut = &antpair_calib->ch[chanidx].pdoa_lut;
 	/* Update antpair spacing */
 	config->antpair_spacing_mm_q11 = antpair_calib->spacing_mm_q11;
 
 	/* Smart TX power */
 	/* When deactivated, reset register to default value (if change occurs
 	   while already started) */
-	if (!txconfig->smart && dw->started)
+	if (!txconfig->smart && dw3000_is_active(dw))
 		dw3000_set_tx_power_register(dw, txconfig->power);
+
+	/* Update idle_dtu in case auto_sleep_margin_us changed */
+	dw->llhw->idle_dtu = dw->auto_sleep_margin_us > 0 ?
+				     US_TO_DTU(dw->auto_sleep_margin_us) :
+				     DW3000_DTU_FREQ;
 	return 0;
 }

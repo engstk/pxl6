@@ -127,16 +127,23 @@ int lwis_dpm_update_clock(struct lwis_device *lwis_dev, struct lwis_clk_setting 
 
 	for (i = 0; i < num_settings; ++i) {
 		clk_index = clk_settings[i].clk_index;
-		old_clk = clk_get_rate(lwis_dev->clocks->clk[clk_index].clk);
-		if (old_clk == clk_settings[i].frequency)
-			continue;
-
 		if (clk_index >= lwis_dev->clocks->count) {
 			dev_err(lwis_dev->dev, "%s clk index %d is invalid\n", lwis_dev->name,
 				clk_index);
 			ret = -EINVAL;
 			goto out;
 		}
+
+		if (IS_ERR(lwis_dev->clocks->clk[clk_index].clk)) {
+			dev_err(lwis_dev->dev, "%s clk is invalid\n", lwis_dev->name);
+			ret = -EINVAL;
+			goto out;
+		}
+
+		old_clk = clk_get_rate(lwis_dev->clocks->clk[clk_index].clk);
+		if (old_clk == clk_settings[i].frequency)
+			continue;
+
 		ret = clk_set_rate(lwis_dev->clocks->clk[clk_index].clk, clk_settings[i].frequency);
 		if (ret) {
 			dev_err(lwis_dev->dev, "Error updating clock %s freq: %u\n",

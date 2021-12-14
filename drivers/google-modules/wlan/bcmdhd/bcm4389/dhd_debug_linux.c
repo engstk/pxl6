@@ -515,21 +515,6 @@ dhd_os_dbg_get_feature(dhd_pub_t *dhdp, int32 *features)
 	return ret;
 }
 
-#ifdef DHD_PKT_LOGGING_DBGRING
-void
-dhd_os_dbg_urgent_pullreq(void *os_priv, int ring_id)
-{
-	linux_dbgring_info_t *ring_info;
-
-	ring_info = &((linux_dbgring_info_t *)os_priv)[ring_id];
-	cancel_delayed_work(&ring_info->work);
-	dbg_ring_poll_worker(&ring_info->work.work);
-	schedule_delayed_work(&ring_info->work, ring_info->interval);
-
-	return;
-}
-#endif /* DHD_PKT_LOGGING_DBGRING */
-
 static void
 dhd_os_dbg_pullreq(void *os_priv, int ring_id)
 {
@@ -539,6 +524,14 @@ dhd_os_dbg_pullreq(void *os_priv, int ring_id)
 	cancel_delayed_work(&ring_info->work);
 	schedule_delayed_work(&ring_info->work, 0);
 }
+
+#ifdef DHD_PKT_LOGGING_DBGRING
+void
+dhd_os_dbg_urgent_pullreq(void *os_priv, int ring_id)
+{
+	dhd_os_dbg_pullreq(os_priv, ring_id);
+}
+#endif /* DHD_PKT_LOGGING_DBGRING */
 
 int
 dhd_os_dbg_attach(dhd_pub_t *dhdp)

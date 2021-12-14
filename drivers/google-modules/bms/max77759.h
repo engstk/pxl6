@@ -145,6 +145,7 @@ struct max77759_usecase_data {
 	int ls1_en;		/* MAX20339 close LSW1 directly */
 
 	int wlc_en;		/* wlcrx/chgin coex */
+	int wlc_vbus_en;	/* b/202526678 */
 	int ext_bst_mode;	/* wlcrx+otg: b/175706836, TPS61372 P1.1+ */
 	int cpout_en;		/* wlcrx+otg: CPOUT enabled/disabled */
 	int cpout_ctl;		/* wlcrx+otg: CPOUT level 5.3V or DFLT */

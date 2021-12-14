@@ -883,7 +883,12 @@ static int fan_level_cb(struct votable *votable, void *data,
 		return 0;
 
 	if (batt_drv->fan_last_level != lvl) {
-		pr_debug("FAN_LEVEL %d->%d\n", batt_drv->fan_last_level, lvl);
+		pr_debug("FAN_LEVEL %d->%d reason=%s\n",
+			 batt_drv->fan_last_level, lvl, client ? client : "<>");
+		logbuffer_log(batt_drv->ttf_stats.ttf_log,
+			      "FAN_LEVEL %d->%d reason=%s",
+			      batt_drv->fan_last_level, lvl,
+			      client ? client : "<>");
 
 		batt_drv->fan_last_level = lvl;
 		if (batt_drv->psy)
@@ -1198,12 +1203,13 @@ static void cev_stats_init(struct gbms_charging_event *ce_data,
 	/* batt_chg_health_stats_close() will fix this */
 	cev_ts_init(&ce_data->health_stats, GBMS_STATS_AC_TI_INVALID);
 	cev_ts_init(&ce_data->health_pause_stats, GBMS_STATS_AC_TI_PAUSE);
+	cev_ts_init(&ce_data->health_dryrun_stats, GBMS_STATS_AC_TI_V2_PREDICT);
 
 	cev_ts_init(&ce_data->full_charge_stats, GBMS_STATS_AC_TI_FULL_CHARGE);
 	cev_ts_init(&ce_data->high_soc_stats, GBMS_STATS_AC_TI_HIGH_SOC);
 	cev_ts_init(&ce_data->overheat_stats, GBMS_STATS_BD_TI_OVERHEAT_TEMP);
 	cev_ts_init(&ce_data->cc_lvl_stats, GBMS_STATS_BD_TI_CUSTOM_LEVELS);
-
+	cev_ts_init(&ce_data->trickle_stats, GBMS_STATS_BD_TI_TRICKLE_CLEARED);
 }
 
 static void batt_chg_stats_start(struct batt_drv *batt_drv)
@@ -1401,6 +1407,11 @@ static void batt_chg_stats_update(struct batt_drv *batt_drv, int temp_idx,
 					   elap, cc,
 					   &ce_data->high_soc_stats);
 
+	if (batt_drv->chg_health.dry_run_deadline > 0)
+		batt_chg_stats_update_tier(batt_drv, temp_idx, ibatt_ma, temp,
+					   elap, cc,
+					   &ce_data->health_dryrun_stats);
+
 	/* --- Log tiers in SERIES below --- */
 	if (batt_drv->batt_full) {
 
@@ -1550,12 +1561,13 @@ static bool batt_chg_stats_close(struct batt_drv *batt_drv,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW);
 	const int cc_out = GPSY_GET_PROP(batt_drv->fg_psy,
 				POWER_SUPPLY_PROP_CHARGE_COUNTER);
+	const ktime_t now = get_boot_sec();
+	const ktime_t dry_run_deadline = batt_drv->chg_health.dry_run_deadline;
 
 	/* book last period to the current tier
 	 * NOTE: vbatt_idx != -1 -> temp_idx != -1
 	 */
 	if (batt_drv->vbatt_idx != -1 && batt_drv->temp_idx != -1) {
-		const ktime_t now = get_boot_sec();
 		const ktime_t elap = now - batt_drv->ce_data.last_update;
 		const int tier_idx = batt_chg_vbat2tier(batt_drv->vbatt_idx);
 		const int ibatt = GPSY_GET_PROP(batt_drv->fg_psy,
@@ -1582,6 +1594,9 @@ static bool batt_chg_stats_close(struct batt_drv *batt_drv,
 	       sizeof(batt_drv->ce_data.ce_health));
 	batt_drv->ce_data.health_stats.vtier_idx =
 				batt_chg_health_vti(&batt_drv->chg_health);
+	batt_drv->ce_data.health_dryrun_stats.vtier_idx =
+		(now > dry_run_deadline) ? GBMS_STATS_AC_TI_V2_PREDICT_SUCCESS :
+						 GBMS_STATS_AC_TI_V2_PREDICT;
 
 	/* TODO: add a field to ce_data to qual weird charge sessions */
 	publish = force || batt_chg_stats_qual(batt_drv);
@@ -1877,6 +1892,12 @@ static int batt_chg_stats_cstr(char *buff, int size,
 					    soc_in, soc_next);
 	}
 
+	/* Does not currently check MSC_HEALTH */
+	if (ce_data->health_dryrun_stats.soc_in != -1)
+		len += batt_chg_tier_stats_cstr(&buff[len], size - len,
+						&ce_data->health_dryrun_stats,
+						verbose);
+
 	if (ce_data->full_charge_stats.soc_in != -1)
 		len += batt_chg_tier_stats_cstr(&buff[len], size - len,
 						&ce_data->full_charge_stats,
@@ -1895,6 +1916,14 @@ static int batt_chg_stats_cstr(char *buff, int size,
 	if (ce_data->cc_lvl_stats.soc_in != -1)
 		len += batt_chg_tier_stats_cstr(&buff[len], size - len,
 						&ce_data->cc_lvl_stats,
+						verbose);
+
+	/* If bd_clear triggers, we need to know about it even if trickle hasn't
+	 * triggered
+	 */
+	if (ce_data->trickle_stats.soc_in != -1 || ce_data->bd_clear_trickle)
+		len += batt_chg_tier_stats_cstr(&buff[len], size - len,
+						&ce_data->trickle_stats,
 						verbose);
 
 	return len;
@@ -2031,6 +2060,8 @@ static inline void batt_reset_rest_state(struct batt_chg_health *chg_health)
 		chg_health->rest_state = CHG_HEALTH_INACTIVE;
 		chg_health->rest_deadline = 0;
 	}
+
+	chg_health->dry_run_deadline = 0;
 }
 
 /* should not reset rl state */
@@ -2549,7 +2580,7 @@ done_no_op:
 		   now, rest->rest_deadline, rest->always_on_soc, ttf,
 		   rest->rest_state, rest_state, fv_uv, cc_max);
 	logbuffer_log(batt_drv->ttf_stats.ttf_log,
-		      "MSC_HEALTH: now=%lld deadline=%lld aon_soc=%d ttf=%lld state=%d->%d fv_uv=%d, cc_max=%d\n",
+		      "MSC_HEALTH: now=%lld deadline=%lld aon_soc=%d ttf=%lld state=%d->%d fv_uv=%d, cc_max=%d",
 		      now, rest->rest_deadline, rest->always_on_soc,
 		      ttf, rest->rest_state, rest_state, fv_uv, cc_max);
 
@@ -2879,10 +2910,14 @@ static void ssoc_change_state(struct batt_ssoc_state *ssoc_state, bool ben)
 	ssoc_state->buck_enabled = ben;
 }
 
-static void bd_trickle_reset(struct batt_ssoc_state *ssoc_state)
+static void bd_trickle_reset(struct batt_ssoc_state *ssoc_state,
+			     struct gbms_charging_event *ce_data)
 {
 	ssoc_state->bd_trickle_cnt = 0;
 	ssoc_state->disconnect_time = 0;
+
+	/* Set to false in cev_stats_init */
+	ce_data->bd_clear_trickle = true;
 }
 
 static void batt_prlog_din(union gbms_charger_state *chg_state, int log_level)
@@ -2895,6 +2930,13 @@ static void batt_prlog_din(union gbms_charger_state *chg_state, int log_level)
 		   gbms_chg_type_s(chg_state->f.chg_type),
 		   chg_state->f.vchrg,
 		   chg_state->f.icl);
+}
+
+static bool chg_state_is_disconnected(union gbms_charger_state *chg_state)
+{
+	return ((chg_state->f.flags & GBMS_CS_FLAG_BUCK_EN) == 0) &&
+	       (chg_state->f.chg_status == POWER_SUPPLY_STATUS_DISCHARGING ||
+	       chg_state->f.chg_status == POWER_SUPPLY_STATUS_UNKNOWN);
 }
 
 /* called holding chg_lock */
@@ -2915,7 +2957,7 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 	batt_prlog_din(chg_state, BATT_PRLOG_ALWAYS);
 
 	/* disconnect! */
-	if ((batt_drv->chg_state.f.flags & GBMS_CS_FLAG_BUCK_EN) == 0) {
+	if (chg_state_is_disconnected(chg_state)) {
 		const qnum_t ssoc_delta = ssoc_get_delta(batt_drv);
 
 		if (batt_drv->ssoc_state.buck_enabled == 0)
@@ -4170,6 +4212,31 @@ static ssize_t batt_set_chg_deadline(struct device *dev,
 static const DEVICE_ATTR(charge_deadline, 0664, batt_show_chg_deadline,
 						batt_set_chg_deadline);
 
+static ssize_t charge_deadline_dryrun_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv =
+		(struct batt_drv *)power_supply_get_drvdata(psy);
+	long long deadline_s;
+
+	/* API works in seconds */
+	deadline_s = simple_strtoll(buf, NULL, 10);
+
+	mutex_lock(&batt_drv->chg_lock);
+	if (!batt_drv->ssoc_state.buck_enabled || deadline_s < 0) {
+		mutex_unlock(&batt_drv->chg_lock);
+		return -EINVAL;
+	}
+	batt_drv->chg_health.dry_run_deadline = get_boot_sec() + deadline_s;
+	mutex_unlock(&batt_drv->chg_lock);
+
+	return count;
+}
+
+static DEVICE_ATTR_WO(charge_deadline_dryrun);
+
 enum batt_ssoc_status {
 	BATT_SSOC_STATUS_UNKNOWN = 0,
 	BATT_SSOC_STATUS_CONNECTED = 1,
@@ -4391,7 +4458,7 @@ static ssize_t bd_clear_store(struct device *dev,
 		return ret;
 
 	if (val)
-		bd_trickle_reset(&batt_drv->ssoc_state);
+		bd_trickle_reset(&batt_drv->ssoc_state, &batt_drv->ce_data);
 
 	return count;
 }
@@ -4610,6 +4677,10 @@ static int batt_init_fs(struct batt_drv *batt_drv)
 	if (ret != 0)
 		dev_err(&batt_drv->psy->dev, "Failed to create ac_soc\n");
 
+	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_deadline_dryrun);
+	if (ret != 0)
+		dev_err(&batt_drv->psy->dev, "Failed to create chg_deadline_dryrun\n");
+
 	/* time to full */
 	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ttf_stats);
 	if (ret)
@@ -4692,10 +4763,10 @@ static int batt_init_fs(struct batt_drv *batt_drv)
 	debugfs_create_u32("debug_level", 0644, de, &debug_printk_prlog);
 	debugfs_create_file("cycle_count_sync", 0600, de, batt_drv,
 			    &cycle_count_bins_sync_fops);
-	debugfs_create_file("ssoc_gdf", 0600, de, batt_drv, &debug_ssoc_gdf_fops);
-	debugfs_create_file("ssoc_uic", 0600, de, batt_drv, &debug_ssoc_uic_fops);
-	debugfs_create_file("ssoc_rls", 0400, de, batt_drv, &debug_ssoc_rls_fops);
-	debugfs_create_file("ssoc_uicurve", 0600, de, batt_drv,
+	debugfs_create_file("ssoc_gdf", 0644, de, batt_drv, &debug_ssoc_gdf_fops);
+	debugfs_create_file("ssoc_uic", 0644, de, batt_drv, &debug_ssoc_uic_fops);
+	debugfs_create_file("ssoc_rls", 0444, de, batt_drv, &debug_ssoc_rls_fops);
+	debugfs_create_file("ssoc_uicurve", 0644, de, batt_drv,
 			    &debug_ssoc_uicurve_cstr_fops);
 	debugfs_create_file("force_psy_update", 0400, de, batt_drv,
 			    &debug_force_psy_update_fops);
@@ -5232,7 +5303,8 @@ static int gbatt_get_status(struct batt_drv *batt_drv,
 
 	/* ->buck_enabled = 1, from here ownward device is connected */
 
-	if (batt_drv->batt_health == POWER_SUPPLY_HEALTH_OVERHEAT) {
+	if (batt_drv->batt_health == POWER_SUPPLY_HEALTH_OVERHEAT &&
+	    !gbms_temp_defend_dry_run(false, false)) {
 		val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		return 0;
 	}

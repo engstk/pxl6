@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,7 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.  Please contact Qorvo to inquire about licensing terms.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #include "fira_cmac.h"
@@ -32,7 +32,6 @@ int fira_digest(const u8 *key, unsigned int key_len, const u8 *data,
 		unsigned int data_len, u8 *out)
 {
 	struct crypto_shash *tfm;
-	SHASH_DESC_ON_STACK(desc, tfm);
 	int r;
 
 	tfm = crypto_alloc_shash("cmac(aes)", 0, 0);
@@ -43,13 +42,18 @@ int fira_digest(const u8 *key, unsigned int key_len, const u8 *data,
 	if (r)
 		goto out;
 
-	desc->tfm = tfm;
+	do {
+		/* tfm need to be allocated for kernel < 4.20, so don't remove
+		 * this do..while block. */
+		SHASH_DESC_ON_STACK(desc, tfm);
+		desc->tfm = tfm;
 
-	r = crypto_shash_init(desc);
-	if (r)
-		goto out;
+		r = crypto_shash_init(desc);
+		if (r)
+			goto out;
 
-	r = crypto_shash_finup(desc, data, data_len, out);
+		r = crypto_shash_finup(desc, data, data_len, out);
+	} while (0);
 
 out:
 	crypto_free_shash(tfm);

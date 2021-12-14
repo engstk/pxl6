@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,11 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * 802.15.4 mac common part sublayer, fira ranging region.
- *
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef NET_FIRA_REGION_PARAMS_H
@@ -35,6 +31,11 @@
 #define FIRA_KEY_SIZE_MIN 16
 #define FIRA_CONTROLEES_MAX 16
 #define FIRA_RX_ANTENNA_PAIR_INVALID 0xff
+/*
+ * In BPRF, frame is at most 127
+ * 127 - (MHR + HIE + HT + PIE_Header + V_OUI + MIC + CRC)
+ */
+#define FIRA_DATA_PAYLOAD_SIZE_MAX 84
 
 enum fira_device_type {
 	FIRA_DEVICE_TYPE_CONTROLEE,
@@ -128,12 +129,51 @@ enum fira_sts_config {
 	FIRA_STS_CONFIG_DYNAMIC_INDIVIDUAL_KEY,
 };
 
+enum fira_controlee_state {
+	FIRA_CONTROLEE_STATE_RUNNING,
+	FIRA_CONTROLEE_STATE_PENDING_STOP,
+	FIRA_CONTROLEE_STATE_PENDING_DEL,
+};
+
 struct fira_controlee {
 	u32 sub_session_id;
 	__le16 short_addr;
 	u16 sub_session_key_len;
 	char sub_session_key[FIRA_KEY_SIZE_MAX];
 	bool sub_session;
+	enum fira_controlee_state state;
+};
+
+enum fira_session_controlee_management_flags {
+	FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_UPDATE = 1,
+	FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_STOP = 2,
+};
+
+/**
+ * enum fira_ranging_status - Ranging status: success or failure reason.
+ * @FIRA_STATUS_RANGING_INTERNAL_ERROR: Implementation specific error.
+ * @FIRA_STATUS_RANGING_SUCCESS: Ranging info are valid.
+ * @FIRA_STATUS_RANGING_TX_FAILED: Failed to transmit UWB packet.
+ * @FIRA_STATUS_RANGING_RX_TIMEOUT: No UWB packet detected by the receiver.
+ * @FIRA_STATUS_RANGING_RX_PHY_DEC_FAILED: UWB packet channel decoding error.
+ * @FIRA_STATUS_RANGING_RX_PHY_TOA_FAILED: Failed to detect time of arrival of
+ * the UWB packet from CIR samples.
+ * @FIRA_STATUS_RANGING_RX_PHY_STS_FAILED: UWB packet STS segment mismatch.
+ * @FIRA_STATUS_RANGING_RX_MAC_DEC_FAILED: MAC CRC or syntax error.
+ * @FIRA_STATUS_RANGING_RX_MAC_IE_DEC_FAILED: IE syntax error.
+ * @FIRA_STATUS_RANGING_RX_MAC_IE_MISSING: Expected IE missing in the packet.
+ */
+enum fira_ranging_status {
+	FIRA_STATUS_RANGING_INTERNAL_ERROR = -1,
+	FIRA_STATUS_RANGING_SUCCESS = 0,
+	FIRA_STATUS_RANGING_TX_FAILED = 1,
+	FIRA_STATUS_RANGING_RX_TIMEOUT = 2,
+	FIRA_STATUS_RANGING_RX_PHY_DEC_FAILED = 3,
+	FIRA_STATUS_RANGING_RX_PHY_TOA_FAILED = 4,
+	FIRA_STATUS_RANGING_RX_PHY_STS_FAILED = 5,
+	FIRA_STATUS_RANGING_RX_MAC_DEC_FAILED = 6,
+	FIRA_STATUS_RANGING_RX_MAC_IE_DEC_FAILED = 7,
+	FIRA_STATUS_RANGING_RX_MAC_IE_MISSING = 8,
 };
 
 #endif /* NET_FIRA_REGION_PARAMS_H */

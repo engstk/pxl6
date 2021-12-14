@@ -2150,15 +2150,22 @@ static unsigned int kbase_poll(struct file *filp, poll_table *wait)
 	return 0;
 }
 
-void kbase_event_wakeup(struct kbase_context *kctx)
+void _kbase_event_wakeup(struct kbase_context *kctx, bool sync)
 {
 	KBASE_DEBUG_ASSERT(kctx);
-	dev_dbg(kctx->kbdev->dev, "Waking event queue for context %pK\n",
-		(void *)kctx);
-	wake_up_interruptible(&kctx->event_queue);
+        if(sync) {
+	    dev_dbg(kctx->kbdev->dev,
+                    "Waking event queue for context %pK (sync)\n", (void *)kctx);
+	    wake_up_interruptible_sync(&kctx->event_queue);
+        }
+        else {
+	    dev_dbg(kctx->kbdev->dev,
+                    "Waking event queue for context %pK (nosync)\n",(void *)kctx);
+	    wake_up_interruptible(&kctx->event_queue);
+        }
 }
 
-KBASE_EXPORT_TEST_API(kbase_event_wakeup);
+KBASE_EXPORT_TEST_API(_kbase_event_wakeup);
 
 #if MALI_USE_CSF
 int kbase_event_pending(struct kbase_context *ctx)
@@ -2996,7 +3003,7 @@ struct kbasep_debug_command {
 	kbasep_debug_command_func *func;
 };
 
-void kbasep_ktrace_dump_wrapper(struct kbase_device *kbdev)
+static void kbasep_ktrace_dump_wrapper(struct kbase_device *kbdev)
 {
 	KBASE_KTRACE_DUMP(kbdev);
 }

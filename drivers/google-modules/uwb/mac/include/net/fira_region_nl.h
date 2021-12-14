@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020 Qorvo US, Inc.
+ * Copyright (c) 2020-2021 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -18,10 +18,7 @@
  *
  * If you cannot meet the requirements of the GPLv2, you may not use this
  * software for any purpose without first obtaining a commercial license from
- * Qorvo.
- * Please contact Qorvo to inquire about licensing terms.
- *
- * Fira region configuration net link.
+ * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
 #ifndef FIRA_REGION_NL_H
@@ -48,6 +45,12 @@
  *	Delete controlee from the session.
  * @FIRA_CALL_SESSION_NOTIFICATION:
  *	Notify session reports.
+ * @FIRA_CALL_SESSION_GET_PARAMS:
+ *	Get session parameters.
+ * @FIRA_CALL_SESSION_GET_STATE:
+ *	Get session state.
+ * @FIRA_CALL_SESSION_GET_COUNT:
+ *	Get count of active and inactive sessions.
  * @FIRA_CALL_MAX: Internal use.
  */
 enum fira_call {
@@ -60,6 +63,10 @@ enum fira_call {
 	FIRA_CALL_NEW_CONTROLEE,
 	FIRA_CALL_DEL_CONTROLEE,
 	FIRA_CALL_SESSION_NOTIFICATION,
+	FIRA_CALL_SESSION_GET_PARAMS,
+	FIRA_CALL_SESSION_GET_STATE,
+	FIRA_CALL_SESSION_GET_COUNT,
+	FIRA_CALL_SESSION_STATE_NOTIFICATION,
 	FIRA_CALL_MAX,
 };
 
@@ -252,6 +259,8 @@ enum fira_call_attrs {
 	FIRA_CALL_ATTR_SESSION_PARAMS,
 	FIRA_CALL_ATTR_CONTROLEES,
 	FIRA_CALL_ATTR_RANGING_DATA,
+	FIRA_CALL_ATTR_SESSION_STATE,
+	FIRA_CALL_ATTR_SESSION_COUNT,
 
 	__FIRA_CALL_ATTR_AFTER_LAST,
 	FIRA_CALL_ATTR_MAX = __FIRA_CALL_ATTR_AFTER_LAST - 1
@@ -294,6 +303,8 @@ enum fira_call_attrs {
  *	Priority value, higher has more priority (1-100, default 50)
  * @FIRA_SESSION_PARAM_ATTR_RESULT_REPORT_PHASE:
  *	Disabled (0) or enabled (1, default) report phase [controller only]
+ * @FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS:
+ *      Number of measurements
  * @FIRA_SESSION_PARAM_ATTR_MR_AT_INITIATOR:
  *	Measurement report available at responder (0, default)
  *	or at initiator (1) [controller only]
@@ -368,6 +379,10 @@ enum fira_call_attrs {
  *	Report AoA elevation in result message, disabled (0, default) or enabled (1)
  * @FIRA_SESSION_PARAM_ATTR_REPORT_AOA_FOM:
  *	Report AoA FOM in result message, disabled (0, default) or enabled (1)
+ * @FIRA_SESSION_PARAM_ATTR_DATA_VENDOR_OUI:
+ *	Set the vendor OUI for custom data exchanges
+ * @FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD:
+ *	Set the data payload to send in next ranging packet
  *
  * @FIRA_SESSION_PARAM_ATTR_UNSPEC: Invalid command.
  * @__FIRA_SESSION_PARAM_ATTR_AFTER_LAST: Internal use.
@@ -429,6 +444,11 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_AZIMUTH,
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_ELEVATION,
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_FOM,
+	/* Custom Data */
+	FIRA_SESSION_PARAM_ATTR_DATA_VENDOR_OUI,
+	FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD,
+
+	FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS,
 
 	__FIRA_SESSION_PARAM_ATTR_AFTER_LAST,
 	FIRA_SESSION_PARAM_ATTR_MAX = __FIRA_SESSION_PARAM_ATTR_AFTER_LAST - 1
@@ -545,6 +565,10 @@ enum fira_ranging_data_attrs {
  *	Estimation of azimuth reliability of the participing device.
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_FOM:
  *	Estimation of elevation reliability of the participing device.
+ * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_SEQ_SENT:
+ *	Sequence number of last data sent
+ * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_RECV:
+ *	Received Data payload in the SP1 RFRAME
  *
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_UNSPEC: Invalid command.
  * @__FIRA_RANGING_DATA_MEASUREMENTS_ATTR_AFTER_LAST: Internal use.
@@ -566,6 +590,8 @@ enum fira_ranging_data_measurements_attrs {
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_PI,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_AZIMUTH_FOM,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_FOM,
+	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_SEQ_SENT,
+	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_RECV,
 
 	__FIRA_RANGING_DATA_MEASUREMENTS_ATTR_AFTER_LAST,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_MAX =
