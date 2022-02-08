@@ -4941,7 +4941,7 @@ batt_check_pairing_state(struct batt_drv *batt_drv)
 			return BATT_PAIRING_MISMATCH;
 		}
 
-		pr_info("dev_info_check: %s\n", dev_info_check);
+		pr_info("dev_info_check: %*ph\n", (int)sizeof(dev_info_check), dev_info_check);
 	}
 
 	/* new battery: pair the battery to this device */
@@ -4956,8 +4956,8 @@ batt_check_pairing_state(struct batt_drv *batt_drv)
 
 	/* recycled battery */
 	} else if (strncmp(dev_info, dev_info_check, strlen(dev_info_check))) {
-		pr_warn("dev_sn=%*s\n", (int)strlen(dev_sn), dev_sn);
-		pr_warn("dev_info=%*s\n", GBMS_DINF_LEN, dev_info);
+		pr_warn("dev_sn=%*ph\n", (int)sizeof(dev_sn), dev_sn);
+		pr_warn("dev_info=%*ph\n", (int)sizeof(dev_info), dev_info);
 		pr_warn("Battery paired to a different device\n");
 
 		return BATT_PAIRING_MISMATCH;
