@@ -514,9 +514,9 @@ static int ntfs_show_options(struct seq_file *m, struct dentry *root)
 	struct user_namespace *user_ns = seq_user_ns(m);
 
 	seq_printf(m, ",uid=%u",
-		  from_kuid_munged(user_ns, opts->fs_uid));
+		  from_kuid_munged(&init_user_ns, opts->fs_uid));
 	seq_printf(m, ",gid=%u",
-		  from_kgid_munged(user_ns, opts->fs_gid));
+		  from_kgid_munged(&init_user_ns, opts->fs_gid));
 	if (opts->fmask)
 		seq_printf(m, ",fmask=%04o", ~opts->fs_fmask_inv);
 	if (opts->dmask)
@@ -1435,7 +1435,7 @@ static struct file_system_type ntfs_fs_type = {
 	.init_fs_context	= ntfs_init_fs_context,
 	.parameters		= ntfs_fs_parameters,
 	.kill_sb		= kill_block_super,
-	.fs_flags		= FS_REQUIRES_DEV | FS_ALLOW_IDMAP,
+	.fs_flags		= FS_REQUIRES_DEV,
 };
 // clang-format on
 
