@@ -109,6 +109,7 @@ enum edgetpu_kci_code {
 	KCI_CODE_FIRMWARE_INFO = 11,
 	KCI_CODE_GET_USAGE = 12,
 	KCI_CODE_NOTIFY_THROTTLING = 13,
+	KCI_CODE_BLOCK_BUS_SPEED_CONTROL = 14,
 };
 
 /*
@@ -392,5 +393,12 @@ void edgetpu_kci_cancel_work_queues(struct edgetpu_kci *kci);
  * Returns KCI response code on success or < 0 on error (typically -ETIMEDOUT).
  */
 int edgetpu_kci_notify_throttling(struct edgetpu_dev *etdev, u32 level);
+
+/*
+ * Request the firmware to {un}block modulating bus clock speeds
+ *
+ * Used to prevent conflicts when sending a thermal policy request
+ */
+int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block);
 
 #endif /* __EDGETPU_KCI_H__ */

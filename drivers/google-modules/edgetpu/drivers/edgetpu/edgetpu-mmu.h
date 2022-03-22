@@ -37,6 +37,8 @@
 #define EDGETPU_MMU_DEVICE	(1 << 2)
 #define EDGETPU_MMU_DMABUF	(2 << 2)
 
+#define EDGETPU_MMU_COHERENT	(1 << 4)
+
 /*
  * The max possible value of token is (EDGETPU_DOMAIN_TOKEN_END - 1), which
  * shouldn't equal or exceed the bit mask EDGETPU_CONTEXT_DOMAIN_TOKEN.
@@ -75,6 +77,11 @@ edgetpu_host_dma_dir(enum dma_data_direction target_dir)
 	}
 }
 
+static inline enum dma_data_direction map_flag_to_host_dma_dir(edgetpu_map_flag_t flags)
+{
+	return edgetpu_host_dma_dir(flags & EDGETPU_MAP_DIR_MASK);
+}
+
 static inline u32 map_to_mmu_flags(edgetpu_map_flag_t flags)
 {
 	u32 ret = 0;
@@ -82,6 +89,7 @@ static inline u32 map_to_mmu_flags(edgetpu_map_flag_t flags)
 	ret |= IS_MIRRORED(flags) ? EDGETPU_MMU_VDG : EDGETPU_MMU_DIE;
 	ret |= (flags & EDGETPU_MAP_CPU_NONACCESSIBLE) ? EDGETPU_MMU_64 :
 							 EDGETPU_MMU_32;
+	ret |= (flags & EDGETPU_MAP_COHERENT) ? EDGETPU_MMU_COHERENT : 0;
 	return ret;
 }
 
@@ -145,7 +153,7 @@ void edgetpu_mmu_unmap(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
  */
 int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
 			     struct sg_table *sgt, enum dma_data_direction dir,
-			     enum edgetpu_context_id context_id);
+			     u32 mmu_flags, enum edgetpu_context_id context_id);
 void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev,
 				      tpu_addr_t iova, struct sg_table *sgt,
 				      enum dma_data_direction dir,

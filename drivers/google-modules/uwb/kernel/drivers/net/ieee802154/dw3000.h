@@ -100,6 +100,22 @@ struct dw3000_isr_data {
 	 DW3000_CHIP_PER_DTU)
 
 /**
+ * typedef dw3000_wakeup_done_cb - Wake up done handler.
+ * @dw: Driver context.
+ *
+ * Return: 0 on success, else an error.
+ */
+typedef int (*dw3000_wakeup_done_cb)(struct dw3000 *dw);
+
+/**
+ * typedef dw3000_idle_timeout_cb - Idle timeout handler.
+ * @dw: Driver context.
+ *
+ * Return: 0 on success, else an error.
+ */
+typedef int (*dw3000_idle_timeout_cb)(struct dw3000 *dw);
+
+/**
  * struct dw3000_otp_data - data read from OTP memory of DW3000 device
  * @partID: device part ID
  * @lotID: device lot ID
@@ -469,9 +485,12 @@ struct dw3000_rctu_conv {
  * @sys_time_sync: device SYS_TIME immediately after wakeup
  * @sleep_enter_dtu: DTU when entered sleep
  * @deep_sleep_state: state related to the deep sleep
- * @deep_sleep_timer: timer to wake up the chip after deep sleep
- * @timer_expired_work: work to call timer expired callback
- * @call_timer_expired: should mcps802154_timer_expired be called?
+ * @idle_timeout: true when idle_timeout_dtu is a valid date.
+ * @idle_timeout_dtu: timestamp requested to leave idle mode.
+ * @idle_timer: timer to exiting after an idle call.
+ * @timer_expired_work: call mcps802154_timer_expired outside driver kthread.
+ * @wakeup_done_cb: callback called on wakeup done.
+ * @idle_timeout_cb: callback when idle timer expired
  * @auto_sleep_margin_us: configurable automatic deep sleep margin
  * @need_ranging_clock: true if next operation need ranging clock
  *			and deep sleep cannot be used
@@ -494,7 +513,6 @@ struct dw3000_rctu_conv {
  * @sp0_rx_antenna: Special rx antenna to use for SP0, -1 if deactivated
  * @lna_pa_mode: LNA/PA configuration to use
  * @autoack: auto-ack status, true if activated
- * @ccc: CCC related data
  * @pgf_cal_running: true if pgf calibration is running
  * @stm: High-priority thread state machine
  * @rx: received skbuff and associated spinlock
@@ -553,9 +571,12 @@ struct dw3000 {
 	u32 sleep_enter_dtu;
 	/* Deep Sleep & MCPS Idle management */
 	struct dw3000_deep_sleep_state deep_sleep_state;
-	struct hrtimer deep_sleep_timer;
+	bool idle_timeout;
+	u32 idle_timeout_dtu;
+	struct hrtimer idle_timer;
 	struct work_struct timer_expired_work;
-	bool call_timer_expired;
+	dw3000_wakeup_done_cb wakeup_done_cb;
+	dw3000_idle_timeout_cb idle_timeout_cb;
 	bool need_ranging_clock;
 	int auto_sleep_margin_us;
 	/* NFCC coexistence specific context. */

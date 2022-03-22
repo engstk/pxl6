@@ -35,6 +35,7 @@
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/kernel.h>
+#include <linux/kfifo.h>
 #include <linux/module.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_device.h>
@@ -873,9 +874,13 @@ struct sec_ts_coordinate {
 	u16 major;
 	u16 minor;
 	bool palm;
-	int palm_count;
 	u8 left_event;
 	bool grip;
+	/* for debug purpose. */
+	u16 x_pressed;	/* x coord on first down timing. */
+	u16 y_pressed;	/* y coord on first down timing. */
+	ktime_t ktime_pressed;
+	ktime_t ktime_released;
 };
 
 struct sec_ts_data {
@@ -905,11 +910,7 @@ struct sec_ts_data {
 			    * in CLOCK_MONOTONIC
 			    **/
 
-	struct timespec64 time_pressed[MAX_SUPPORT_TOUCH_COUNT +
-					MAX_SUPPORT_HOVER_COUNT];
-	struct timespec64 time_released[MAX_SUPPORT_TOUCH_COUNT +
-					MAX_SUPPORT_HOVER_COUNT];
-	long time_longest;
+	s64 longest_duration; /* ms unit */
 
 	u8 lowpower_mode;
 	u8 lowpower_status;
@@ -924,7 +925,7 @@ struct sec_ts_data {
 	struct completion bus_resumed;
 	struct completion boot_completed;
 
-	int touch_count;
+	unsigned int touch_count;	/* active touch slot(s). */
 	int tx_count;
 	int rx_count;
 	int io_burstmax;
@@ -1054,11 +1055,18 @@ struct sec_ts_data {
 	unsigned char ito_test[4];		/* ito panel tx/rx chanel */
 	unsigned char check_multi;
 	unsigned int multi_count;		/* multi touch count */
+	unsigned int palm_count;
 	unsigned int wet_count;			/* wet mode count */
 	unsigned int dive_count;		/* dive mode count */
-	unsigned int comm_err_count;	/* comm error count */
-	unsigned int io_err_count;	/* io error count */
-	unsigned int checksum_result;	/* checksum result */
+	unsigned int comm_err_count;		/* comm error count */
+	unsigned int io_err_count;		/* io error count */
+	unsigned int hw_reset_count;
+	/*
+	 * accumulated count of pressed
+	 * touch from resume to suspend.
+	 */
+	unsigned int pressed_count;
+	unsigned int checksum_result;		/* checksum result */
 	unsigned char module_id[4];
 	unsigned int all_finger_count;
 	unsigned int all_force_count;
@@ -1214,6 +1222,7 @@ struct sec_ts_plat_data {
 	u8 mm2px;
 };
 
+void sec_ts_debug_dump(struct sec_ts_data *ts);
 int sec_ts_stop_device(struct sec_ts_data *ts);
 int sec_ts_start_device(struct sec_ts_data *ts);
 int sec_ts_hw_reset(struct sec_ts_data *ts, bool wait_for_done);

@@ -29,24 +29,6 @@
 #include "nfcc_coex_session.h"
 
 /**
- * enum nfcc_coex_state - State of the unique session.
- * @NFCC_COEX_STATE_UNUSED:
- *	Session is unused by access and not started too.
- * @NFCC_COEX_STATE_STARTED:
- *	Session is started but not used by access right now.
- * @NFCC_COEX_STATE_ACCESSING:
- *	Session is currently used on an access.
- * @NFCC_COEX_STATE_STOPPING:
- *	Session is currently used for the last access.
- */
-enum nfcc_coex_state {
-	NFCC_COEX_STATE_UNUSED,
-	NFCC_COEX_STATE_STARTED,
-	NFCC_COEX_STATE_ACCESSING,
-	NFCC_COEX_STATE_STOPPING,
-};
-
-/**
  * struct nfcc_coex_local - Local context.
  */
 struct nfcc_coex_local {
@@ -66,10 +48,6 @@ struct nfcc_coex_local {
 	 * @session: Unique session on the NFCC controller.
 	 */
 	struct nfcc_coex_session session;
-	/**
-	 * @state: State of the unique session.
-	 */
-	enum nfcc_coex_state state;
 };
 
 static inline struct nfcc_coex_local *
@@ -83,6 +61,14 @@ access_to_local(struct mcps802154_access *access)
 {
 	return container_of(access, struct nfcc_coex_local, access);
 }
+
+/**
+ * nfcc_coex_set_state() - Set the new state.
+ * @local: NFCC coex context.
+ * @new_state: New nfcc_coex state.
+ */
+void nfcc_coex_set_state(struct nfcc_coex_local *local,
+			 enum nfcc_coex_state new_state);
 
 /**
  * nfcc_coex_report() - Send notification to upper layer.

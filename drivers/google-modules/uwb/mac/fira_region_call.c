@@ -66,13 +66,12 @@ static const struct nla_policy fira_session_param_nla_policy[FIRA_SESSION_PARAM_
 	[FIRA_SESSION_PARAM_ATTR_SLOT_DURATION_RSTU] = { .type = NLA_U32 },
 	[FIRA_SESSION_PARAM_ATTR_BLOCK_DURATION_MS] = { .type = NLA_U32 },
 	[FIRA_SESSION_PARAM_ATTR_ROUND_DURATION_SLOTS] = { .type = NLA_U32 },
-	[FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDING_VALUE] = { .type = NLA_U32 },
+	[FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDE_LENGTH] = {
+		.type = NLA_U32, .validation_type = NLA_VALIDATE_MAX,
+		.max = FIRA_BLOCK_STRIDE_LEN_MAX },
+	[FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS] = { .type = NLA_U32 },
 	[FIRA_SESSION_PARAM_ATTR_MAX_RR_RETRY] = { .type = NLA_U32 },
 	[FIRA_SESSION_PARAM_ATTR_ROUND_HOPPING] = {
-		.type = NLA_U8, .validation_type = NLA_VALIDATE_MAX,
-		.max = FIRA_BOOLEAN_MAX
-	},
-	[FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDING] = {
 		.type = NLA_U8, .validation_type = NLA_VALIDATE_MAX,
 		.max = FIRA_BOOLEAN_MAX
 	},
@@ -273,6 +272,7 @@ static int fira_session_start(struct fira_local *local, u32 session_id,
 	if (!active) {
 		u32 now_dtu;
 		int initiation_time_dtu;
+		int block_stride_len;
 		int r;
 
 		r = fira_crypto_derive_per_session(local, session);
@@ -305,6 +305,12 @@ static int fira_session_start(struct fira_local *local, u32 session_id,
 		} else {
 			initiation_time_dtu = 0;
 		}
+
+		if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER)
+			block_stride_len = session->params.block_stride_len;
+		else
+			block_stride_len = 0;
+
 		session->block_start_dtu = now_dtu + initiation_time_dtu;
 		session->block_index = 0;
 		session->sts_index = session->crypto.sts_index_init;
@@ -312,11 +318,13 @@ static int fira_session_start(struct fira_local *local, u32 session_id,
 			session->params.round_hopping;
 		session->round_index = 0;
 		session->next_round_index = 0;
+		session->block_stride_len = block_stride_len;
+		session->next_block_stride_len = block_stride_len;
 		session->synchronised = false;
 		session->last_access_timestamp_dtu = -1;
 		session->last_access_duration_dtu = 0;
-		session->last_block_index = -1;
-		fira_session_round_hopping(session);
+		session->last_block_index = -(block_stride_len + 1);
+		fira_session_update_round_index(session);
 		session->tx_ant = -1;
 		session->rx_ant_pair[0] = -1;
 		session->rx_ant_pair[1] = -1;
@@ -426,14 +434,25 @@ static int fira_session_deinit(struct fira_local *local, u32 session_id,
 	return 0;
 }
 
-static int is_allowed_param_active(int param)
+static int is_allowed_param_active(enum fira_device_type dev_type, int param)
 {
-	/* This array contains attributes which can be changed in an active
-	   session */
-	static const int allowed_param_active[] = {
+	/* These arrays contain attributes which can be changed in an active
+	   controller or controlee session */
+	static const int allowed_controller_param_active[] = {
+		FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD,
+		FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDE_LENGTH,
+	};
+	static const int allowed_controlee_param_active[] = {
 		FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD,
 	};
-	static const int num_allowed = ARRAY_SIZE(allowed_param_active);
+	const int *allowed_param_active =
+		dev_type == FIRA_DEVICE_TYPE_CONTROLLER ?
+			allowed_controller_param_active :
+			allowed_controlee_param_active;
+	const int num_allowed =
+		dev_type == FIRA_DEVICE_TYPE_CONTROLLER ?
+			ARRAY_SIZE(allowed_controller_param_active) :
+			ARRAY_SIZE(allowed_controlee_param_active);
 	int i;
 
 	for (i = 0; i < num_allowed; i++)
@@ -474,17 +493,18 @@ static int fira_session_set_parameters(struct fira_local *local, u32 session_id,
 	if (r)
 		return r;
 
+	p = &session->params;
+
 	if (active) {
 		int i;
 		for (i = FIRA_SESSION_PARAM_ATTR_UNSPEC + 1;
 		     i <= FIRA_SESSION_PARAM_ATTR_MAX; i++) {
-			if (attrs[i] && !is_allowed_param_active(i))
+			if (attrs[i] &&
+			    !is_allowed_param_active(p->device_type, i))
 
 				return -EBUSY;
 		}
 	}
-
-	p = &session->params;
 
 #define P(attr, member, type, conv)                                     \
 	do {                                                            \
@@ -529,6 +549,7 @@ static int fira_session_set_parameters(struct fira_local *local, u32 session_id,
 	/* Behaviour parameters. */
 	P(MAX_RR_RETRY, max_rr_retry, u32, x);
 	P(ROUND_HOPPING, round_hopping, u8, !!x);
+	P(BLOCK_STRIDE_LENGTH, block_stride_len, u32, x);
 	P(PRIORITY, priority, u8, x);
 	P(RESULT_REPORT_PHASE, result_report_phase, u8, !!x);
 	P(MAX_NUMBER_OF_MEASUREMENTS, max_number_of_measurements, u16, x);
@@ -621,43 +642,6 @@ static int fira_session_get_state(struct fira_local *local, u32 session_id)
 		goto nla_put_failure;
 
 	if (nla_put_u8(msg, FIRA_CALL_ATTR_SESSION_STATE, state))
-		goto nla_put_failure;
-
-	return mcps802154_region_call_reply(local->llhw, msg);
-
-nla_put_failure:
-	kfree_skb(msg);
-	return -ENOBUFS;
-
-}
-
-/**
- * fira_session_get_count() - Get count of active and inactive sessions.
- * @local: FiRa context.
- *
- * Return: 0 or error.
- */
-static int fira_session_get_count(struct fira_local *local)
-{
-	struct fira_session *session;
-	struct sk_buff *msg;
-	uint8_t count = 0;
-
-	list_for_each_entry(session, &local->inactive_sessions, entry) {
-		count++;
-	}
-
-	list_for_each_entry(session, &local->active_sessions, entry) {
-		count++;
-	}
-
-	msg = mcps802154_region_call_alloc_reply_skb(
-		local->llhw, &local->region, FIRA_CALL_SESSION_GET_COUNT,
-		NLMSG_DEFAULT_SIZE);
-	if (!msg)
-		return -ENOMEM;
-
-	if (nla_put_u8(msg, FIRA_CALL_ATTR_SESSION_COUNT, count))
 		goto nla_put_failure;
 
 	return mcps802154_region_call_reply(local->llhw, msg);
@@ -899,8 +883,111 @@ static int fira_manage_controlees(struct fira_local *local, u32 call_id,
 int fira_get_capabilities(struct fira_local *local,
 			  const struct genl_info *info)
 {
-	/* TODO: inform netlink about capabilities. */
-	return 0;
+	struct sk_buff *msg;
+	struct nlattr *capabilities;
+
+	if (!info)
+		return 0;
+
+	msg = mcps802154_region_call_alloc_reply_skb(local->llhw,
+						     &local->region,
+						     FIRA_CALL_GET_CAPABILITIES,
+						     NLMSG_DEFAULT_SIZE);
+	if (!msg)
+		return -ENOMEM;
+
+	capabilities = nla_nest_start(msg, FIRA_CALL_ATTR_CAPABILITIES);
+	if (!capabilities) {
+		goto nla_put_failure;
+	}
+
+#define P(name, type, value)                                                   \
+	do {                                                                   \
+		if (nla_put_##type(msg, FIRA_CAPABILITY_ATTR_##name, value)) { \
+			goto nla_put_failure;                                  \
+		}                                                              \
+	} while (0)
+#define F(name)                                                       \
+	do {                                                          \
+		if (nla_put_flag(msg, FIRA_CAPABILITY_ATTR_##name)) { \
+			goto nla_put_failure;                         \
+		}                                                     \
+	} while (0)
+
+	/* Main session capabilities. */
+	P(FIRA_PHY_VERSION_RANGE, u32, 0x01010101);
+	P(FIRA_MAC_VERSION_RANGE, u32, 0x01010101);
+	P(DEVICE_CLASS, u8, 1);
+	F(DEVICE_TYPE_CONTROLEE_RESPONDER);
+	F(DEVICE_TYPE_CONTROLLER_INITIATOR);
+	F(MULTI_NODE_MODE_UNICAST);
+	F(MULTI_NODE_MODE_ONE_TO_MANY);
+	F(RANGING_ROUND_USAGE_DS_TWR);
+	P(NUMBER_OF_CONTROLEES_MAX, u32, FIRA_CONTROLEES_MAX);
+	/* Behaviour. */
+	F(ROUND_HOPPING);
+	F(BLOCK_STRIDING);
+	/* Radio. */
+	P(CHANNEL_NUMBER, u16,
+	  local->llhw->hw->phy->supported
+		  .channels[local->llhw->hw->phy->current_page]);
+	F(RFRAME_CONFIG_SP1);
+	F(RFRAME_CONFIG_SP3);
+	F(PRF_MODE_BPRF);
+	F(PREAMBLE_DURATION_64);
+	F(SFD_ID_2);
+	F(NUMBER_OF_STS_SEGMENTS_0);
+	F(NUMBER_OF_STS_SEGMENTS_1);
+	F(PSDU_DATA_RATE_6M81);
+	F(BPRF_PHR_DATA_RATE_850K);
+	F(TX_ADAPTIVE_PAYLOAD_POWER);
+	/* Antenna. */
+	P(RX_ANTENNA_PAIRS, u32, local->llhw->rx_antenna_pairs);
+	P(TX_ANTENNAS, u32, local->llhw->tx_antennas);
+	/* STS and crypto capabilities. */
+	F(STS_CONFIG_STATIC);
+	/* Report. */
+	F(AOA_AZIMUTH);
+	F(AOA_ELEVATION);
+	F(AOA_FOM);
+#undef F
+#undef P
+
+	nla_nest_end(msg, capabilities);
+	return mcps802154_region_call_reply(local->llhw, msg);
+nla_put_failure:
+	kfree_skb(msg);
+	return -ENOBUFS;
+}
+
+int fira_session_get_count(struct fira_local *local)
+{
+	struct fira_session *session;
+	struct sk_buff *msg;
+	u32 count = 0;
+
+	list_for_each_entry (session, &local->inactive_sessions, entry) {
+		count++;
+	}
+
+	list_for_each_entry (session, &local->active_sessions, entry) {
+		count++;
+	}
+
+	msg = mcps802154_region_call_alloc_reply_skb(
+		local->llhw, &local->region, FIRA_CALL_SESSION_GET_COUNT,
+		NLMSG_DEFAULT_SIZE);
+	if (!msg)
+		return -ENOMEM;
+
+	if (nla_put_u32(msg, FIRA_CALL_ATTR_SESSION_COUNT, count))
+		goto nla_put_failure;
+
+	return mcps802154_region_call_reply(local->llhw, msg);
+
+nla_put_failure:
+	kfree_skb(msg);
+	return -ENOBUFS;
 }
 
 int fira_session_control(struct fira_local *local, u32 call_id,

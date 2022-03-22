@@ -806,11 +806,18 @@ static int p9221_send_ccreset(struct p9221_charger_data *chgr)
 
 static int p9412_send_ccreset(struct p9221_charger_data *chgr)
 {
-	int ret;
+	int ret = 0;
 
 	dev_info(&chgr->client->dev, "Send CC reset\n");
 
 	mutex_lock(&chgr->cmd_lock);
+
+	if (chgr->cc_reset_pending) {
+		mutex_unlock(&chgr->cmd_lock);
+		goto error_done;
+	}
+
+	chgr->cc_reset_pending = true;
 
 	ret = chgr->reg_write_8(chgr, P9412_COM_PACKET_TYPE_ADDR,
 				CHANNEL_RESET_PACKET_TYPE);
@@ -820,6 +827,25 @@ static int p9412_send_ccreset(struct p9221_charger_data *chgr)
 
 	mutex_unlock(&chgr->cmd_lock);
 
+	if (ret < 0) {
+		chgr->cc_reset_pending = false;
+		goto error_done;
+	}
+
+	/* ccreset needs 100ms, so set the timeout to 500ms */
+	wait_event_timeout(chgr->ccreset_wq, chgr->cc_reset_pending == false,
+			   msecs_to_jiffies(500));
+
+	if (chgr->cc_reset_pending) {
+		/* TODO: offline or command failed? */
+		chgr->cc_reset_pending = false;
+		ret = -ETIMEDOUT;
+	}
+
+error_done:
+	if (ret != 0)
+		dev_err(&chgr->client->dev, "Error sending CC reset (%d)\n",
+			ret);
 	return ret;
 }
 
@@ -1191,6 +1217,7 @@ static int p9412_capdiv_en(struct p9221_charger_data *chgr, u8 mode)
 
 	return ((cdmode & mask) == mask) ? 0 :  -ETIMEDOUT;
 }
+
 
 static int p9221_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 {

@@ -17,6 +17,8 @@
 /* mmap offsets for logging and tracing buffers */
 #define EDGETPU_MMAP_LOG_BUFFER_OFFSET 0x1B00000
 #define EDGETPU_MMAP_TRACE_BUFFER_OFFSET 0x1C00000
+#define EDGETPU_MMAP_LOG1_BUFFER_OFFSET 0x1D00000
+#define EDGETPU_MMAP_TRACE1_BUFFER_OFFSET 0x1E00000
 
 /* EdgeTPU map flag macros */
 
@@ -40,11 +42,12 @@ typedef __u32 edgetpu_map_flag_t;
 /* Offset and mask to set the PBHA bits of IOMMU mappings */
 #define EDGETPU_MAP_ATTR_PBHA_SHIFT	5
 #define EDGETPU_MAP_ATTR_PBHA_MASK	0xf
+/* Create coherent mapping of the buffer */
+#define EDGETPU_MAP_COHERENT		(1u << 9)
 
 /* External mailbox types */
 #define EDGETPU_EXT_MAILBOX_TYPE_TZ		1
 #define EDGETPU_EXT_MAILBOX_TYPE_GSA		2
-#define EDGETPU_EXT_MAILBOX_TYPE_DSP		3
 
 struct edgetpu_map_ioctl {
 	__u64 host_address;	/* user-space address to be mapped */
@@ -78,7 +81,12 @@ struct edgetpu_map_ioctl {
 	 *               1 = Skip CPU sync.
 	 *             Note: This bit is ignored on the map call.
 	 *   [8:5]   - Value of PBHA bits for IOMMU mappings. For Abrolhos only.
-	 *   [31:9]  - RESERVED
+	 *   [9:9]   - Coherent Mapping:
+	 *              0 = Create non-coherent mappings of the buffer.
+	 *              1 = Create coherent mappings of the buffer.
+	 *             Note: this attribute may be ignored on platforms where
+	 *             the TPU is not I/O coherent.
+	 *   [31:10]  - RESERVED
 	 */
 	edgetpu_map_flag_t flags;
 	/*
@@ -289,7 +297,7 @@ struct edgetpu_map_dmabuf_ioctl {
 	 */
 	__u64 device_address;
 	/* A dma-buf FD. */
-	int dmabuf_fd;
+	__s32 dmabuf_fd;
 	/*
 	 * Flags indicating mapping attributes. See edgetpu_map_ioctl.flags for
 	 * details.

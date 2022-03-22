@@ -58,6 +58,7 @@ struct dw3000_state {
 	wait_queue_head_t work_wq;
 	/* Enqueue generic mutex */
 	struct mutex mtx;
+	spinlock_t lock;
 };
 
 /* Event handler of the state machine */

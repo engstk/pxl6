@@ -1242,6 +1242,9 @@ static int bd_fan_calculate_level(struct bd_data *bd_state)
 	long long temp_avg = 0;
 	int bd_fan_level = FAN_LVL_NOT_CARE;
 
+	if (gbms_temp_defend_dry_run(false, false))
+		return FAN_LVL_NOT_CARE;
+
 	if (bd_state->time_sum)
 		temp_avg = bd_state->temp_sum / bd_state->time_sum;
 

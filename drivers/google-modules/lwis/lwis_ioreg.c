@@ -380,6 +380,11 @@ int lwis_ioreg_io_entry_rw(struct lwis_ioreg_device *ioreg_dev, struct lwis_io_e
 				entry->rw.offset);
 		}
 	} else if (entry->type == LWIS_IO_ENTRY_WRITE_BATCH) {
+		if (ioreg_dev->base_dev.is_read_only) {
+			dev_err(ioreg_dev->base_dev.dev, "Device is read only\n");
+			return -EPERM;
+		}
+
 		index = entry->rw_batch.bid;
 		block = get_block_by_idx(ioreg_dev, index);
 		if (IS_ERR_OR_NULL(block)) {
@@ -489,6 +494,11 @@ int lwis_ioreg_write(struct lwis_ioreg_device *ioreg_dev, int index, uint64_t of
 	uint64_t value_mask;
 
 	BUG_ON(!ioreg_dev);
+
+	if (ioreg_dev->base_dev.is_read_only) {
+		dev_err(ioreg_dev->base_dev.dev, "Device is read only\n");
+		return -EPERM;
+	}
 
 	block = get_block_by_idx(ioreg_dev, index);
 	if (IS_ERR_OR_NULL(block)) {

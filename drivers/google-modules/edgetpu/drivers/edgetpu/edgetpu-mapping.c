@@ -152,3 +152,21 @@ void edgetpu_mappings_show(struct edgetpu_mapping_root *mappings,
 
 	edgetpu_mapping_unlock(mappings);
 }
+
+size_t edgetpu_mappings_total_size(struct edgetpu_mapping_root *mappings)
+{
+	struct rb_node *node;
+	size_t total = 0;
+
+	edgetpu_mapping_lock(mappings);
+
+	for (node = rb_first(&mappings->rb); node; node = rb_next(node)) {
+		struct edgetpu_mapping *map =
+			container_of(node, struct edgetpu_mapping, node);
+
+		total += map->map_size;
+	}
+
+	edgetpu_mapping_unlock(mappings);
+	return total;
+}

@@ -434,11 +434,8 @@ static int pca9468_wlc_ramp_down_vout(struct pca9468_charger *pca9468,
 {
 	const int ramp_down_step = WLC_VOUT_CFG_STEP;
 	union power_supply_propval pro_val;
+	int vout = 0, vout_target = pca9468->wlc_ramp_out_vout_target;
 	int ret, vbatt;
-	int vout = 0;
-
-	if (!pca9468->wlc_ramp_out_vout)
-		return 0;
 
 	while (true) {
 		vbatt = pca9468_read_adc(pca9468, ADCCH_VBAT);
@@ -454,14 +451,14 @@ static int pca9468_wlc_ramp_down_vout(struct pca9468_charger *pca9468,
 			break;
 		}
 
-		if (pro_val.intval <= vbatt * 4)
-			return 0;
+		if (!pca9468->wlc_ramp_out_vout_target)
+			vout_target = vbatt * 4;
 
 		if (!vout)
 			vout = pro_val.intval;
-		if (vout < vbatt * 4) {
+		if (vout < vout_target) {
 			pr_debug("%s: underflow vout=%d, vbatt=%d (target=%d)\n", __func__,
-			         vout, vbatt, vbatt * 4);
+			         vout, vbatt, vout_target);
 			return 0;
 		}
 
@@ -572,9 +569,6 @@ static int pca9468_set_charging(struct pca9468_charger *pca9468, bool enable)
 
 			wlc_psy = pca9468_get_rx_psy(pca9468);
 			if (wlc_psy) {
-				union power_supply_propval pro_val;
-				int vbatt;
-
 				ret = pca9468_wlc_ramp_down_iin(pca9468, wlc_psy);
 				if (ret < 0)
 					dev_err(pca9468->dev, "cannot ramp out iin (%d)\n", ret);
@@ -582,21 +576,6 @@ static int pca9468_set_charging(struct pca9468_charger *pca9468, bool enable)
 				ret = pca9468_wlc_ramp_down_vout(pca9468, wlc_psy);
 				if (ret < 0)
 					dev_err(pca9468->dev, "cannot ramp out vout (%d)\n", ret);
-
-				/* last step will always set vout to 4 * vbatt */
-				vbatt = pca9468_read_adc(pca9468, ADCCH_VBAT);
-				if (vbatt > 0) {
-					pro_val.intval = vbatt * 4;
-
-					ret = power_supply_set_property(wlc_psy,
-							POWER_SUPPLY_PROP_VOLTAGE_NOW,
-							&pro_val);
-
-					dev_info(pca9468->dev, "set rx voltage to %d, vbatt=%d (%d)\n",
-						 pro_val.intval, vbatt, ret);
-				} else {
-					dev_info(pca9468->dev, "cannot set rx voltage, vbatt=%d\n", vbatt);
-				}
 			}
 		}
 
@@ -1840,7 +1819,7 @@ static int pca9468_set_wireless_dc(struct pca9468_charger *pca9468, int vbat)
 
 	/* ta_cur is ignored */
 	logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
-			"%s: iin_cc=%d, ta_vol=%d ta_max_vol=%d\n", __func__,
+			"%s: iin_cc=%d, ta_vol=%d ta_max_vol=%d", __func__,
 			pca9468->iin_cc, pca9468->ta_vol, pca9468->ta_max_vol);
 
 	return 0;
@@ -1936,22 +1915,30 @@ error:
 /*
  * The caller was triggered from pca9468_apply_new_iin(), return to the
  * calling CC or CV loop.
+ * call holding mutex_unlock(&pca9468->lock);
  */
 static void pca9468_return_to_loop(struct pca9468_charger *pca9468)
 {
-	pca9468->new_iin = 0;
+	switch (pca9468->ret_state) {
+	case DC_STATE_CC_MODE:
+		pca9468->timer_id = TIMER_CHECK_CCMODE;
+		break;
+	case DC_STATE_CV_MODE:
+		pca9468->timer_id = TIMER_CHECK_CVMODE;
+		break;
+	default:
+		dev_err(pca9468->dev, "%s: invalid ret_state=%u\n",
+			__func__, pca9468->ret_state);
+		return;
+	}
 
 	dev_info(pca9468->dev, "%s: charging_state=%u->%u\n", __func__,
 		 pca9468->charging_state, pca9468->ret_state);
 
-	/* Go to return state  */
 	pca9468->charging_state = pca9468->ret_state;
-	if (pca9468->charging_state == DC_STATE_CC_MODE)
-		pca9468->timer_id = TIMER_CHECK_CCMODE;
-	else
-		pca9468->timer_id = TIMER_CHECK_CVMODE;
-
-	pca9468->timer_period = 1000;	/* Wait 1000ms */
+	pca9468->timer_period = 1000;
+	pca9468->ret_state = 0;
+	pca9468->new_iin = 0;
 }
 
 /*
@@ -2298,8 +2285,8 @@ static int pca9468_set_new_iin(struct pca9468_charger *pca9468, int iin)
 		return 0;
 	}
 
-	/* previus request still pending, no need to update */
-	if (pca9468->iin_cc == pca9468->new_iin)
+	/* same as previous request nevermind */
+	if (iin == pca9468->new_iin)
 		return 0;
 
 	pr_debug("%s: new_iin=%d->%d state=%d\n", __func__,
@@ -2312,15 +2299,16 @@ static int pca9468_set_new_iin(struct pca9468_charger *pca9468, int iin)
 		/* used on start vs the ->iin_cfg one */
 		pca9468->pdata->iin_cfg = iin;
 		pca9468->iin_cc = iin;
-	} else if (pca9468->new_iin == 0) {
+	} else if (pca9468->ret_state == 0) {
 		/*
-		 * applied in pca9468_apply_new_iin() from CC or in CV loop
-		 * will ultimately update pca9468->iin_cc and iin_cfg.
+		 * pca9468_apply_new_iin() has not picked out the value yet
+		 * and the value can be changed safely.
 		 */
 		pca9468->new_iin = iin;
 
-		/* might want to tickle the cycle now */
+		/* might want to tickle the loop now */
 	} else {
+		/* the caller must retry */
 		ret = -EAGAIN;
 	}
 
@@ -2335,6 +2323,7 @@ static int pca9468_set_new_iin(struct pca9468_charger *pca9468, int iin)
  */
 static int pca9468_set_new_cc_max(struct pca9468_charger *pca9468, int cc_max)
 {
+	const int prev_cc_max = pca9468->cc_max;
 	int iin_max, ret = 0;
 
 	if (cc_max < 0) {
@@ -2361,7 +2350,7 @@ static int pca9468_set_new_cc_max(struct pca9468_charger *pca9468, int cc_max)
 
 	logbuffer_prlog(pca9468, LOGLEVEL_INFO,
 			"%s: charging_state=%d cc_max=%d->%d iin_max=%d, ret=%d",
-			__func__, pca9468->charging_state, pca9468->cc_max,
+			__func__, pca9468->charging_state, prev_cc_max,
 			cc_max, iin_max, ret);
 
 done:
@@ -4867,10 +4856,10 @@ static int pca9468_create_fs_entries(struct pca9468_charger *chip)
 
 	debugfs_create_bool("wlc_rampout_iin", 0644, chip->debug_root,
 			     &chip->wlc_ramp_out_iin);
-	debugfs_create_bool("wlc_rampout_vout", 0644, chip->debug_root,
-			    &chip->wlc_ramp_out_vout);
 	debugfs_create_u32("wlc_rampout_delay", 0644, chip->debug_root,
 			   &chip->wlc_ramp_out_delay);
+	debugfs_create_u32("wlc_rampout_vout_target", 0644, chip->debug_root,
+			   &chip->wlc_ramp_out_vout_target);
 
 
 	debugfs_create_u32("debug_level", 0644, chip->debug_root,
@@ -4949,6 +4938,7 @@ static int pca9468_probe(struct i2c_client *client,
 	pca9468_chg->pdata = pdata;
 	pca9468_chg->charging_state = DC_STATE_NO_CHARGING;
 	pca9468_chg->wlc_ramp_out_iin = true;
+	pca9468_chg->wlc_ramp_out_vout_target = 15300000; /* 15.3V as default */
 	pca9468_chg->wlc_ramp_out_delay = 250; /* 250 ms default */
 
 	/* Create a work queue for the direct charger */

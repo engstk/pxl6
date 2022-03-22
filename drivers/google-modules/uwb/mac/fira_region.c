@@ -245,7 +245,7 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 {
 	struct sk_buff *msg;
 	struct nlattr *data, *measurements, *measurement;
-	int block_duration_ms, i, r;
+	int ranging_interval_ms, i, r;
 	bool stop_completed;
 
 	msg = mcps802154_region_event_alloc_skb(local->llhw, &local->region,
@@ -262,12 +262,13 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 	if (!data)
 		goto nla_put_failure;
 
-	block_duration_ms = session->params.block_duration_dtu /
-			    (local->llhw->dtu_freq_hz / 1000);
+	ranging_interval_ms = session->params.block_duration_dtu *
+			      (session->block_stride_len + 1) /
+			      (local->llhw->dtu_freq_hz / 1000);
 	if (nla_put_u32(msg, FIRA_RANGING_DATA_ATTR_BLOCK_INDEX,
 			session->block_index) ||
 	    nla_put_u32(msg, FIRA_RANGING_DATA_ATTR_RANGING_INTERVAL_MS,
-			block_duration_ms))
+			ranging_interval_ms))
 		goto nla_put_failure;
 
 	stop_completed = session->stop_request &&

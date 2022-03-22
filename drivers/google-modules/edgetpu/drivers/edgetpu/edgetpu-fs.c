@@ -66,7 +66,7 @@ static struct dentry *edgetpu_debugfs_dir;
 		}                                                              \
 	} while (0)
 
-static bool is_edgetpu_file(struct file *file)
+bool is_edgetpu_file(struct file *file)
 {
 	if (edgetpu_is_external_wrapper_class_file(file))
 		return true;
@@ -871,7 +871,7 @@ static void dump_statusregs_ranges(
 		for (reg = ranges[i].firstreg; reg <= ranges[i].lastreg;
 		     reg += sizeof(val)) {
 			val = edgetpu_dev_read_64(etdev, reg);
-			seq_printf(s, "0x%08x: 0x%016llx\n", reg, val);
+			seq_printf(s, "%#08x: %#016llx\n", reg, val);
 		}
 	}
 }
@@ -891,15 +891,15 @@ static void dump_mboxes(struct seq_file *s, struct edgetpu_dev *etdev)
 
 		for (offset = 0x0; offset <= 0x40; offset += sizeof(val)) {
 			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "0x%08x: 0x%08x\n", base + offset, val);
+			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
 		}
 		for (offset = 0x1000; offset <= 0x1014; offset += sizeof(val)) {
 			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "0x%08x: 0x%08x\n", base + offset, val);
+			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
 		}
 		for (offset = 0x1800; offset <= 0x1818; offset += sizeof(val)) {
 			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "0x%08x: 0x%08x\n", base + offset, val);
+			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
 		}
 	}
 }
@@ -1037,10 +1037,98 @@ static ssize_t clients_show(
 }
 static DEVICE_ATTR_RO(clients);
 
+static ssize_t show_group(struct edgetpu_dev *etdev,
+			  struct edgetpu_device_group *group, char *buf,
+			  ssize_t buflen)
+{
+	enum edgetpu_context_id context =
+		edgetpu_group_context_id_locked(group);
+	struct edgetpu_list_group_client *lc;
+	ssize_t len;
+	ssize_t ret = 0;
+
+	len = scnprintf(buf, buflen - ret, "group %u ", group->workload_id);
+	buf += len;
+	ret += len;
+
+	switch (group->status) {
+	case EDGETPU_DEVICE_GROUP_WAITING:
+		len = scnprintf(buf, buflen - ret, "forming ");
+		buf += len;
+		ret += len;
+		break;
+	case EDGETPU_DEVICE_GROUP_FINALIZED:
+		break;
+	case EDGETPU_DEVICE_GROUP_ERRORED:
+		len = scnprintf(buf, buflen - ret, "error %#x ",
+				group->fatal_errors);
+		buf += len;
+		ret += len;
+		break;
+	case EDGETPU_DEVICE_GROUP_DISBANDED:
+		len = scnprintf(buf, buflen - ret, "disbanded\n");
+		ret += len;
+		return ret;
+	}
+
+	if (context == EDGETPU_CONTEXT_INVALID)
+		len = scnprintf(buf, buflen - ret, "context (none) ");
+	else if (context & EDGETPU_CONTEXT_DOMAIN_TOKEN)
+		len = scnprintf(buf, buflen - ret, "context detached %#x ",
+				context & ~(EDGETPU_CONTEXT_DOMAIN_TOKEN));
+	else
+		len = scnprintf(buf, buflen - ret, "context mbox %d ",
+				context);
+	buf += len;
+	ret += len;
+	len = scnprintf(buf, buflen - ret, "vcid %u %s%s\n",
+			group->vcid, group->dev_inaccessible ? "i" : "",
+			group->ext_mailbox ? "x" : "");
+	buf += len;
+	ret += len;
+
+	for_each_list_group_client(lc, group) {
+		len = scnprintf(buf, buflen - ret, "client %s %d:%d\n",
+				lc->client->etiface->name,
+				lc->client->pid, lc->client->tgid);
+		buf += len;
+		ret += len;
+	}
+
+	len = scnprintf(buf, buflen - ret, "mappings %zd %zdB\n",
+			group->host_mappings.count +
+			group->dmabuf_mappings.count,
+			edgetpu_group_mappings_total_size(group));
+	buf += len;
+	ret += len;
+	return ret;
+}
+
+static ssize_t groups_show(
+		struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct edgetpu_dev *etdev = dev_get_drvdata(dev);
+	struct edgetpu_device_group *group;
+	struct edgetpu_list_group *lg;
+	ssize_t ret = 0;
+
+	mutex_lock(&etdev->groups_lock);
+	etdev_for_each_group(etdev, lg, group) {
+		edgetpu_device_group_get(group);
+		ret += show_group(etdev, group, buf + ret, PAGE_SIZE - ret);
+		edgetpu_device_group_put(group);
+	}
+	mutex_unlock(&etdev->groups_lock);
+	return ret;
+}
+static DEVICE_ATTR_RO(groups);
+
 static struct attribute *edgetpu_dev_attrs[] = {
 	&dev_attr_firmware_crash_count.attr,
 	&dev_attr_watchdog_timeout_count.attr,
 	&dev_attr_clients.attr,
+	&dev_attr_groups.attr,
 	NULL,
 };
 

@@ -36,6 +36,7 @@
 #include "nfcc_coex_region_call.h"
 #include "nfcc_coex_access.h"
 #include "nfcc_coex_session.h"
+#include "nfcc_coex_trace.h"
 
 static struct mcps802154_region_ops nfcc_coex_region_ops;
 
@@ -43,13 +44,13 @@ static struct mcps802154_region *nfcc_coex_open(struct mcps802154_llhw *llhw)
 {
 	struct nfcc_coex_local *local;
 
-	local = kmalloc(sizeof(*local), GFP_KERNEL);
+	local = kzalloc(sizeof(*local), GFP_KERNEL);
 	if (!local)
 		return NULL;
 
 	local->llhw = llhw;
 	local->region.ops = &nfcc_coex_region_ops;
-	local->state = NFCC_COEX_STATE_UNUSED;
+	local->session.state = NFCC_COEX_STATE_IDLE;
 
 	return &local->region;
 }
@@ -64,13 +65,15 @@ static void nfcc_coex_close(struct mcps802154_region *region)
 static void nfcc_coex_notify_stop(struct mcps802154_region *region)
 {
 	struct nfcc_coex_local *local = region_to_local(region);
+	struct nfcc_coex_session *session = &local->session;
 
+	trace_region_nfcc_coex_notify_stop(local);
 	nfcc_coex_session_control(local, NFCC_COEX_CALL_CCC_SESSION_STOP, NULL,
 				  NULL);
-	if (local->state != NFCC_COEX_STATE_UNUSED) {
+	if (session->started) {
 		pr_err("device stopped while nfcc coex not stopped state=%d",
-		       local->state);
-		local->state = NFCC_COEX_STATE_UNUSED;
+		       local->session.state);
+		session->started = false;
 	}
 }
 
@@ -80,6 +83,7 @@ static int nfcc_coex_call(struct mcps802154_region *region, u32 call_id,
 {
 	struct nfcc_coex_local *local = region_to_local(region);
 
+	trace_region_nfcc_coex_call(local, call_id);
 	switch (call_id) {
 	case NFCC_COEX_CALL_CCC_SESSION_START:
 	case NFCC_COEX_CALL_CCC_SESSION_STOP:
@@ -95,32 +99,37 @@ static int nfcc_coex_get_demand(struct mcps802154_region *region,
 {
 	struct nfcc_coex_local *local = region_to_local(region);
 	const struct nfcc_coex_session *session = &local->session;
+	const struct mcps802154_region_demand *rd = &session->region_demand;
 
-	switch (local->state) {
-	case NFCC_COEX_STATE_UNUSED:
-		return 0;
-	default:
+	trace_region_nfcc_coex_get_demand(local, next_timestamp_dtu, rd);
+	if (session->started) {
 		if (session->first_access) {
 			/* region_demand have never been set.
 			 * Duration is set at 12ms, value catched during test. */
 			demand->timestamp_dtu = next_timestamp_dtu;
 			demand->duration_dtu = 187200;
-		} else if (is_before_dtu(session->region_demand.timestamp_dtu,
+		} else if (is_before_dtu(rd->timestamp_dtu,
 					 next_timestamp_dtu)) {
 			/* Date is late. */
-			int shift = next_timestamp_dtu -
-				    session->region_demand.timestamp_dtu;
-			int duration =
-				session->region_demand.duration_dtu - shift;
+			int shift = next_timestamp_dtu - rd->timestamp_dtu;
+			int duration = rd->duration_dtu - shift;
 			demand->timestamp_dtu = next_timestamp_dtu;
 			demand->duration_dtu = duration > 0 ? duration : 1;
 		} else {
-			memcpy(demand, &session->region_demand,
-			       sizeof(*demand));
+			memcpy(demand, rd, sizeof(*demand));
 		}
 		return 1;
 	}
 	return 0;
+}
+
+void nfcc_coex_set_state(struct nfcc_coex_local *local,
+			 enum nfcc_coex_state new_state)
+{
+	struct nfcc_coex_session *session = &local->session;
+
+	trace_region_nfcc_coex_set_state(local, new_state);
+	session->state = new_state;
 }
 
 void nfcc_coex_report(struct nfcc_coex_local *local)
@@ -131,6 +140,7 @@ void nfcc_coex_report(struct nfcc_coex_local *local)
 	struct sk_buff *msg;
 	int r;
 
+	trace_region_nfcc_coex_report(local, get_access_info);
 	msg = mcps802154_region_event_alloc_skb(
 		local->llhw, &local->region,
 		NFCC_COEX_CALL_CCC_SESSION_NOTIFICATION, session->event_portid,
@@ -157,6 +167,7 @@ void nfcc_coex_report(struct nfcc_coex_local *local)
 	return;
 
 nla_put_failure:
+	trace_region_nfcc_coex_report_nla_put_failure(local);
 	kfree_skb(msg);
 }
 

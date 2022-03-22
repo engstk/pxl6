@@ -121,6 +121,14 @@ struct mcps802154_llhw {
 	 */
 	int current_preamble_code;
 	/**
+	 * @rx_antenna_pairs: Number of antenna pairs for RX.
+	 */
+	u32 rx_antenna_pairs;
+	/**
+	 * @tx_antennas: Number of antennas for TX.
+	 */
+	u32 tx_antennas;
+	/**
 	 * @flags: Low-level hardware flags, see &enum mcps802154_llhw_flags.
 	 */
 	u32 flags;

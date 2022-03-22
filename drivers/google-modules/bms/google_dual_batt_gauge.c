@@ -277,7 +277,7 @@ static int gdbatt_init_chg_profile(struct dual_fg_drv *dual_fg_drv)
 	if (ret < 0)
 		pr_warn("battery not present, no default capacity, zero charge table\n");
 
-	gbms_init_chg_table(&dual_fg_drv->chg_profile, dual_fg_drv->battery_capacity);
+	gbms_init_chg_table(profile, node, dual_fg_drv->battery_capacity);
 
 	return ret;
 }

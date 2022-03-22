@@ -420,6 +420,9 @@ wl_cfgp2p_need_wait_actfrmae(struct bcm_cfg80211 *cfg, void *frame, u32 frame_le
 extern int
 wl_cfgp2p_is_p2p_specific_scan(struct cfg80211_scan_request *request);
 
+extern s32
+wl_cfg80211_abort_action_frame(struct bcm_cfg80211 *cfg, struct net_device *dev, s32 bssidx);
+
 /* WiFi Direct */
 #define SOCIAL_CHAN_1 1
 #define SOCIAL_CHAN_2 6

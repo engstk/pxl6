@@ -38,33 +38,24 @@
 static void dw3000_nfcc_coex_update_access_info(
 	struct dw3000 *dw, const struct dw3000_nfcc_coex_buffer *buffer)
 {
-	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
 	struct dw3000_vendor_cmd_nfcc_coex_get_access_info *access_info =
 		&dw->nfcc_coex.access_info;
 	struct dw3000_nfcc_coex_rx_msg_info rx_msg_info = {};
 	int r;
 
 	r = dw3000_nfcc_coex_message_check(dw, buffer, &rx_msg_info);
-	if (r)
+	if (r) {
+		trace_dw3000_nfcc_coex_warn(dw, "message check failure");
 		goto failure;
+	}
 
 	/* Update access_info. */
 	access_info->stop = !rx_msg_info.next_slot_found;
 	access_info->watchdog_timeout = false;
 	if (rx_msg_info.next_slot_found) {
-		u32 diff_sys_time;
-
-		/* Build the next date with the difference, because the sys_time is
-		 * faster than dtu time. */
-		diff_sys_time = rx_msg_info.next_timestamp_sys_time -
-				dw3000_dtu_to_sys_time(
-					dw, nfcc_coex->session_start_dtu);
 		access_info->next_timestamp_dtu =
-			nfcc_coex->session_start_dtu +
-			(diff_sys_time >> DW3000_DTU_PER_SYS_POWER);
-		access_info->next_duration_dtu =
-			rx_msg_info.next_duration_sys_time >>
-			DW3000_DTU_PER_SYS_POWER;
+			rx_msg_info.next_timestamp_dtu;
+		access_info->next_duration_dtu = rx_msg_info.next_duration_dtu;
 	}
 	return;
 
@@ -120,14 +111,12 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 	const struct dw3000_vendor_cmd_nfcc_coex_handle_access *info = data;
 	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
 	const u32 dtu_per_ms = dw->llhw->dtu_freq_hz / 1000;
-	u32 cur_time_dtu;
-	u32 diff_dtu, diff_ms;
+	u32 now_dtu, message_send_timestamp_dtu;
+	s32 idle_duration_dtu;
 	int r;
 
 	if (!info || data_len != sizeof(*info))
 		return -EINVAL;
-
-	cur_time_dtu = dw3000_get_dtu_time(dw);
 
 	if (timer_pending(&nfcc_coex->watchdog_timer)) {
 		trace_dw3000_nfcc_coex_err(dw, "watchdog timer is pending");
@@ -140,21 +129,35 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 		if (r)
 			return r;
 	}
+	now_dtu = dw3000_get_dtu_time(dw);
+	message_send_timestamp_dtu =
+		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
+	idle_duration_dtu = message_send_timestamp_dtu - now_dtu;
 
+	trace_dw3000_nfcc_coex_handle_access(dw, info, idle_duration_dtu);
 	/* Save start session date, to retrieve MSB bits lost for next date. */
-	nfcc_coex->session_start_dtu = info->timestamp_dtu;
-	/* Setup watchdog timer. */
-	diff_dtu = info->timestamp_dtu - cur_time_dtu;
-	diff_ms = diff_dtu / dtu_per_ms;
+	nfcc_coex->access_start_dtu = info->timestamp_dtu;
+	/* Build the when spi must be released. */
 	nfcc_coex->watchdog_timer.expires =
 		jiffies +
-		msecs_to_jiffies(diff_ms +
+		msecs_to_jiffies((info->timestamp_dtu - now_dtu) / dtu_per_ms +
 				 DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS);
 	add_timer(&nfcc_coex->watchdog_timer);
 
-	if (diff_dtu > dw3000_nfcc_coex_margin_dtu)
-		return dw3000_nfcc_coex_sleep(
-			dw, diff_dtu - dw3000_nfcc_coex_margin_dtu);
+	/* Send message and so release the SPI close to the nfc_coex_margin. */
+	message_send_timestamp_dtu =
+		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
+	if (idle_duration_dtu > 0)
+		return dw3000_idle(dw, true, message_send_timestamp_dtu,
+				   dw3000_nfcc_coex_idle_timeout,
+				   DW3000_OP_STATE_MAX);
+	else if (dw->current_operational_state == DW3000_OP_STATE_DEEP_SLEEP)
+		return dw3000_deepsleep_wakeup_now(
+			dw, dw3000_nfcc_coex_idle_timeout, DW3000_OP_STATE_MAX);
+
+	r = dw3000_nfcc_coex_configure(dw);
+	if (r)
+		return r;
 	return dw3000_nfcc_coex_message_send(dw);
 }
 

@@ -36,7 +36,7 @@
 #include "edgetpu-usage-stats.h"
 
 #define get_dev_for_logging(etdev)                                                                 \
-	((etdev)->etiface->etcdev ? (etdev)->etiface->etcdev : (etdev)->dev)
+	((etdev)->etiface && (etdev)->etiface->etcdev ? (etdev)->etiface->etcdev : (etdev)->dev)
 
 #define etdev_err(etdev, fmt, ...) dev_err(get_dev_for_logging(etdev), fmt, ##__VA_ARGS__)
 #define etdev_warn(etdev, fmt, ...)                                            \
@@ -56,17 +56,7 @@
 	dev_warn_once(get_dev_for_logging(etdev), fmt, ##__VA_ARGS__)
 
 /* The number of TPU tiles in an edgetpu chip */
-#ifdef CONFIG_EDGETPU_FPGA
-#define EDGETPU_NTILES	4
-#else
 #define EDGETPU_NTILES	16
-#endif
-
-/* Up to 7 concurrent device groups / workloads per device. */
-#define EDGETPU_NGROUPS		7
-
-/* 1 context per VII/group plus 1 for KCI */
-#define EDGETPU_NCONTEXTS	(EDGETPU_NGROUPS + 1)
 
 /*
  * Common-layer context IDs for non-secure TPU access, translated to chip-
@@ -75,8 +65,7 @@
 enum edgetpu_context_id {
 	EDGETPU_CONTEXT_INVALID = -1,
 	EDGETPU_CONTEXT_KCI = 0,	/* TPU firmware/kernel ID 0 */
-	EDGETPU_CONTEXT_VII_BASE = 1,	/* groups 0-6 IDs 1-7 */
-	/* contexts 8 and above not yet allocated */
+	EDGETPU_CONTEXT_VII_BASE = 1,	/* groups IDs starts from 1 to (EDGETPU_CONTEXTS - 1) */
 	/* A bit mask to mark the context is an IOMMU domain token */
 	EDGETPU_CONTEXT_DOMAIN_TOKEN = 1 << 30,
 };
@@ -88,6 +77,7 @@ struct edgetpu_coherent_mem {
 	dma_addr_t dma_addr;	/* DMA handle for downstream IOMMU, if any */
 	tpu_addr_t tpu_addr;	/* DMA handle for TPU internal IOMMU, if any */
 	u64 host_addr;		/* address mapped on host for debugging */
+	u64 phys_addr;		/* physical address, if available */
 	size_t size;
 #ifdef CONFIG_X86
 	bool is_set_uc;		/* memory has been marked uncached on X86 */
@@ -150,7 +140,7 @@ struct edgetpu_list_device_client {
 	struct edgetpu_client *client;
 };
 
-/* Macro to loop through etdev->clients (hold clients_lock prior). */
+/* loop through etdev->clients (hold clients_lock prior). */
 #define for_each_list_device_client(etdev, c)                                  \
 	list_for_each_entry(c, &etdev->clients, list)
 
@@ -185,6 +175,7 @@ enum edgetpu_dev_state {
 struct edgetpu_dev {
 	struct device *dev;	   /* platform/pci bus device */
 	uint num_ifaces;		   /* Number of device interfaces */
+	uint num_cores; /* Number of cores */
 	/*
 	 * Array of device interfaces
 	 * First element is the default interface
@@ -359,6 +350,8 @@ void edgetpu_free_coherent(struct edgetpu_dev *etdev,
 			   struct edgetpu_coherent_mem *mem,
 			   enum edgetpu_context_id context_id);
 
+/* Checks if @file belongs to edgetpu driver */
+bool is_edgetpu_file(struct file *file);
 
 /* External drivers can hook up to edgetpu driver using these calls. */
 int edgetpu_open(struct edgetpu_dev_iface *etiface, struct file *file);
@@ -389,7 +382,9 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 		       const struct edgetpu_iface_params *iface_params,
 		       uint num_ifaces);
 void edgetpu_device_remove(struct edgetpu_dev *etdev);
+/* Registers IRQ. */
 int edgetpu_register_irq(struct edgetpu_dev *etdev, int irq);
+/* Reverts edgetpu_register_irq */
 void edgetpu_unregister_irq(struct edgetpu_dev *etdev, int irq);
 
 /* Core -> Device FS API */
@@ -481,5 +476,11 @@ int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
 /* Chip-specific code to release external mailboxes */
 int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
 				     struct edgetpu_ext_mailbox_ioctl *args);
+
+/*
+ * Chip specific function to get indexes of external mailbox based on
+ * @mbox_type
+ */
+int edgetpu_chip_get_ext_mailbox_index(u32 mbox_type, u32 *start, u32 *end);
 
 #endif /* __EDGETPU_INTERNAL_H__ */

@@ -8,14 +8,20 @@
 #ifndef __EDGETPU_CONFIG_H__
 #define __EDGETPU_CONFIG_H__
 
-#ifndef CONFIG_ABROLHOS
-#define CONFIG_ABROLHOS
-#warning "Building default chipset abrolhos"
-#endif
-
+#if IS_ENABLED(CONFIG_ABROLHOS)
 #include "abrolhos/config.h"
+
+#else /* unknown */
+
+#error "Unknown EdgeTPU config"
+
+#endif /* unknown */
 
 #define EDGETPU_DEFAULT_FIRMWARE_NAME "google/edgetpu-" DRIVER_NAME ".fw"
 #define EDGETPU_TEST_FIRMWARE_NAME "google/edgetpu-" DRIVER_NAME "-test.fw"
+
+#ifndef EDGETPU_NUM_CORES
+#define EDGETPU_NUM_CORES 1
+#endif
 
 #endif /* __EDGETPU_CONFIG_H__ */

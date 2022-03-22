@@ -1081,6 +1081,25 @@ static ssize_t te2_lp_timing_show(struct device *dev,
 	return ret;
 }
 
+static bool panel_idle_queue_delayed_work(struct exynos_panel *ctx)
+{
+	const ktime_t now = ktime_get();
+	const unsigned int delta_ms = ktime_to_ms(ktime_sub(now, ctx->last_mode_set_ts));
+
+	if (delta_ms < ctx->idle_delay_ms) {
+		const unsigned int delay_ms = ctx->idle_delay_ms - delta_ms;
+
+		dev_dbg(ctx->dev, "%s: last mode %ums ago, schedule idle in %ums\n",
+			__func__, delta_ms, delay_ms);
+
+		mod_delayed_work(system_highpri_wq, &ctx->idle_work,
+					msecs_to_jiffies(delay_ms));
+		return true;
+	}
+
+	return false;
+}
+
 static void panel_update_idle_mode_locked(struct exynos_panel *ctx)
 {
 	const struct exynos_panel_funcs *funcs = ctx->desc->exynos_panel_func;
@@ -1093,8 +1112,27 @@ static void panel_update_idle_mode_locked(struct exynos_panel *ctx)
 	if (!ctx->enabled || !funcs->set_self_refresh)
 		return;
 
+	if (ctx->idle_delay_ms && ctx->self_refresh_active && panel_idle_queue_delayed_work(ctx))
+		return;
+
+	if (delayed_work_pending(&ctx->idle_work)) {
+		dev_dbg(ctx->dev, "%s: cancelling delayed idle work\n", __func__);
+		cancel_delayed_work(&ctx->idle_work);
+	}
+
 	if (funcs->set_self_refresh(ctx, ctx->self_refresh_active))
 		exynos_panel_update_te2(ctx);
+}
+
+static void panel_idle_work(struct work_struct *work)
+{
+	struct exynos_panel *ctx = container_of(work, struct exynos_panel, idle_work.work);
+
+	dev_dbg(ctx->dev, "%s\n", __func__);
+
+	mutex_lock(&ctx->mode_lock);
+	panel_update_idle_mode_locked(ctx);
+	mutex_unlock(&ctx->mode_lock);
 }
 
 static ssize_t panel_idle_store(struct device *dev, struct device_attribute *attr,
@@ -1129,6 +1167,66 @@ static ssize_t panel_idle_show(struct device *dev, struct device_attribute *attr
 	return scnprintf(buf, PAGE_SIZE, "%d\n", ctx->panel_idle_enabled);
 }
 
+static ssize_t min_vrefresh_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	const struct mipi_dsi_device *dsi = to_mipi_dsi_device(dev);
+	struct exynos_panel *ctx = mipi_dsi_get_drvdata(dsi);
+	int min_vrefresh;
+	int ret;
+
+	ret = kstrtoint(buf, 0, &min_vrefresh);
+	if (ret) {
+		dev_err(dev, "invalid min vrefresh value\n");
+		return ret;
+	}
+
+	mutex_lock(&ctx->mode_lock);
+	ctx->min_vrefresh = min_vrefresh;
+	panel_update_idle_mode_locked(ctx);
+	mutex_unlock(&ctx->mode_lock);
+
+	return count;
+}
+
+static ssize_t min_vrefresh_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	const struct mipi_dsi_device *dsi = to_mipi_dsi_device(dev);
+	struct exynos_panel *ctx = mipi_dsi_get_drvdata(dsi);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", ctx->min_vrefresh);
+}
+
+static ssize_t idle_delay_ms_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	const struct mipi_dsi_device *dsi = to_mipi_dsi_device(dev);
+	struct exynos_panel *ctx = mipi_dsi_get_drvdata(dsi);
+	u32 idle_delay_ms;
+	int ret;
+
+	ret = kstrtou32(buf, 0, &idle_delay_ms);
+	if (ret) {
+		dev_err(dev, "invalid idle delay ms\n");
+		return ret;
+	}
+
+	mutex_lock(&ctx->mode_lock);
+	ctx->idle_delay_ms = idle_delay_ms;
+	panel_update_idle_mode_locked(ctx);
+	mutex_unlock(&ctx->mode_lock);
+
+	return count;
+}
+
+static ssize_t idle_delay_ms_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	const struct mipi_dsi_device *dsi = to_mipi_dsi_device(dev);
+	struct exynos_panel *ctx = mipi_dsi_get_drvdata(dsi);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", ctx->idle_delay_ms);
+}
+
 static DEVICE_ATTR_RO(serial_number);
 static DEVICE_ATTR_RO(panel_extinfo);
 static DEVICE_ATTR_RO(panel_name);
@@ -1136,6 +1234,8 @@ static DEVICE_ATTR_WO(gamma);
 static DEVICE_ATTR_RW(te2_timing);
 static DEVICE_ATTR_RW(te2_lp_timing);
 static DEVICE_ATTR_RW(panel_idle);
+static DEVICE_ATTR_RW(min_vrefresh);
+static DEVICE_ATTR_RW(idle_delay_ms);
 
 static const struct attribute *panel_attrs[] = {
 	&dev_attr_serial_number.attr,
@@ -1145,6 +1245,8 @@ static const struct attribute *panel_attrs[] = {
 	&dev_attr_te2_timing.attr,
 	&dev_attr_te2_lp_timing.attr,
 	&dev_attr_panel_idle.attr,
+	&dev_attr_min_vrefresh.attr,
+	&dev_attr_idle_delay_ms.attr,
 	NULL
 };
 
@@ -1162,9 +1264,16 @@ static void exynos_panel_connector_print_state(struct drm_printer *p,
 		return;
 
 	drm_printf(p, "\tenabled: %d\n", ctx->enabled);
-	drm_printf(p, "\tidle: %s (%s)\n",
-		   ctx->panel_idle_vrefresh ? "active" : "inactive",
-		   ctx->panel_idle_enabled ? "enabled" : "disabled");
+
+	drm_puts(p, "\tidle: ");
+	if (ctx->panel_idle_vrefresh)
+		drm_printf(p, "%uhz", ctx->panel_idle_vrefresh);
+	else
+		drm_puts(p, "no");
+	drm_printf(p, " (%s)  min_vrefresh: %d  idle_delay: %ums\n",
+		   ctx->panel_idle_enabled ? "enabled" : "disabled",
+		   ctx->min_vrefresh, ctx->idle_delay_ms);
+
 	if (ctx->current_mode) {
 		const struct drm_display_mode *m = &ctx->current_mode->mode;
 
@@ -2800,6 +2909,7 @@ static void exynos_panel_bridge_mode_set(struct drm_bridge *bridge,
 		pmode->mode.hdisplay, pmode->mode.vdisplay, drm_mode_vrefresh(&pmode->mode));
 
 	dsi->mode_flags = pmode->exynos_mode.mode_flags;
+	ctx->last_mode_set_ts = ktime_get();
 
 	DPU_ATRACE_BEGIN(__func__);
 	if (funcs) {
@@ -3069,6 +3179,7 @@ int exynos_panel_common_init(struct mipi_dsi_device *dsi,
 			ctx->bl_notifier.ranges[i] = ctx->desc->bl_range[i];
 	}
 	ctx->panel_idle_enabled = exynos_panel_func && exynos_panel_func->set_self_refresh != NULL;
+	INIT_DELAYED_WORK(&ctx->idle_work, panel_idle_work);
 
 	mutex_init(&ctx->mode_lock);
 	mutex_init(&ctx->bl_state_lock);

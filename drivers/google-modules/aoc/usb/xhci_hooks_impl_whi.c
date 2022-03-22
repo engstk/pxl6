@@ -47,6 +47,7 @@ static int xhci_sync_dev_ctx(struct xhci_hcd *xhci, unsigned int slot_id)
 	struct xhci_ep_ctx *ep_ctx;
 	struct get_dev_ctx_args args;
 	u8 *dev_ctx;
+	char str[XHCI_MSG_MAX];
 
 	if (IS_ERR_OR_NULL(xhci))
 		return -ENODEV;
@@ -82,12 +83,13 @@ static int xhci_sync_dev_ctx(struct xhci_hcd *xhci, unsigned int slot_id)
 	ep_ctx = xhci_get_ep_ctx(xhci, out_ctx_ref, 0); /* ep0 */
 
 	xhci_dbg(xhci, "%s\n",
-		 xhci_decode_slot_context(
+		 xhci_decode_slot_context(str,
 			 slot_ctx->dev_info, slot_ctx->dev_info2,
 			 slot_ctx->tt_info, slot_ctx->dev_state));
 	xhci_dbg(xhci, "%s\n",
-		 xhci_decode_ep_context(ep_ctx->ep_info, ep_ctx->ep_info2,
-					ep_ctx->deq, ep_ctx->tx_info));
+		 xhci_decode_ep_context(str,
+ 			 ep_ctx->ep_info, ep_ctx->ep_info2,
+ 			 ep_ctx->deq, ep_ctx->tx_info));
 
 	kfree(dev_ctx);
 	return 0;
@@ -125,6 +127,11 @@ static int xhci_sync_conn_stat(unsigned int bus_id, unsigned int dev_num, unsign
 	blocking_notifier_call_chain(&aoc_usb_notifier_list, SYNC_CONN_STAT, &args);
 
 	return 0;
+}
+
+int usb_host_mode_state_notify(enum aoc_usb_state usb_state)
+{
+	return xhci_sync_conn_stat(0, 0, 0, usb_state);
 }
 
 static int xhci_get_isoc_tr_info(u16 ep_id, u16 dir, struct xhci_ring *ep_ring)
@@ -593,7 +600,7 @@ static void usb_audio_offload_cleanup(struct xhci_hcd *xhci)
 	usb_unregister_notify(&xhci_udev_nb);
 
 	/* Notification for xhci driver removing */
-	xhci_sync_conn_stat(0, 0, 0, 0);
+	usb_host_mode_state_notify(USB_DISCONNECTED);
 
 	mutex_destroy(&vendor_data->lock);
 
@@ -805,6 +812,10 @@ static void free_transfer_ring(struct xhci_hcd *xhci,
 	ep_type = CTX_TO_EP_TYPE(le32_to_cpu(ep_ctx->ep_info2));
 
 	ctrl_ctx = xhci_get_input_control_ctx(virt_dev->in_ctx);
+	if (!ctrl_ctx) {
+		xhci_warn(xhci, "%s: Could not get input context, bad type.\n", __func__);
+		return;
+	}
 	ep_is_added = EP_IS_ADDED(ctrl_ctx, ep_index);
 	ep_is_dropped = EP_IS_DROPPED(ctrl_ctx, ep_index);
 

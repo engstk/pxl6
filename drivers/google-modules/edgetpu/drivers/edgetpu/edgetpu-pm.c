@@ -8,6 +8,7 @@
 #include <linux/iopoll.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -24,10 +25,19 @@
 #define SIM_PCHANNEL(...)
 #endif
 
+#define EDGETPU_ASYNC_POWER_DOWN_RETRY_DELAY	200
+
 struct edgetpu_pm_private {
 	const struct edgetpu_pm_handlers *handlers;
 	struct mutex lock;
+	/* Power up counter. Protected by @lock */
 	int power_up_count;
+	/* Flag indicating a deferred power down is pending. Protected by @lock */
+	bool power_down_pending;
+	/* Worker to handle async power down retry */
+	struct delayed_work power_down_work;
+	/* Back pointer to parent struct */
+	struct edgetpu_pm *etpm;
 };
 
 /*
@@ -91,10 +101,47 @@ int edgetpu_pm_get(struct edgetpu_pm *etpm)
 
 	if (!etpm || !etpm->p->handlers || !etpm->p->handlers->power_up)
 		return 0;
+
 	mutex_lock(&etpm->p->lock);
+	etpm->p->power_down_pending = false;
 	ret = edgetpu_pm_get_locked(etpm);
 	mutex_unlock(&etpm->p->lock);
+
 	return ret;
+}
+
+/* Caller must hold @etpm->p->lock */
+static void edgetpu_pm_try_power_down(struct edgetpu_pm *etpm)
+{
+	int ret = etpm->p->handlers->power_down(etpm);
+
+	if (ret == -EAGAIN) {
+		etdev_warn(etpm->etdev, "Power down request denied. Retrying in %d ms\n",
+			   EDGETPU_ASYNC_POWER_DOWN_RETRY_DELAY);
+		etpm->p->power_down_pending = true;
+		schedule_delayed_work(&etpm->p->power_down_work,
+				      msecs_to_jiffies(EDGETPU_ASYNC_POWER_DOWN_RETRY_DELAY));
+	} else {
+		if (ret)
+			etdev_warn(etpm->etdev, "Power down request failed (%d)\n", ret);
+		etpm->p->power_down_pending = false;
+	}
+}
+
+/* Worker for async power down */
+static void edgetpu_pm_async_power_down_work(struct work_struct *work)
+{
+	struct delayed_work *dwork = container_of(work, struct delayed_work, work);
+	struct edgetpu_pm_private *p =
+		container_of(dwork, struct edgetpu_pm_private, power_down_work);
+
+	mutex_lock(&p->lock);
+	etdev_info(p->etpm->etdev, "Delayed power down starting\n");
+	if (p->power_down_pending)
+		edgetpu_pm_try_power_down(p->etpm);
+	else
+		etdev_info(p->etpm->etdev, "Delayed power down cancelled\n");
+	mutex_unlock(&p->lock);
 }
 
 void edgetpu_pm_put(struct edgetpu_pm *etpm)
@@ -110,7 +157,7 @@ void edgetpu_pm_put(struct edgetpu_pm *etpm)
 	}
 	if (!--etpm->p->power_up_count) {
 		edgetpu_sw_wdt_stop(etpm->etdev);
-		etpm->p->handlers->power_down(etpm);
+		edgetpu_pm_try_power_down(etpm);
 	}
 	etdev_dbg(etpm->etdev, "%s: %d\n", __func__, etpm->p->power_up_count);
 	mutex_unlock(&etpm->p->lock);
@@ -138,6 +185,8 @@ int edgetpu_pm_create(struct edgetpu_dev *etdev,
 		goto out_free_etpm;
 	}
 
+	INIT_DELAYED_WORK(&etpm->p->power_down_work, edgetpu_pm_async_power_down_work);
+	etpm->p->etpm = etpm;
 	etpm->p->handlers = handlers;
 	etpm->etdev = etdev;
 
@@ -167,6 +216,8 @@ void edgetpu_pm_destroy(struct edgetpu_dev *etdev)
 		return;
 	if (etdev->pm->p) {
 		handlers = etdev->pm->p->handlers;
+		etdev->pm->p->power_down_pending = false;
+		cancel_delayed_work_sync(&etdev->pm->p->power_down_work);
 		if (handlers && handlers->before_destroy)
 			handlers->before_destroy(etdev->pm);
 		kfree(etdev->pm->p);
@@ -181,6 +232,7 @@ void edgetpu_pm_shutdown(struct edgetpu_dev *etdev, bool force)
 
 	if (!etpm)
 		return;
+
 	mutex_lock(&etpm->p->lock);
 
 	/* someone is using the device */

@@ -478,47 +478,23 @@ error:
 	return ret;
 }
 
+static int dw3000_handle_idle_timeout(struct dw3000 *dw)
+{
+	/* MCPS feeback must be done outside driver kthread. */
+	schedule_work(&dw->timer_expired_work);
+	return 0;
+}
+
 static int do_idle(struct dw3000 *dw, const void *in, void *out)
 {
-	struct dw3000_deep_sleep_state *dss = &dw->deep_sleep_state;
-	u32 cur_time_dtu = 0;
-	int delay_us = 0, rc;
+	bool timestamp = !!in;
+	u32 timestamp_dtu = timestamp ? *(const u32 *)in : 0;
 
-	trace_dw3000_mcps_idle(dw, in != NULL, in ? *(const u32 *)in : 0);
-
-	/* Reset ranging clock requirement */
-	dw->need_ranging_clock = false;
-	dw3000_reset_rctu_conv_state(dw);
-	/* Ensure dw3000_wakeup_timer() handler does the right thing */
-	dss->next_operational_state = DW3000_OP_STATE_IDLE_PLL;
-
-	/* Release Wifi coexistence. */
-	dw3000_coex_stop(dw);
-	/* Check if enough idle time to enter DEEP SLEEP */
-	if (in) {
-		u32 date_dtu = *(const u32 *)in;
-		int effective_delay_us;
-		cur_time_dtu = dw3000_get_dtu_time(dw);
-		effective_delay_us = DTU_TO_US(date_dtu - cur_time_dtu);
-		delay_us = dw3000_can_deep_sleep(dw, effective_delay_us);
-		if (!delay_us) {
-			/* Provided date isn't far enough to enter deep-sleep,
-			   just launch the timer to have it call the MCPS timer
-			   expired event function. */
-			dw3000_wakeup_timer_start(dw, effective_delay_us);
-			rc = 0;
-			goto eof;
-		}
-	} else if (dw->auto_sleep_margin_us < 0) {
-		/* Deep-sleep is completly disable, so do nothing here! */
-		rc = 0;
-		goto eof;
-	}
-	/* Enter DEEP SLEEP */
-	rc = dw3000_deep_sleep_and_wakeup(dw, delay_us);
-eof:
-	trace_dw3000_return_int(dw, rc);
-	return rc;
+	int r = dw3000_idle(dw, timestamp, timestamp_dtu,
+			    dw3000_handle_idle_timeout,
+			    DW3000_OP_STATE_IDLE_PLL);
+	trace_dw3000_return_int(dw, r);
+	return r;
 }
 
 static int idle(struct mcps802154_llhw *llhw, bool timestamp, u32 timestamp_dtu)

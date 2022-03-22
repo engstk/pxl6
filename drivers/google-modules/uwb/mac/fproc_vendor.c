@@ -34,13 +34,14 @@ mcps802154_fproc_vendor_handle_callback_return(struct mcps802154_local *local,
 	 * Avoid usage of access pointer after access done call. */
 	int duration_dtu = access->duration_dtu;
 	u32 next_access_dtu = access->timestamp_dtu + duration_dtu;
+	/* Filter-out the 'stop' request as error. */
+	int error = r == 1 ? 0 : r;
 
 	if (!r)
-		/* TODO_MR : call access_done(false) ?? */
 		return;
 
-	mcps802154_fproc_access_done(local, r);
-	if (r != 1) {
+	mcps802154_fproc_access_done(local, error);
+	if (error) {
 		mcps802154_fproc_broken_handle(local);
 	} else if (duration_dtu) {
 		mcps802154_fproc_access(local, next_access_dtu);

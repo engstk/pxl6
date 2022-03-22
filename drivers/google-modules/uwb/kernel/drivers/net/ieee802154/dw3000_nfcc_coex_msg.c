@@ -33,12 +33,6 @@
 #define TLV_U32_LEN (4 + 1) /* u32 + ack/nack. */
 #define TLV_SLOTS_LEN(nbslots) \
 	(1 + (8 * (nbslots)) + 1) /* nslots + slots + ack/nack. */
-
-/* Error codes for TLV_ERROR type. */
-#define CCC_ERR_LATE_SPIMAVAIL 0
-#define CCC_ERR_SLOT_CONFLICT 1
-#define CCC_ERR_CODE_SZ 2
-
 #define MSG_NEXT_TLV(buffer, offset) \
 	(struct dw3000_nfcc_coex_tlv *)((buffer)->msg.tlvs + (offset))
 
@@ -70,6 +64,8 @@ void dw3000_nfcc_coex_header_put(struct dw3000 *dw,
 {
 	struct dw3000_nfcc_coex_msg *msg = &buffer->msg;
 
+	trace_dw3000_nfcc_coex_header_put(dw, DW3000_NFCC_COEX_VER_ID,
+					  dw->nfcc_coex.tx_seq_num);
 	memcpy(msg->signature, DW3000_NFCC_COEX_SIGNATURE_STR,
 	       DW3000_NFCC_COEX_SIGNATURE_LEN);
 	msg->ver_id = DW3000_NFCC_COEX_VER_ID;
@@ -79,37 +75,14 @@ void dw3000_nfcc_coex_header_put(struct dw3000 *dw,
 }
 
 /**
- * dw3000_nfcc_coex_single_tlv_slot_put() - Fill buffer payload for a single TLV slot.
- * @buffer: Message buffer to fill.
- * @start: Start date of NFCC session in ms.
- * @end: End date of NFCC session in ms.
- */
-void dw3000_nfcc_coex_single_tlv_slot_put(
-	struct dw3000_nfcc_coex_buffer *buffer, u32 start, u32 end)
-{
-	struct dw3000_nfcc_coex_msg *msg = &buffer->msg;
-	struct dw3000_nfcc_coex_tlv *tlv;
-	struct dw3000_nfcc_coex_tlv_slot_list *slot_list;
-
-	tlv = MSG_NEXT_TLV(buffer, buffer->tlvs_len);
-	msg->nb_tlv++;
-	tlv->type = TLV_SLOT_LIST;
-	tlv->len = TLV_SLOTS_LEN(1);
-	slot_list = (struct dw3000_nfcc_coex_tlv_slot_list *)&tlv->tlv;
-	slot_list->nb_slots = 1;
-	slot_list->slots[0].start_sys_time = start;
-	slot_list->slots[0].end_sys_time = end;
-	buffer->tlvs_len += TLV_TYPELEN_LEN + tlv->len;
-}
-
-/**
  * dw3000_nfcc_coex_tlv_u32_put() - Fill buffer payload for a TLV.
  * @buffer: Message buffer to fill.
  * @type: Type id of the TLV.
  * @value: Value of TLV.
  */
-void dw3000_nfcc_coex_tlv_u32_put(struct dw3000_nfcc_coex_buffer *buffer,
-				  u8 type, u32 value)
+static void dw3000_nfcc_coex_tlv_u32_put(struct dw3000_nfcc_coex_buffer *buffer,
+					 enum dw3000_nfcc_coex_tlv_type type,
+					 u32 value)
 {
 	struct dw3000_nfcc_coex_msg *msg = &buffer->msg;
 	struct dw3000_nfcc_coex_tlv *tlv;
@@ -125,26 +98,6 @@ void dw3000_nfcc_coex_tlv_u32_put(struct dw3000_nfcc_coex_buffer *buffer,
 }
 
 /**
- * dw3000_nfcc_coex_tlv_slots_put() - Fill buffer payload for a TLV slots.
- * @buffer: Message buffer to fill.
- * @slot_list: TLV slots.
- */
-void dw3000_nfcc_coex_tlv_slots_put(
-	struct dw3000_nfcc_coex_buffer *buffer,
-	const struct dw3000_nfcc_coex_tlv_slot_list *slot_list)
-{
-	struct dw3000_nfcc_coex_msg *msg = &buffer->msg;
-	struct dw3000_nfcc_coex_tlv *tlv;
-
-	tlv = MSG_NEXT_TLV(buffer, buffer->tlvs_len);
-	msg->nb_tlv++;
-	tlv->type = TLV_SLOT_LIST;
-	tlv->len = TLV_SLOTS_LEN(slot_list->nb_slots);
-	memcpy(&tlv->tlv, slot_list, sizeof(*slot_list));
-	buffer->tlvs_len += TLV_TYPELEN_LEN + tlv->len;
-}
-
-/**
  * dw3000_nfcc_coex_clock_sync_payload_put() - Fill clock sync frame payload.
  * @dw: Driver context.
  * @buffer: Buffer to set with help of handle_access.
@@ -154,12 +107,16 @@ dw3000_nfcc_coex_clock_sync_payload_put(struct dw3000 *dw,
 					struct dw3000_nfcc_coex_buffer *buffer)
 {
 	u32 session_time0_sys_time =
-		dw3000_dtu_to_sys_time(dw, dw->nfcc_coex.session_start_dtu);
+		dw3000_dtu_to_sys_time(dw, dw->nfcc_coex.access_start_dtu);
 
+	/* Update clock reference. */
+	dw->nfcc_coex.session_time0_dtu = dw->nfcc_coex.access_start_dtu;
+	/* Prepare message. */
 	trace_dw3000_nfcc_coex_clock_sync_payload_put(dw,
 						      session_time0_sys_time);
 	dw3000_nfcc_coex_header_put(dw, buffer);
-	dw3000_nfcc_coex_tlv_u32_put(buffer, TLV_SESSION_TIME0,
+	dw3000_nfcc_coex_tlv_u32_put(buffer,
+				     DW3000_NFCC_COEX_TLV_TYPE_SESSION_TIME0,
 				     session_time0_sys_time);
 }
 
@@ -167,7 +124,7 @@ dw3000_nfcc_coex_clock_sync_payload_put(struct dw3000 *dw,
  * dw3000_nfcc_coex_clock_offset_payload_put() - Fill clock offset payload.
  * @dw: Driver context.
  * @buffer: Buffer to set with help of handle_access.
- * @clock_offset_sys_time: Offset to add to next ccc schedule.
+ * @clock_offset_sys_time: Offset to add to next nfcc_coex schedule.
  */
 static void dw3000_nfcc_coex_clock_offset_payload_put(
 	struct dw3000 *dw, struct dw3000_nfcc_coex_buffer *buffer,
@@ -176,7 +133,8 @@ static void dw3000_nfcc_coex_clock_offset_payload_put(
 	trace_dw3000_nfcc_coex_clock_offset_payload_put(dw,
 							clock_offset_sys_time);
 	dw3000_nfcc_coex_header_put(dw, buffer);
-	dw3000_nfcc_coex_tlv_u32_put(buffer, TLV_UWBCNT_OFFS,
+	dw3000_nfcc_coex_tlv_u32_put(buffer,
+				     DW3000_NFCC_COEX_TLV_TYPE_TLV_UWBCNT_OFFS,
 				     clock_offset_sys_time);
 }
 
@@ -282,35 +240,30 @@ dw3000_nfcc_coex_tlvs_check(struct dw3000 *dw,
 		if (tlvs_len > tlvs_len_max)
 			return -EINVAL;
 
-		switch (tlv->type) {
-		case TLV_SLOT_LIST:
+		trace_dw3000_nfcc_coex_tlv_check(dw, tlv->type, tlv->len,
+						 tlv->tlv);
+		if (tlv->type == DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS) {
 			/* Reject a new TLV with same type. Behavior not defined. */
 			if (slot_list)
 				return -EINVAL;
 			slot_list = (const struct dw3000_nfcc_coex_tlv_slot_list
 					     *)&tlv->tlv;
-			/* Keep the pointer ref for testmode. */
-			rx_msg_info->slot_list = slot_list;
 			/* Update rx_msg_info. */
 			if (slot_list->nb_slots > 0) {
 				const struct dw3000_nfcc_coex_tlv_slot *slot =
 					&slot_list->slots[0];
+				u32 next_in_session_dtu =
+					slot->t_start_uus
+					<< DW3000_NFCC_COEX_DTU_PER_UUS_POWER;
 
 				rx_msg_info->next_slot_found = true;
-				rx_msg_info->next_timestamp_sys_time =
-					slot->start_sys_time;
-				rx_msg_info->next_duration_sys_time =
-					slot->end_sys_time -
-					slot->start_sys_time;
+				rx_msg_info->next_timestamp_dtu =
+					dw->nfcc_coex.session_time0_dtu +
+					next_in_session_dtu;
+				rx_msg_info->next_duration_dtu =
+					(slot->t_end_uus - slot->t_start_uus)
+					<< DW3000_NFCC_COEX_DTU_PER_UUS_POWER;
 			}
-			break;
-		case TLV_ERROR:
-			trace_dw3000_nfcc_coex_err(dw, "nfcc sent an error");
-			break;
-		default:
-			trace_dw3000_nfcc_coex_warn(
-				dw, "ignoring unexpected TLV type");
-			break;
 		}
 	}
 
@@ -341,7 +294,7 @@ int dw3000_nfcc_coex_message_check(
 
 	if (rx_msg_info->next_slot_found)
 		trace_dw3000_nfcc_coex_rx_msg_info(
-			dw, rx_msg_info->next_timestamp_sys_time,
-			rx_msg_info->next_duration_sys_time);
+			dw, rx_msg_info->next_timestamp_dtu,
+			rx_msg_info->next_duration_dtu);
 	return 0;
 }

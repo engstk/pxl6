@@ -37,6 +37,12 @@
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
 
+/* Bits higher than VMA_TYPE_WIDTH are used to carry type specific data, e.g., core id. */
+#define VMA_TYPE_WIDTH 16
+#define VMA_TYPE(x) ((x) & (BIT_MASK(VMA_TYPE_WIDTH) - 1))
+#define VMA_DATA_GET(x) ((x) >> VMA_TYPE_WIDTH)
+#define VMA_DATA_SET(x, y) (VMA_TYPE(x) | ((y) << VMA_TYPE_WIDTH))
+
 enum edgetpu_vma_type {
 	VMA_INVALID,
 
@@ -44,14 +50,18 @@ enum edgetpu_vma_type {
 	VMA_VII_CSR,
 	VMA_VII_CMDQ,
 	VMA_VII_RESPQ,
+	/* For VMA_LOG and VMA_TRACE, core id is stored in bits higher than VMA_TYPE_WIDTH. */
 	VMA_LOG,
 	VMA_TRACE,
 };
 
+/* type that combines enum edgetpu_vma_type and data in higher bits. */
+typedef u32 edgetpu_vma_flags_t;
+
 /* structure to be set to vma->vm_private_data on mmap */
 struct edgetpu_vma_private {
 	struct edgetpu_client *client;
-	enum edgetpu_vma_type type;
+	edgetpu_vma_flags_t flag;
 	/*
 	 * vm_private_data is copied when a VMA is split, using this reference
 	 * counter to know when should this object be freed.
@@ -80,7 +90,7 @@ static int edgetpu_mmap_full_csr(struct edgetpu_client *client,
 	return ret;
 }
 
-static enum edgetpu_vma_type mmap_vma_type(unsigned long pgoff)
+static edgetpu_vma_flags_t mmap_vma_flag(unsigned long pgoff)
 {
 	const unsigned long off = pgoff << PAGE_SHIFT;
 
@@ -94,9 +104,15 @@ static enum edgetpu_vma_type mmap_vma_type(unsigned long pgoff)
 	case EDGETPU_MMAP_RESP_QUEUE_OFFSET:
 		return VMA_VII_RESPQ;
 	case EDGETPU_MMAP_LOG_BUFFER_OFFSET:
-		return VMA_LOG;
+		return VMA_DATA_SET(VMA_LOG, 0);
 	case EDGETPU_MMAP_TRACE_BUFFER_OFFSET:
-		return VMA_TRACE;
+		return VMA_DATA_SET(VMA_TRACE, 0);
+#if EDGETPU_NUM_CORES > 1
+	case EDGETPU_MMAP_LOG1_BUFFER_OFFSET:
+		return VMA_DATA_SET(VMA_LOG, 1);
+	case EDGETPU_MMAP_TRACE1_BUFFER_OFFSET:
+		return VMA_DATA_SET(VMA_TRACE, 1);
+#endif /* EDGETPU_NUM_CORES > 1 */
 	default:
 		return VMA_INVALID;
 	}
@@ -125,14 +141,14 @@ vma_type_to_wakelock_event(enum edgetpu_vma_type type)
 
 static struct edgetpu_vma_private *
 edgetpu_vma_private_alloc(struct edgetpu_client *client,
-			  enum edgetpu_vma_type type)
+			  edgetpu_vma_flags_t flag)
 {
 	struct edgetpu_vma_private *pvt = kmalloc(sizeof(*pvt), GFP_KERNEL);
 
 	if (!pvt)
 		return NULL;
 	pvt->client = edgetpu_client_get(client);
-	pvt->type = type;
+	pvt->flag = flag;
 	refcount_set(&pvt->count, 1);
 
 	return pvt;
@@ -159,23 +175,25 @@ static void edgetpu_vma_open(struct vm_area_struct *vma)
 	enum edgetpu_wakelock_event evt;
 	struct edgetpu_client *client;
 	struct edgetpu_dev *etdev;
+	enum edgetpu_vma_type type = VMA_TYPE(pvt->flag);
 
 	edgetpu_vma_private_get(pvt);
 	client = pvt->client;
 	etdev = client->etdev;
 
-	evt = vma_type_to_wakelock_event(pvt->type);
+	evt = vma_type_to_wakelock_event(type);
 	if (evt != EDGETPU_WAKELOCK_EVENT_END)
 		edgetpu_wakelock_inc_event(client->wakelock, evt);
 
 	/* handle telemetry types */
-	switch (pvt->type) {
+	switch (type) {
 	case VMA_LOG:
-		edgetpu_telemetry_inc_mmap_count(etdev, EDGETPU_TELEMETRY_LOG);
+		edgetpu_telemetry_inc_mmap_count(etdev, EDGETPU_TELEMETRY_LOG,
+						 VMA_DATA_GET(pvt->flag));
 		break;
 	case VMA_TRACE:
-		edgetpu_telemetry_inc_mmap_count(etdev,
-						 EDGETPU_TELEMETRY_TRACE);
+		edgetpu_telemetry_inc_mmap_count(etdev, EDGETPU_TELEMETRY_TRACE,
+						 VMA_DATA_GET(pvt->flag));
 		break;
 	default:
 		break;
@@ -187,20 +205,22 @@ static void edgetpu_vma_close(struct vm_area_struct *vma)
 {
 	struct edgetpu_vma_private *pvt = vma->vm_private_data;
 	struct edgetpu_client *client = pvt->client;
-	enum edgetpu_wakelock_event evt = vma_type_to_wakelock_event(pvt->type);
+	enum edgetpu_vma_type type = VMA_TYPE(pvt->flag);
+	enum edgetpu_wakelock_event evt = vma_type_to_wakelock_event(type);
 	struct edgetpu_dev *etdev = client->etdev;
 
 	if (evt != EDGETPU_WAKELOCK_EVENT_END)
 		edgetpu_wakelock_dec_event(client->wakelock, evt);
 
 	/* handle telemetry types */
-	switch (pvt->type) {
+	switch (type) {
 	case VMA_LOG:
-		edgetpu_telemetry_dec_mmap_count(etdev, EDGETPU_TELEMETRY_LOG);
+		edgetpu_telemetry_dec_mmap_count(etdev, EDGETPU_TELEMETRY_LOG,
+						 VMA_DATA_GET(pvt->flag));
 		break;
 	case VMA_TRACE:
-		edgetpu_telemetry_dec_mmap_count(etdev,
-						 EDGETPU_TELEMETRY_TRACE);
+		edgetpu_telemetry_dec_mmap_count(etdev, EDGETPU_TELEMETRY_TRACE,
+						 VMA_DATA_GET(pvt->flag));
 		break;
 	default:
 		break;
@@ -218,24 +238,26 @@ static const struct vm_operations_struct edgetpu_vma_ops = {
 int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma)
 {
 	int ret = 0;
+	edgetpu_vma_flags_t flag;
 	enum edgetpu_vma_type type;
 	enum edgetpu_wakelock_event evt;
 	struct edgetpu_vma_private *pvt;
 
 	if (vma->vm_start & ~PAGE_MASK) {
 		etdev_dbg(client->etdev,
-			  "Base address not page-aligned: 0x%lx\n",
+			  "Base address not page-aligned: %#lx\n",
 			  vma->vm_start);
 		return -EINVAL;
 	}
 
-	etdev_dbg(client->etdev, "%s: mmap pgoff = %lX\n", __func__,
+	etdev_dbg(client->etdev, "%s: mmap pgoff = %#lX\n", __func__,
 		  vma->vm_pgoff);
 
-	type = mmap_vma_type(vma->vm_pgoff);
+	flag = mmap_vma_flag(vma->vm_pgoff);
+	type = VMA_TYPE(flag);
 	if (type == VMA_INVALID)
 		return -EINVAL;
-	pvt = edgetpu_vma_private_alloc(client, type);
+	pvt = edgetpu_vma_private_alloc(client, flag);
 	if (!pvt)
 		return -ENOMEM;
 
@@ -259,19 +281,19 @@ int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma)
 
 	/* Allow mapping log and telemetry buffers without a group */
 	if (type == VMA_LOG) {
-		ret = edgetpu_mmap_telemetry_buffer(client->etdev,
-						    EDGETPU_TELEMETRY_LOG, vma);
+		ret = edgetpu_mmap_telemetry_buffer(client->etdev, EDGETPU_TELEMETRY_LOG, vma,
+						    VMA_DATA_GET(flag));
 		goto out_set_op;
 	}
 	if (type == VMA_TRACE) {
-		ret = edgetpu_mmap_telemetry_buffer(
-			client->etdev, EDGETPU_TELEMETRY_TRACE, vma);
+		ret = edgetpu_mmap_telemetry_buffer(client->etdev, EDGETPU_TELEMETRY_TRACE, vma,
+						    VMA_DATA_GET(flag));
 		goto out_set_op;
 	}
 
 	evt = vma_type_to_wakelock_event(type);
 	/*
-	 * @type should always correspond to a valid event since we handled
+	 * VMA_TYPE(@flag) should always correspond to a valid event since we handled
 	 * telemetry mmaps above, still check evt != END in case new types are
 	 * added in the future.
 	 */
@@ -416,7 +438,7 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	}
 
 	etdev->telemetry =
-		devm_kzalloc(etdev->dev, sizeof(*etdev->telemetry), GFP_KERNEL);
+		devm_kcalloc(etdev->dev, etdev->num_cores, sizeof(*etdev->telemetry), GFP_KERNEL);
 	if (!etdev->telemetry) {
 		ret = -ENOMEM;
 		goto remove_usage_stats;
@@ -587,7 +609,8 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   struct edgetpu_coherent_mem *mem,
 			   enum edgetpu_context_id context_id)
 {
-	const u32 flags = EDGETPU_MMU_DIE | EDGETPU_MMU_32 | EDGETPU_MMU_HOST;
+	const u32 flags = EDGETPU_MMU_DIE | EDGETPU_MMU_32 | EDGETPU_MMU_HOST |
+			  EDGETPU_MMU_COHERENT;
 
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
 					GFP_KERNEL);

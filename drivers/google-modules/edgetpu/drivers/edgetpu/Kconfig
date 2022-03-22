@@ -31,14 +31,6 @@ config EDGETPU_EXTERNAL_WRAPPER_CLASS
 	  external classes that wrap the EdgeTPU core driver and is not
 	  intended for interactive use.
 
-config EDGETPU_FPGA
-	bool "Build for EdgeTPU chip FPGA emulation"
-	depends on EDGETPU_FRAMEWORK
-	default n
-	help
-	  Say Y to build for HAPS/Palladium/etc. FPGA emulators, or N to build
-	  silicon with full number of tiles.
-
 config EDGETPU_TELEMETRY_TRACE
 	bool "Build EdgeTPU driver with firmware tracing support"
 	depends on EDGETPU_FRAMEWORK

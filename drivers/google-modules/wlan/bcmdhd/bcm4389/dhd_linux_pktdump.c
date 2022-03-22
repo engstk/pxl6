@@ -190,7 +190,7 @@ static const char tx_pktfate[][30] = {
 				((const eapol_key_hdr_t *)(key))->replay[7]
 #define TXFATE_FMT		" TX_PKTHASH:0x%X TX_PKT_FATE:%s"
 #define TX_PKTHASH(pkthash)		((pkthash) ? (*pkthash) : (0))
-#define TX_FATE_STR(fate)	(((*fate) <= (WLFC_CTL_PKTFLAG_FORCED_EXPIRED)) ? \
+#define TX_FATE_STR(fate)	(((*fate) >= (0) && (*fate) <= (WLFC_CTL_PKTFLAG_FORCED_EXPIRED)) ?\
 				(tx_pktfate[(*fate)]) : "TX_PKT_FATE_UNKNOWN")
 #define TX_FATE(fate)		((fate) ? (TX_FATE_STR(fate)) : "N/A")
 #define TX_FATE_ACKED(fate)	((fate) ? ((*fate) == (WLFC_CTL_PKTFLAG_DISCARD)) : (0))

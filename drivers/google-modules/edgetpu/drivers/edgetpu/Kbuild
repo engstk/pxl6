@@ -1,7 +1,7 @@
 obj-m	+= abrolhos.o
-ccflags-y	+= -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -I$(src)/include
 # Use the absolute path of this Makefile to get the source directory.
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+ccflags-y	+= -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -I$(CURRENT_DIR)/include
 GIT_PATH=$(CURRENT_DIR)/../../
 ifeq ($(shell git --git-dir=$(GIT_PATH)/.git rev-parse --is-inside-work-tree),true)
 	GIT_REPO_STATE=$(shell (git --git-dir=$(GIT_PATH)/.git --work-tree=$(GIT_PATH) status --porcelain | grep -q .) && echo -dirty)
@@ -10,9 +10,13 @@ else
 	ccflags-y	+= -DGIT_REPO_TAG=\"Not\ a\ git\ repository\"
 endif
 
-edgetpu-fw-objs := edgetpu-firmware.o edgetpu-firmware-util.o edgetpu-shared-fw.o
-edgetpu-objs	:= edgetpu-mailbox.o edgetpu-kci.o edgetpu-telemetry.o edgetpu-mapping.o edgetpu-dmabuf.o edgetpu-async.o edgetpu-iremap-pool.o edgetpu-sw-watchdog.o $(edgetpu-fw-objs)
+edgetpu-objs	:= edgetpu-mailbox.o edgetpu-kci.o edgetpu-telemetry.o edgetpu-mapping.o edgetpu-dmabuf.o edgetpu-async.o edgetpu-iremap-pool.o edgetpu-sw-watchdog.o edgetpu-firmware.o edgetpu-firmware-util.o
+
 abrolhos-y	:= abrolhos-device.o abrolhos-device-group.o abrolhos-fs.o abrolhos-core.o abrolhos-platform.o abrolhos-firmware.o abrolhos-thermal.o abrolhos-pm.o abrolhos-iommu.o abrolhos-debug-dump.o abrolhos-usage-stats.o abrolhos-wakelock.o $(edgetpu-objs)
+
+
+
+
 CFLAGS_abrolhos-fs.o := -DCONFIG_ABROLHOS=1
 CFLAGS_abrolhos-core.o := -DCONFIG_ABROLHOS=1
 CFLAGS_abrolhos-device.o := -DCONFIG_ABROLHOS=1

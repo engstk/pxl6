@@ -598,6 +598,27 @@ DEFINE_EVENT(local_only_evt, llhw_list_calibration,
 	TP_ARGS(local)
 	);
 
+TRACE_EVENT(llhw_vendor_cmd,
+	TP_PROTO(const struct mcps802154_local *local, u32 vendor_id,
+		 u32 subcmd, size_t data_len),
+	TP_ARGS(local, vendor_id, subcmd, data_len),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		__field(u32, vendor_id)
+		__field(u32, subcmd)
+		__field(u32, data_len)
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		__entry->vendor_id = vendor_id;
+		__entry->subcmd = subcmd;
+		__entry->data_len = data_len;
+		),
+	TP_printk(LOCAL_PR_FMT " vendor_id=0x%06x subcmd=0x%x data_len=%d",
+		  LOCAL_PR_ARG, __entry->vendor_id, __entry->subcmd,
+		  __entry->data_len)
+	);
+
 TRACE_EVENT(llhw_event_rx_error,
 	TP_PROTO(const struct mcps802154_local *local,
 		 enum mcps802154_rx_error_type error),

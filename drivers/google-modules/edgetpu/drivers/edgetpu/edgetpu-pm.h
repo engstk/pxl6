@@ -28,7 +28,7 @@ struct edgetpu_pm_handlers {
 	/* Platform-specific power up. Nesting is handled at generic layer */
 	int (*power_up)(struct edgetpu_pm *etpm);
 	/* Platform-specific power down. Nesting is handled at generic layer */
-	void (*power_down)(struct edgetpu_pm *etpm);
+	int (*power_down)(struct edgetpu_pm *etpm);
 };
 
 struct edgetpu_pm {

@@ -105,7 +105,7 @@ static int dw3000_nfcc_coex_enable_SPIxMAVAIL_interrupts(struct dw3000 *dw)
 		return rc;
 	/* Set SPI1MAVAIL and SPI2MAVAIL masks */
 	reg |= (DW3000_SPI_SEM_SPI1MAVAIL_BIT_MASK >> 8) |
-	      (DW3000_SPI_SEM_SPI2MAVAIL_BIT_MASK >> 8);
+	       (DW3000_SPI_SEM_SPI2MAVAIL_BIT_MASK >> 8);
 	return dw3000_reg_write8(dw, DW3000_SPI_SEM_ID, 1, reg);
 }
 
@@ -125,14 +125,49 @@ static int dw3000_nfcc_coex_disable_SPIxMAVAIL_interrupts(struct dw3000 *dw)
 	if (rc)
 		return rc;
 	/* Reset SPI1MAVAIL and SPI2MAVAIL masks. */
-	reg = reg & ~(DW3000_SPI_SEM_SPI1MAVAIL_BIT_MASK >> 8) &
-	      ~(DW3000_SPI_SEM_SPI2MAVAIL_BIT_MASK >> 8);
+	reg &= ~(DW3000_SPI_SEM_SPI1MAVAIL_BIT_MASK >> 8) &
+	       ~(DW3000_SPI_SEM_SPI2MAVAIL_BIT_MASK >> 8);
 	rc = dw3000_reg_write8(dw, DW3000_SPI_SEM_ID, 1, reg);
 	if (rc)
 		return rc;
 	/* Disable the dual SPI interrupt for SPI. */
 	return dw3000_reg_modify32(dw, DW3000_SYS_CFG_ID, 0,
 				   (u32)~DW3000_SYS_CFG_DS_IE2_BIT_MASK, 0);
+}
+
+/**
+ * dw3000_nfcc_coex_configure() - Configure the nfcc_coex.
+ * @dw: Driver context.
+ *
+ * Return: 0 on success, else an error.
+ */
+int dw3000_nfcc_coex_configure(struct dw3000 *dw)
+{
+	int r;
+
+	if (dw->nfcc_coex.configured)
+		return 0;
+
+	trace_dw3000_nfcc_coex_configure(dw);
+	r = dw3000_configure_chan(dw);
+	if (r) {
+		trace_dw3000_nfcc_coex_err(dw, "configure channel fails");
+		return r;
+	}
+	r = dw3000_rx_disable(dw);
+	if (r) {
+		trace_dw3000_nfcc_coex_warn(dw, "rx disable failed");
+		return r;
+	}
+	r = dw3000_nfcc_coex_enable_SPIxMAVAIL_interrupts(dw);
+	if (r) {
+		trace_dw3000_nfcc_coex_err(
+			dw, "SPIxMAVAIL interrupts enable failed");
+		return r;
+	}
+
+	dw->nfcc_coex.configured = true;
+	return 0;
 }
 
 /**
@@ -150,7 +185,7 @@ static int dw3000_nfcc_coex_do_watchdog_timeout(struct dw3000 *dw,
 	dw->nfcc_coex.access_info.stop = true;
 	/* FIXME: The expected is a hard reset of decawave when the semaphore
 	 * haven't been released.
-	 * But CCC firmware can not currently provide a message with nb_tlv=0. */
+	 * But nfcc_coex firmware can not currently provide a message with nb_tlv=0. */
 	dw3000_nfcc_coex_disable(dw);
 	mcps802154_tx_done(dw->llhw);
 
@@ -215,24 +250,40 @@ int dw3000_nfcc_coex_handle_spi1_avail_isr(struct dw3000 *dw)
 }
 
 /**
- * dw3000_nfcc_coex_handle_spi1_ready_isr() - Handle SPI ready interrupt.
+ * dw3000_nfcc_coex_idle_timeout() - Idle expired.
  * @dw: Driver context.
  *
  * Return: 0 on success, else an error.
  */
-int dw3000_nfcc_coex_handle_spi1_ready_isr(struct dw3000 *dw)
+int dw3000_nfcc_coex_idle_timeout(struct dw3000 *dw)
 {
 	int r;
 
-	if (__dw3000_chip_version == DW3000_C0_VERSION)
-		return -EOPNOTSUPP;
-
+	trace_dw3000_nfcc_coex_idle_timeout(dw);
+	if (!dw->nfcc_coex.configured) {
+		r = dw3000_nfcc_coex_configure(dw);
+		if (r) {
+			trace_dw3000_nfcc_coex_err(
+				dw, "dw3000_nfcc_coex_configured failed");
+			return r;
+		}
+	}
 	/* NFCC was enabled before sleeping. Enable the NFCC mailbox
 	 * interrupt and send the right message to the NFCC. */
 	r = dw3000_nfcc_coex_enable_SPIxMAVAIL_interrupts(dw);
 	if (r)
-		return r;
-	return dw3000_nfcc_coex_message_send(dw);
+		goto idle_timeout_failure;
+	r = dw3000_nfcc_coex_message_send(dw);
+	if (r) {
+		trace_dw3000_nfcc_coex_err(dw, "nfcc_coex_message_send failed");
+		goto idle_timeout_failure;
+	}
+
+	return 0;
+
+idle_timeout_failure:
+	// Call mcps802154_broken(dw->llhw) in wq ?
+	return r;
 }
 
 /**
@@ -259,8 +310,6 @@ void dw3000_nfcc_coex_init(struct dw3000 *dw)
 int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel,
 			    dw3000_nfcc_coex_spi_avail_cb cb)
 {
-	int rc;
-
 	trace_dw3000_nfcc_coex_enable(dw, channel);
 
 	/* NFCC needs a D0 chip or above. C0 does not have 2 SPI interfaces. */
@@ -268,34 +317,17 @@ int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel,
 		trace_dw3000_nfcc_coex_err(dw, "C0 chip is not supported");
 		return -EOPNOTSUPP;
 	}
-
-	/* Need to wake-up device and wait it before continuing. */
-	dw3000_wakeup_and_wait(dw);
+	if (dw->nfcc_coex.enabled)
+		return -EBUSY;
 
 	/* Set the channel for NFCC and save current config. */
-	/* FIXME: original_channel lost on second call. */
 	dw->nfcc_coex.original_channel = dw->config.chan;
 	dw->nfcc_coex.sync_time_needed = true;
 	dw->config.chan = channel;
-	rc = dw3000_configure_chan(dw);
-	if (rc) {
-		trace_dw3000_nfcc_coex_err(dw, "configure channel fails");
-		return rc;
-	}
-
-	/* Disable rx during NFCC. */
-	rc = dw3000_rx_disable(dw);
-	if (rc)
-		trace_dw3000_nfcc_coex_warn(dw, "rx disable failed");
-
-	rc = dw3000_nfcc_coex_enable_SPIxMAVAIL_interrupts(dw);
-	if (rc)
-		trace_dw3000_nfcc_coex_err(
-			dw, "SPIxMAVAIL interrupts enable failed");
-
+	dw->nfcc_coex.configured = false;
 	dw->nfcc_coex.enabled = true;
 	dw->nfcc_coex.spi_avail_cb = cb;
-	return rc;
+	return 0;
 }
 
 /**
@@ -308,6 +340,9 @@ int dw3000_nfcc_coex_disable(struct dw3000 *dw)
 {
 	int rc;
 	bool val = false;
+
+	if (!dw->nfcc_coex.configured)
+		return 0;
 
 	trace_dw3000_nfcc_coex_disable(dw);
 
@@ -336,27 +371,14 @@ int dw3000_nfcc_coex_disable(struct dw3000 *dw)
 		if (rc) {
 			trace_dw3000_nfcc_coex_err(
 				dw,
-				"ccc_disable error while restoring channel");
+				"nfcc_coex_disable error while restoring channel");
 			return rc;
 		}
 	}
 
+	dw->nfcc_coex.configured = false;
 	/* TODO: Inform HAL that NFCC session is complete. */
 	dw->nfcc_coex.enabled = false;
 	dw->nfcc_coex.spi_avail_cb = NULL;
 	return rc;
-}
-
-/**
- * dw3000_nfcc_coex_sleep() - Entering in deep sleep.
- * @dw: Driver context.
- * @sleep_dtu: Sleep duration in dtu.
- *
- * Return: 0 on success, else an error.
- */
-int dw3000_nfcc_coex_sleep(struct dw3000 *dw, u32 sleep_dtu)
-{
-	trace_dw3000_nfcc_coex_sleep(dw, sleep_dtu);
-	dw->deep_sleep_state.next_operational_state = DW3000_OP_STATE_IDLE_PLL;
-	return dw3000_deep_sleep_and_wakeup(dw, DTU_TO_US(sleep_dtu));
 }

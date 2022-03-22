@@ -55,10 +55,10 @@ void dw3000_enqueue(struct dw3000 *dw, unsigned long work)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	stm->pending_work |= work;
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 }
 
 /* Enqueue a generic work and wait for execution */
@@ -83,13 +83,14 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 		return -EINTR;
 	}
 	/* Slow path if not in STM thread context */
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	stm->pending_work |= work;
 	stm->generic_work = cmd;
-	wake_up_locked(&stm->work_wq);
-	wait_event_interruptible_locked_irq(stm->work_wq,
-					    !(stm->pending_work & work));
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	wake_up(&stm->work_wq);
+	wait_event_lock_irq(stm->work_wq,
+						!(stm->pending_work & work),
+						stm->lock);
+	spin_unlock_irqrestore(&stm->lock, flags);
 	mutex_unlock(&stm->mtx);
 	return cmd->ret;
 }
@@ -102,10 +103,10 @@ void dw3000_enqueue_timer(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	if (stm->pending_work & DW3000_TIMER_WORK) {
 		/* A timer cmd is already queued. */
-		spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+		spin_unlock_irqrestore(&stm->lock, flags);
 		dev_err(dw->dev,
 			"A timer cmd is already queued, this cmd will be ignored\n");
 		return;
@@ -120,7 +121,7 @@ void dw3000_enqueue_timer(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 	 * occurs in call_timer_fn().
 	 * So, it's less bad to unlock here.
 	 */
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 	/* Can't return cmd->ret because it's not yet executed. */
 }
 
@@ -130,10 +131,10 @@ void dw3000_dequeue(struct dw3000 *dw, unsigned long work)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	stm->pending_work &= ~work;
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 }
 
 /* Enqueue IRQ work */
@@ -142,13 +143,13 @@ void dw3000_enqueue_irq(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	if (!(stm->pending_work & DW3000_IRQ_WORK)) {
 		stm->pending_work |= DW3000_IRQ_WORK;
 		disable_irq_nosync(dw->spi->irq);
 	}
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 }
 
 void dw3000_clear_irq(struct dw3000 *dw)
@@ -156,10 +157,10 @@ void dw3000_clear_irq(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	stm->pending_work &= ~DW3000_IRQ_WORK;
 	enable_irq(dw->spi->irq);
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 }
 
 /* Wait for new work in the queue */
@@ -168,10 +169,9 @@ void dw3000_wait_pending_work(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
-	wait_event_interruptible_locked_irq(
-		stm->work_wq, stm->pending_work || kthread_should_stop());
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
+	wait_event_lock_irq(stm->work_wq, stm->pending_work || kthread_should_stop(), stm->lock);
+	spin_unlock_irqrestore(&stm->lock, flags);
 }
 
 /* Read work queue state */
@@ -181,9 +181,9 @@ unsigned long dw3000_get_pending_work(struct dw3000 *dw)
 	unsigned long work;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	work = stm->pending_work;
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 
 	return work;
 }
@@ -297,6 +297,7 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 	mutex_init(&stm->mtx);
 
 	/* SKIP: Setup timers (state timeout and ADC timers) */
+	spin_lock_init(&stm->lock);
 
 	/* Init event handler thread */
 	stm->mthread = kthread_create(dw3000_event_thread, dw, "dw3000-%s",
@@ -327,9 +328,9 @@ int dw3000_state_start(struct dw3000 *dw)
 
 	/* Ensure spurious IRQ that may come during dw3000_setup_irq() (because
 	   IRQ pin is already HIGH) isn't handle by the STM thread. */
-	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	spin_lock_irqsave(&stm->lock, flags);
 	stm->pending_work &= ~DW3000_IRQ_WORK;
-	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
+	spin_unlock_irqrestore(&stm->lock, flags);
 
 	/* Start state machine thread */
 	wake_up_process(stm->mthread);

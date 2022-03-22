@@ -94,6 +94,26 @@ struct edgetpu_firmware_buffer {
 	const char *name;	/* the name of this firmware */
 };
 
+/*
+ * Descriptor for loaded firmware, either in shared buffer mode or carveout mode
+ * (non-shared, custom allocated memory).
+ */
+struct edgetpu_firmware_desc {
+	/*
+	 * Mode independent buffer information. This is either passed into or
+	 * updated by handlers.
+	 */
+	struct edgetpu_firmware_buffer buf;
+	/*
+	 * Shared firmware buffer when we're using shared buffer mode. This
+	 * pointer to keep and release the reference count on unloading this
+	 * shared firmware buffer.
+	 *
+	 * This is NULL when firmware is loaded in carveout mode.
+	 */
+	struct edgetpu_shared_fw_buffer *shared_buf;
+};
+
 struct edgetpu_firmware_chip_data {
 	/* Name of default firmware image for this chip. */
 	const char *default_firmware_name;
@@ -160,6 +180,19 @@ struct edgetpu_firmware_chip_data {
 	 */
 	int (*restart)(struct edgetpu_firmware *et_fw, bool force_reset);
 };
+
+/*
+ * Chip-dependent (actually chip family dependent, mobile vs. MCP) calls
+ * for loading/unloading firmware images.  These handle chip-specified carveout
+ * buffers vs. shared firmware handling for multi-chip platforms.  Used by the
+ * common firmware layer.
+ */
+int edgetpu_firmware_chip_load_locked(
+		struct edgetpu_firmware *et_fw,
+		struct edgetpu_firmware_desc *fw_desc, const char *name);
+void edgetpu_firmware_chip_unload_locked(
+		struct edgetpu_firmware *et_fw,
+		struct edgetpu_firmware_desc *fw_desc);
 
 /*
  * Returns the chip-specific IOVA where the firmware is mapped.
@@ -251,5 +284,21 @@ uint32_t edgetpu_firmware_get_cl(struct edgetpu_firmware *et_fw);
 
 /* Returns the build time of the image in seconds since 1970. */
 uint64_t edgetpu_firmware_get_build_time(struct edgetpu_firmware *et_fw);
+
+/*
+ * Kernel verify firmware signature (if EDGETPU_FEATURE_FW_SIG enabled).
+ *
+ * @etdev:      the edgetpu_dev for which the initial load of a (probably
+ *              shared) firmware image is requested
+ * @name:       name of the image being validated (request_firmware path)
+ * @image_data: passes in the pointer to the raw image with signature, returns
+ *              pointer to the firmware code image.
+ * @image_size: passes in the size of the raw image with signature, returns
+ *              size of the firmware code image.
+ */
+bool edgetpu_firmware_verify_signature(struct edgetpu_dev *etdev,
+				       const char *name,
+				       void **image_data, size_t *image_size);
+
 
 #endif /* __EDGETPU_FIRMWARE_H__ */
