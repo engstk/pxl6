@@ -143,11 +143,10 @@ static int i2c_read(struct lwis_i2c_device *i2c, uint64_t offset, uint64_t *valu
 	u8 *rbuf;
 	struct i2c_client *client;
 	struct i2c_msg msg[2];
-
-	const unsigned int offset_bits = i2c->base_dev.native_addr_bitwidth;
-	const unsigned int value_bits = i2c->base_dev.native_value_bitwidth;
-	const unsigned int offset_bytes = offset_bits / BITS_PER_BYTE;
-	const unsigned int value_bytes = value_bits / BITS_PER_BYTE;
+	unsigned int offset_bits;
+	unsigned int offset_bytes;
+	unsigned int value_bits;
+	unsigned int value_bytes;
 
 	if (!i2c || !i2c->client) {
 		pr_err("Cannot find i2c instance\n");
@@ -155,11 +154,15 @@ static int i2c_read(struct lwis_i2c_device *i2c, uint64_t offset, uint64_t *valu
 	}
 	client = i2c->client;
 
+	offset_bits = i2c->base_dev.native_addr_bitwidth;
+	offset_bytes = offset_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(offset_bits, MIN_OFFSET_BITS, MAX_OFFSET_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid offset bitwidth %d\n", offset_bits);
 		return -EINVAL;
 	}
 
+	value_bits = i2c->base_dev.native_value_bitwidth;
+	value_bytes = value_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(value_bits, MIN_DATA_BITS, MAX_DATA_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid value bitwidth %d\n", value_bits);
 		return -EINVAL;
@@ -211,12 +214,11 @@ static int i2c_write(struct lwis_i2c_device *i2c, uint64_t offset, uint64_t valu
 	u8 *buf;
 	struct i2c_client *client;
 	struct i2c_msg msg;
-
-	const unsigned int offset_bits = i2c->base_dev.native_addr_bitwidth;
-	const unsigned int value_bits = i2c->base_dev.native_value_bitwidth;
-	const unsigned int offset_bytes = offset_bits / BITS_PER_BYTE;
-	const unsigned int value_bytes = value_bits / BITS_PER_BYTE;
-	const int msg_bytes = offset_bytes + value_bytes;
+	unsigned int offset_bits;
+	unsigned int value_bits;
+	unsigned int offset_bytes;
+	unsigned int value_bytes;
+	int msg_bytes;
 
 	if (!i2c || !i2c->client) {
 		pr_err("Cannot find i2c instance\n");
@@ -224,16 +226,26 @@ static int i2c_write(struct lwis_i2c_device *i2c, uint64_t offset, uint64_t valu
 	}
 	client = i2c->client;
 
+	if (i2c->base_dev.is_read_only) {
+		dev_err(i2c->base_dev.dev, "Device is read only\n");
+		return -EPERM;
+	}
+
+	offset_bits = i2c->base_dev.native_addr_bitwidth;
+	offset_bytes = offset_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(offset_bits, MIN_OFFSET_BITS, MAX_OFFSET_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid offset bitwidth %d\n", offset_bits);
 		return -EINVAL;
 	}
 
+	value_bits = i2c->base_dev.native_value_bitwidth;
+	value_bytes = value_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(value_bits, MIN_DATA_BITS, MAX_DATA_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid value bitwidth %d\n", value_bits);
 		return -EINVAL;
 	}
 
+	msg_bytes = offset_bytes + value_bytes;
 	buf = kmalloc(msg_bytes, GFP_KERNEL);
 	if (!buf) {
 		dev_err(i2c->base_dev.dev, "Failed to allocate memory for i2c buffer\n");
@@ -264,9 +276,8 @@ static int i2c_read_batch(struct lwis_i2c_device *i2c, uint64_t start_offset, ui
 	uint8_t *wbuf;
 	struct i2c_client *client;
 	struct i2c_msg msg[2];
-
-	const unsigned int offset_bits = i2c->base_dev.native_addr_bitwidth;
-	const unsigned int offset_bytes = offset_bits / BITS_PER_BYTE;
+	unsigned int offset_bits;
+	unsigned int offset_bytes;
 
 	if (!i2c || !i2c->client) {
 		pr_err("Cannot find i2c instance\n");
@@ -274,6 +285,8 @@ static int i2c_read_batch(struct lwis_i2c_device *i2c, uint64_t start_offset, ui
 	}
 	client = i2c->client;
 
+	offset_bits = i2c->base_dev.native_addr_bitwidth;
+	offset_bytes = offset_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(offset_bits, MIN_OFFSET_BITS, MAX_OFFSET_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid offset bitwidth %d\n", offset_bits);
 		return -EINVAL;
@@ -313,10 +326,9 @@ static int i2c_write_batch(struct lwis_i2c_device *i2c, uint64_t start_offset, u
 	uint8_t *buf;
 	struct i2c_client *client;
 	struct i2c_msg msg;
-
-	const unsigned int offset_bits = i2c->base_dev.native_addr_bitwidth;
-	const unsigned int offset_bytes = offset_bits / BITS_PER_BYTE;
-	const int msg_bytes = offset_bytes + write_buf_size;
+	unsigned int offset_bits;
+	unsigned int offset_bytes;
+	int msg_bytes;
 
 	if (!i2c || !i2c->client) {
 		pr_err("Cannot find i2c instance\n");
@@ -324,11 +336,19 @@ static int i2c_write_batch(struct lwis_i2c_device *i2c, uint64_t start_offset, u
 	}
 	client = i2c->client;
 
+	if (i2c->base_dev.is_read_only) {
+		dev_err(i2c->base_dev.dev, "Device is read only\n");
+		return -EPERM;
+	}
+
+	offset_bits = i2c->base_dev.native_addr_bitwidth;
+	offset_bytes = offset_bits / BITS_PER_BYTE;
 	if (!check_bitwidth(offset_bits, MIN_OFFSET_BITS, MAX_OFFSET_BITS)) {
 		dev_err(i2c->base_dev.dev, "Invalid offset bitwidth %d\n", offset_bits);
 		return -EINVAL;
 	}
 
+	msg_bytes = offset_bytes + write_buf_size;
 	buf = kmalloc(msg_bytes, GFP_KERNEL);
 	if (!buf) {
 		dev_err(i2c->base_dev.dev, "Failed to allocate memory for i2c buffer\n");

@@ -8,42 +8,14 @@
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 
+#include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-usage-stats.h"
 
-#if IS_ENABLED(CONFIG_ABROLHOS)
-#include "abrolhos-pm.h"
-
-static enum tpu_pwr_state tpu_states_arr[] = {
-	TPU_ACTIVE_UUD,
-	TPU_ACTIVE_SUD,
-	TPU_ACTIVE_UD,
-	TPU_ACTIVE_NOM,
-	TPU_ACTIVE_OD,
-};
-
-#else /* CONFIG_HERMOSA */
-
-static uint32_t tpu_states_arr[] = {
-	4,	/* kActiveMinPower, kActiveVeryLowPower: 400MHz */
-	5,	/* kActiveLowPower: 800MHz */
-	6,	/* kActive: 950MHz */
-};
-
-static uint32_t tpu_states_display[] = {
-	400,
-	800,
-	950,
-};
-
-#endif /* CONFIG_ABROLHOS */
-
-#define NUM_TPU_STATES ARRAY_SIZE(tpu_states_arr)
-
 struct uid_entry {
 	int32_t uid;
-	uint64_t time_in_state[NUM_TPU_STATES];
+	uint64_t time_in_state[EDGETPU_NUM_STATES];
 	struct hlist_node node;
 };
 
@@ -51,8 +23,8 @@ static int tpu_state_map(uint32_t state)
 {
 	int i;
 
-	for (i = (NUM_TPU_STATES - 1); i >= 0; i--) {
-		if (state >= tpu_states_arr[i])
+	for (i = (EDGETPU_NUM_STATES - 1); i >= 0; i--) {
+		if (state >= edgetpu_active_states[i])
 			return i;
 	}
 
@@ -322,13 +294,9 @@ static ssize_t tpu_usage_show(struct device *dev,
 	/* uid: state0speed state1speed ... */
 	ret += scnprintf(buf, PAGE_SIZE, "uid:");
 
-	for (i = 0; i < NUM_TPU_STATES; i++)
+	for (i = 0; i < EDGETPU_NUM_STATES; i++)
 		ret += scnprintf(buf + ret, PAGE_SIZE - ret, " %d",
-#if IS_ENABLED(CONFIG_ABROLHOS)
-				 tpu_states_arr[i]);
-#else
-				 tpu_states_display[i]);
-#endif
+				 edgetpu_states_display[i]);
 
 	ret += scnprintf(buf + ret, PAGE_SIZE - ret, "\n");
 
@@ -338,7 +306,7 @@ static ssize_t tpu_usage_show(struct device *dev,
 		ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%d:",
 				 uid_entry->uid);
 
-		for (i = 0; i < NUM_TPU_STATES; i++)
+		for (i = 0; i < EDGETPU_NUM_STATES; i++)
 			ret += scnprintf(buf + ret, PAGE_SIZE - ret, " %lld",
 					 uid_entry->time_in_state[i]);
 

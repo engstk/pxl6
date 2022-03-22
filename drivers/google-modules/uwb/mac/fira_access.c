@@ -39,7 +39,6 @@
 
 #define FIRA_STS_FOM_THRESHOLD 153
 
-static void fira_update_antennas_id(struct fira_session *session);
 static struct mcps802154_access *
 fira_access_controlee(struct fira_local *local, struct fira_session *session);
 
@@ -258,7 +257,7 @@ static void fira_rx_frame_control(struct fira_local *local,
 	struct mcps802154_ie_get_context ie_get = {};
 	u32 sts_index;
 	unsigned int n_slots;
-	int last_slot_index;
+	int last_slot_index, block_stride_len;
 	int i;
 	bool stop_ranging;
 
@@ -274,11 +273,12 @@ static void fira_rx_frame_control(struct fira_local *local,
 		goto failed;
 	if (allow_resync_session) {
 		session = local->current_session = allow_resync_session;
+		fira_session_prepare(local, session);
 		fira_access_controlee(local, session);
 	}
 
 	if (!fira_frame_control_payload_check(local, skb, &ie_get, &n_slots,
-					      &stop_ranging))
+					      &stop_ranging, &block_stride_len))
 		goto failed;
 
 	fira_session_resync(local, session, sts_index, info->timestamp_dtu);
@@ -309,6 +309,8 @@ static void fira_rx_frame_control(struct fira_local *local,
 	local->access.duration_dtu =
 		session->params.slot_duration_dtu * (last_slot_index + 1);
 	local->access.n_frames = n_slots;
+
+	session->next_block_stride_len = block_stride_len;
 
 	return;
 failed:
@@ -542,44 +544,6 @@ struct mcps802154_access_ops fira_access_ops = {
 	.tx_return = fira_tx_return,
 };
 
-static int fira_next_in_bitfield_u8(u8 bitfield, int prev)
-{
-	u32 padded_bitfield = 1 << 16 | bitfield << 8 | bitfield;
-	u32 rotated_bitfield = padded_bitfield >> (prev + 1);
-
-	return (ffs(rotated_bitfield) + prev) % 8;
-}
-
-static void fira_update_antennas_id(struct fira_session *session)
-{
-	const struct fira_session_params *p = &session->params;
-
-	session->tx_ant = fira_next_in_bitfield_u8(p->tx_antenna_selection,
-						   session->tx_ant);
-
-	switch (p->rx_antenna_switch) {
-	default:
-	case FIRA_RX_ANTENNA_SWITCH_BETWEEN_ROUND:
-		/* Switch pairs between round. */
-		session->rx_ant_pair[0] = session->rx_ant_pair[1] =
-			fira_next_in_bitfield_u8(p->rx_antenna_selection,
-						 session->rx_ant_pair[0]);
-		break;
-	case FIRA_RX_ANTENNA_SWITCH_DURING_ROUND:
-		session->rx_ant_pair[0] = p->rx_antenna_pair_azimuth;
-		session->rx_ant_pair[1] = p->rx_antenna_pair_elevation;
-		break;
-	case FIRA_RX_ANTENNA_SWITCH_TWO_RANGING:
-		/* Switch from one ranging to another. */
-		if (session->rx_ant_pair[0] == p->rx_antenna_pair_azimuth)
-			session->rx_ant_pair[0] = p->rx_antenna_pair_elevation;
-		else
-			session->rx_ant_pair[0] = p->rx_antenna_pair_azimuth;
-		session->rx_ant_pair[1] = session->rx_ant_pair[0];
-		break;
-	}
-}
-
 static __le16 fira_access_set_short_address(struct fira_local *local,
 					    struct fira_session *session,
 					    struct mcps802154_access *access)
@@ -648,8 +612,6 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 					session->params.slot_duration_dtu;
 	access->frames = local->frames;
 	access->channel = fira_access_channel(local, session);
-
-	fira_update_antennas_id(session);
 
 	local->n_stopped_controlees_short_addr = 0;
 	for (i = 0; i < controlees_array->size; i++) {
@@ -773,7 +735,6 @@ fira_access_controlee(struct fira_local *local, struct fira_session *session)
 	access->frames = local->frames;
 	access->n_frames = 1;
 	access->channel = fira_access_channel(local, session);
-	fira_update_antennas_id(session);
 
 	ri = local->ranging_info;
 	memset(ri, 0, sizeof(*ri));
@@ -841,6 +802,7 @@ struct mcps802154_access *fira_get_access(struct mcps802154_region *region,
 struct mcps802154_access *fira_compute_access(struct fira_local *local,
 					      struct fira_session *session)
 {
+	fira_session_prepare(local, session);
 	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER)
 		return fira_access_controller(local, session);
 	else

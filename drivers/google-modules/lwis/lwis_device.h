@@ -245,6 +245,8 @@ struct lwis_device {
 
 	/* Power management hibernation state of the device */
 	int pm_hibernation;
+	/* Is device read only */
+	bool is_read_only;
 };
 
 /*

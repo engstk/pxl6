@@ -26,10 +26,8 @@
 #include <linux/module.h>
 #include <net/vendor_cmd.h>
 
-#include "dw3000_nfcc_coex_testmode.h"
-
 /* Main defines */
-#define DW3000_NFCC_COEX_VER_ID 1
+#define DW3000_NFCC_COEX_VER_ID 2
 #define DW3000_NFCC_COEX_SIGNATURE_STR "QORVO"
 #define DW3000_NFCC_COEX_SIGNATURE_LEN 5
 #define DW3000_NFCC_COEX_MAX_NB_TLV 12
@@ -48,6 +46,9 @@
 /* MSG_HEADER_LEN is also the sizeof of dw3000_nfcc_coex_msg structure. */
 #define MSG_HEADER_LEN (DW3000_NFCC_COEX_SIGNATURE_LEN + 3)
 #define MSG_LEN(x) (MSG_HEADER_LEN + (x).tlvs_len)
+
+#define DW3000_NFCC_COEX_UUS_PER_SYS_POWER 8 /* To use with right shift. */
+#define DW3000_NFCC_COEX_DTU_PER_UUS_POWER 4 /* To use with left shift. */
 
 /**
  * struct dw3000_nfcc_coex_msg - Message read/write from/to scratch memory.
@@ -86,7 +87,7 @@ struct dw3000_nfcc_coex_buffer {
 		 */
 		u8 raw[DW3000_NFCC_COEX_MSG_MAX_SIZE];
 		/**
-		 * @msg: CCC Message.
+		 * @msg: nfcc_coex message.
 		 */
 		struct dw3000_nfcc_coex_msg msg;
 	};
@@ -101,22 +102,21 @@ struct dw3000_nfcc_coex_buffer {
  */
 struct dw3000_nfcc_coex_rx_msg_info {
 	/**
-	 * @next_timestamp_sys_time: Next NFCC access requested.
+	 * @next_timestamp_dtu: Next NFCC access requested.
 	 */
-	u32 next_timestamp_sys_time;
+	u32 next_timestamp_dtu;
 	/**
-	 * @next_duration_sys_time: Next NFCC duration access.
+	 * @next_duration_dtu: Next NFCC duration access.
 	 */
-	int next_duration_sys_time;
+	int next_duration_dtu;
 	/**
 	 * @next_slot_found: True when first next slot is found.
 	 */
 	bool next_slot_found;
-	/**
-	 * @slot_list: Pointer to array of slot.
-	 */
-	const struct dw3000_nfcc_coex_tlv_slot_list *slot_list;
 };
+
+/* Forward declaration. */
+struct dw3000;
 
 /**
  * typedef dw3000_nfcc_coex_spi_avail_cb - SPI available isr handler.
@@ -133,10 +133,6 @@ typedef int (*dw3000_nfcc_coex_spi_avail_cb)(
  */
 struct dw3000_nfcc_coex {
 	/**
-	 * @testmode_config: config with testmode enabled.
-	 */
-	const struct dw3000_nfcc_coex_testmode_config *testmode_config;
-	/**
 	 * @access_info: Access information to provide to upper layer.
 	 */
 	struct dw3000_vendor_cmd_nfcc_coex_get_access_info access_info;
@@ -145,13 +141,13 @@ struct dw3000_nfcc_coex {
 	 */
 	dw3000_nfcc_coex_spi_avail_cb spi_avail_cb;
 	/**
-	 * @testmode_round_count: Index number of NFCC session.
-	*/
-	u32 testmode_round_count;
-	/**
-	 * @session_start_dtu: start date of nfcc session in DTU.
+	 * @session_time0_dtu: Timestamp used as reference between NFCC and AP.
 	 */
-	u32 session_start_dtu;
+	u32 session_time0_dtu;
+	/**
+	 * @access_start_dtu: start date of nfcc session in DTU.
+	 */
+	u32 access_start_dtu;
 	/**
 	 * @prev_offset_sys_time: Previous offset between local and decawave time.
 	 */
@@ -172,6 +168,10 @@ struct dw3000_nfcc_coex {
 	 * @enabled: True when nfcc coex is enabled.
 	 */
 	bool enabled;
+	/**
+	 * @configured: True when nfcc coex is configured.
+	 */
+	bool configured;
 	/**
 	 * @sync_time_needed: True when clock_sync frame must be send.
 	 */

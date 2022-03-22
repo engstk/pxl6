@@ -432,6 +432,20 @@ struct exynos_panel {
 	 * greater than 0 means panel idle is active
 	 */
 	unsigned int panel_idle_vrefresh;
+	/**
+	 * indicates the lower bound of refresh rate
+	 * 0 means there is no lower bound limitation
+	 * -1 means display should not switch to lower
+	 * refresh rate while idle.
+	 */
+	int min_vrefresh;
+	/**
+	 * When the value is set to non-zero value, the panel
+	 * driver kernel idle timer will be disabled internally
+	 * (similar to writing 0 to panel_idle sysfs node) for
+	 * at least the delay time provided after a refresh rate update.
+	 */
+	u32 idle_delay_ms;
 
 	enum exynos_hbm_mode hbm_mode;
 	bool dimming_on;
@@ -454,6 +468,8 @@ struct exynos_panel {
 
 	struct te2_data te2;
 	ktime_t last_commit_ts;
+	ktime_t last_mode_set_ts;
+	struct delayed_work idle_work;
 
 	struct {
 		struct local_hbm {

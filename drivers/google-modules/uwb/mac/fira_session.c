@@ -25,6 +25,7 @@
 #include "fira_crypto.h"
 #include "fira_round_hopping_sequence.h"
 #include "fira_access.h"
+#include "fira_trace.h"
 #include "mcps802154_i.h"
 
 #include <linux/errno.h>
@@ -275,13 +276,68 @@ bool fira_session_is_ready(struct fira_local *local,
 	       round_duration_dtu < params->block_duration_dtu;
 }
 
-void fira_session_round_hopping(struct fira_session *session)
+static int fira_next_in_bitfield_u8(u8 bitfield, int prev)
+{
+	u32 padded_bitfield = 1 << 16 | bitfield << 8 | bitfield;
+	u32 rotated_bitfield = padded_bitfield >> (prev + 1);
+
+	return (ffs(rotated_bitfield) + prev) % 8;
+}
+
+static void fira_update_antennas_id(struct fira_session *session)
+{
+	const struct fira_session_params *p = &session->params;
+
+	session->tx_ant = fira_next_in_bitfield_u8(p->tx_antenna_selection,
+						   session->tx_ant);
+
+	switch (p->rx_antenna_switch) {
+	default:
+	case FIRA_RX_ANTENNA_SWITCH_BETWEEN_ROUND:
+		/* Switch pairs between round. */
+		session->rx_ant_pair[0] = session->rx_ant_pair[1] =
+			fira_next_in_bitfield_u8(p->rx_antenna_selection,
+						 session->rx_ant_pair[0]);
+		break;
+	case FIRA_RX_ANTENNA_SWITCH_DURING_ROUND:
+		session->rx_ant_pair[0] = p->rx_antenna_pair_azimuth;
+		session->rx_ant_pair[1] = p->rx_antenna_pair_elevation;
+		break;
+	case FIRA_RX_ANTENNA_SWITCH_TWO_RANGING:
+		/* Switch from one ranging to another. */
+		if (session->rx_ant_pair[0] == p->rx_antenna_pair_azimuth)
+			session->rx_ant_pair[0] = p->rx_antenna_pair_elevation;
+		else
+			session->rx_ant_pair[0] = p->rx_antenna_pair_azimuth;
+		session->rx_ant_pair[1] = session->rx_ant_pair[0];
+		break;
+	}
+}
+
+void fira_session_prepare(struct fira_local *local,
+			  struct fira_session *session)
+{
+	fira_update_antennas_id(session);
+	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER) {
+		session->next_block_stride_len =
+			session->params.block_stride_len;
+		if (session->params.round_hopping) {
+			u32 next_block_index = session->block_index +
+					       session->next_block_stride_len +
+					       1;
+			trace_region_fira_next_block(session, next_block_index);
+			session->next_round_index =
+				fira_round_hopping_sequence_get(
+					session, next_block_index);
+		}
+	}
+}
+
+void fira_session_update_round_index(struct fira_session *session)
 {
 	if (session->hopping_sequence_generation) {
 		session->round_index = fira_round_hopping_sequence_get(
 			session, session->block_index);
-		session->next_round_index = fira_round_hopping_sequence_get(
-			session, session->block_index + 1);
 	} else {
 		session->round_index = session->next_round_index;
 		session->hopping_sequence_generation =
@@ -293,34 +349,74 @@ static void fira_session_update(struct fira_local *local,
 				struct fira_session *session,
 				u32 next_timestamp_dtu)
 {
+	u32 access_dtu;
 	s32 diff_dtu;
 	int block_duration_margin_dtu = 0;
 
 	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLEE)
 		block_duration_margin_dtu =
 			fira_session_get_block_duration_margin(local, session);
-	diff_dtu = session->block_start_dtu +
-		   fira_session_get_round_slot(session) *
-			   session->params.slot_duration_dtu -
-		   block_duration_margin_dtu - next_timestamp_dtu;
+
+	/* Do we have the time to participate in the current block? */
+	access_dtu = session->block_start_dtu +
+		     fira_session_get_round_slot(session) *
+			     session->params.slot_duration_dtu -
+		     block_duration_margin_dtu;
+	diff_dtu = access_dtu - next_timestamp_dtu;
 
 	if (diff_dtu < 0) {
 		int block_duration_dtu = session->params.block_duration_dtu;
 		int block_duration_slots =
 			block_duration_dtu / session->params.slot_duration_dtu;
-		int add_blocks;
+		int block_stride_len = session->block_stride_len;
+		int block_stride_duration_dtu =
+			block_duration_dtu * (block_stride_len + 1);
+		int add_blocks, add_strides;
 
-		add_blocks = (-diff_dtu + block_duration_dtu - 1) /
-			     block_duration_dtu;
+		/*
+		 * No time in current block, which block should we try? The
+		 * result of this can be 0, meaning that we are still in the
+		 * same block, but the access was earlier in this block.
+		 */
+		diff_dtu = session->block_start_dtu -
+			   block_duration_margin_dtu - next_timestamp_dtu;
+		add_strides = -diff_dtu / block_stride_duration_dtu;
+		add_blocks = add_strides * (block_stride_len + 1);
+
 		session->block_start_dtu += add_blocks * block_duration_dtu;
 		session->block_index += add_blocks;
 		session->sts_index += add_blocks * block_duration_slots;
-		if (add_blocks != 1)
-			session->hopping_sequence_generation =
-				session->params.round_hopping;
-		fira_session_round_hopping(session);
+		if (add_blocks != 0) {
+			/*
+			 * More than one ranging round skipped, can not trust
+			 * last hopping instructions.
+			 */
+			if (add_blocks > block_stride_len + 1)
+				session->hopping_sequence_generation =
+					session->params.round_hopping;
+			fira_session_update_round_index(session);
+		}
+
+		/* Retry in the found block. */
+		access_dtu = session->block_start_dtu +
+			     fira_session_get_round_slot(session) *
+				     session->params.slot_duration_dtu -
+			     block_duration_margin_dtu;
+		diff_dtu = access_dtu - next_timestamp_dtu;
+
+		if (diff_dtu < 0) {
+			/* Still no time, next one will be OK. */
+			add_blocks = block_stride_len + 1;
+			session->block_start_dtu +=
+				add_blocks * block_duration_dtu;
+			session->block_index += add_blocks;
+			session->sts_index += add_blocks * block_duration_slots;
+			fira_session_update_round_index(session);
+		}
+		trace_region_fira_block_index(session, session->block_index);
 	}
 }
+
 
 static inline bool
 fira_session_has_higher_priority(const struct fira_session *session,
@@ -397,9 +493,11 @@ static struct fira_session *fira_session_find_next(struct fira_local *local,
 		access_duration_dtu = demand.duration_dtu;
 		unsync_access_duration_dtu = U32_MAX;
 		if (session->params.max_rr_retry) {
-			int nb_blocks = session->params.max_rr_retry +
-					session->last_block_index -
-					session->block_index;
+			int nb_blocks =
+				session->params.max_rr_retry *
+					(session->block_stride_len + 1) +
+				session->last_block_index -
+				session->block_index;
 
 			unsync_access_duration_dtu =
 				min((u32)session->params.block_duration_dtu *
@@ -457,7 +555,8 @@ fira_session_check_max_number_of_measurements(struct fira_local *local,
 static bool fira_session_check_max_rr_retry(struct fira_session *session)
 {
 	if (session->params.max_rr_retry &&
-	    !((s32)(session->block_index - session->last_block_index -
+	    !((s32)((session->block_index - session->last_block_index) /
+			    (session->block_stride_len + 1) -
 		    session->params.max_rr_retry) < 0)) {
 		session->stop_no_response = true;
 		return true;
@@ -638,5 +737,6 @@ void fira_session_access_done(struct fira_local *local,
 
 	if (session == local->current_session) {
 		fira_session_stop_expired_sessions(local);
+		session->block_stride_len = session->next_block_stride_len;
 	}
 }

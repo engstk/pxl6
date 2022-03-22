@@ -404,6 +404,9 @@ struct decon_debug {
 	spinlock_t event_lock;
 
 	u32 auto_refresh_frames;
+
+	u32 te_cnt;
+	bool force_te_on;
 };
 
 struct decon_device {
@@ -437,6 +440,7 @@ struct decon_device {
 	int				irq_te;
 	int				irq_ds;	/* dimming start irq number */
 	int				irq_de;	/* dimming end irq number */
+	atomic_t			te_ref;
 
 	spinlock_t			slock;
 
@@ -465,6 +469,7 @@ static inline struct decon_device *get_decon_drvdata(u32 id)
 void decon_dump(const struct decon_device *decon);
 void decon_dump_all(struct decon_device *decon,
 		enum dpu_event_condition cond, bool async_buf_dump);
+void decon_enable_te_irq(struct decon_device *decon, bool enable);
 void decon_dump_event_condition(const struct decon_device *decon,
 		enum dpu_event_condition condition);
 int dpu_init_debug(struct decon_device *decon);

@@ -123,6 +123,7 @@ TRACE_EVENT(region_fira_session_params,
 		__field(int, initiation_time_ms)
 		__field(int, slot_duration_dtu)
 		__field(int, block_duration_dtu)
+		__field(int, block_stride_len)
 		__field(int, round_duration_slots)
 		__field(bool, round_hopping)
 		__field(int, priority)
@@ -155,6 +156,7 @@ TRACE_EVENT(region_fira_session_params,
 		__entry->initiation_time_ms = params->initiation_time_ms;
 		__entry->slot_duration_dtu = params->slot_duration_dtu;
 		__entry->block_duration_dtu = params->block_duration_dtu;
+		__entry->block_stride_len = params->block_stride_len;
 		__entry->round_duration_slots = params->round_duration_slots;
 		__entry->round_hopping = params->round_hopping;
 		__entry->priority = params->priority;
@@ -180,7 +182,7 @@ TRACE_EVENT(region_fira_session_params,
 		),
 	TP_printk(FIRA_SESSION_PR_FMT " device_type=%s ranging_round_usage=%s multi_node_mode=%s "
 		  "controller_short_addr=0x%x initiation_time_ms=%d slot_duration_dtu=%d "
-		  "block_duration_dtu=%d round_duration_slots=%d round_hopping=%d "
+		  "block_duration_dtu=%d block_stride_len=%d round_duration_slots=%d round_hopping=%d "
 		  "priority=%d channel_number=%d preamble_code_index=%d rframe_config=%s "
 		  "preamble_duration=%s sfd_id=%d psdu_data_rate=%s mac_fcs_type=%s "
 		  "sts_config=%s vupper64=%s aoa_result_req=%d report_tof=%d report_aoa_azimuth=%d "
@@ -195,6 +197,7 @@ TRACE_EVENT(region_fira_session_params,
 		  __entry->initiation_time_ms,
 		  __entry->slot_duration_dtu,
 		  __entry->block_duration_dtu,
+		  __entry->block_stride_len,
 		  __entry->round_duration_slots,
 		  __entry->round_hopping,
 		  __entry->priority,
@@ -259,6 +262,42 @@ TRACE_EVENT(region_fira_tx_message_type,
 		__print_symbolic(__entry->msg_id, FIRA_MESSAGE_TYPE)
 		)
 	);
+
+TRACE_EVENT(region_fira_block_index,
+		TP_PROTO(const struct fira_session *session,
+			int block_index),
+		TP_ARGS(session, block_index),
+		TP_STRUCT__entry(
+			FIRA_SESSION_ENTRY
+			__field(int, block_index)
+			),
+		TP_fast_assign(
+			FIRA_SESSION_ASSIGN;
+			__entry->block_index = block_index;
+			),
+		TP_printk(FIRA_SESSION_PR_FMT "block index = %d",
+			FIRA_SESSION_PR_ARG,
+			__entry->block_index
+			)
+		);
+
+TRACE_EVENT(region_fira_next_block,
+		TP_PROTO(const struct fira_session *session,
+			int block_index),
+		TP_ARGS(session, block_index),
+		TP_STRUCT__entry(
+			FIRA_SESSION_ENTRY
+			__field(int, block_index)
+			),
+		TP_fast_assign(
+			FIRA_SESSION_ASSIGN;
+			__entry->block_index = block_index;
+			),
+		TP_printk(FIRA_SESSION_PR_FMT "next block index = %d",
+			FIRA_SESSION_PR_ARG,
+			__entry->block_index
+			)
+		);
 
 #endif /* !FIRA_TRACE_H || TRACE_HEADER_MULTI_READ */
 

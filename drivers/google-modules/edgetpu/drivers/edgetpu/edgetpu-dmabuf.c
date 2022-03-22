@@ -10,6 +10,7 @@
 #include <linux/dma-direction.h>
 #include <linux/dma-fence.h>
 #include <linux/dma-mapping.h>
+#include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/list.h>
 #include <linux/seq_file.h>
@@ -91,10 +92,11 @@ static const struct dma_fence_ops edgetpu_dma_fence_ops;
 static int etdev_add_translations(struct edgetpu_dev *etdev,
 				  tpu_addr_t tpu_addr,
 				  struct dmabuf_map_entry *entry,
+				  u32 mmu_flags,
 				  enum dma_data_direction dir,
 				  enum edgetpu_context_id ctx_id)
 {
-	const int prot = __dma_dir_to_iommu_prot(dir, etdev->dev);
+	int prot = mmu_flag_to_iommu_prot(mmu_flags, etdev->dev, dir);
 	uint i;
 	u64 offset = 0;
 	int ret;
@@ -145,7 +147,7 @@ static void etdev_remove_translations(struct edgetpu_dev *etdev,
  */
 static int etdev_map_dmabuf(struct edgetpu_dev *etdev,
 			    struct edgetpu_dmabuf_map *dmap,
-			    enum dma_data_direction dir, tpu_addr_t *tpu_addr_p)
+			    tpu_addr_t *tpu_addr_p)
 {
 	struct edgetpu_device_group *group = dmap->map.priv;
 	const enum edgetpu_context_id ctx_id =
@@ -164,7 +166,7 @@ static int etdev_map_dmabuf(struct edgetpu_dev *etdev,
 			return -ENOSPC;
 	} else {
 		tpu_addr =
-			edgetpu_mmu_tpu_map_sgt(etdev, &entry->shrunk_sgt, dir,
+			edgetpu_mmu_tpu_map_sgt(etdev, &entry->shrunk_sgt, dmap->map.dir,
 						ctx_id, dmap->mmu_flags);
 		if (!tpu_addr)
 			return -ENOSPC;
@@ -202,7 +204,7 @@ static void etdev_unmap_dmabuf(struct edgetpu_dev *etdev,
  */
 static int group_map_dmabuf(struct edgetpu_device_group *group,
 			    struct edgetpu_dmabuf_map *dmap,
-			    enum dma_data_direction dir, tpu_addr_t *tpu_addr_p)
+			    tpu_addr_t *tpu_addr_p)
 {
 	const enum edgetpu_context_id ctx_id =
 		edgetpu_group_context_id_locked(group);
@@ -211,7 +213,7 @@ static int group_map_dmabuf(struct edgetpu_device_group *group,
 	uint i;
 	int ret;
 
-	ret = etdev_map_dmabuf(etdev, dmap, dir, &tpu_addr);
+	ret = etdev_map_dmabuf(etdev, dmap, &tpu_addr);
 	if (ret)
 		return ret;
 	for (i = 1; i < group->n_clients; i++) {
@@ -221,7 +223,7 @@ static int group_map_dmabuf(struct edgetpu_device_group *group,
 			continue;
 		}
 		ret = etdev_add_translations(etdev, tpu_addr, &dmap->entries[i],
-					     dir, ctx_id);
+					     dmap->mmu_flags, dmap->map.dir, ctx_id);
 		if (ret)
 			goto err_remove;
 	}
@@ -276,7 +278,7 @@ static void dmabuf_map_callback_release(struct edgetpu_mapping *map)
 	struct edgetpu_dmabuf_map *dmap =
 		container_of(map, struct edgetpu_dmabuf_map, map);
 	struct edgetpu_device_group *group = map->priv;
-	const enum dma_data_direction dir = edgetpu_host_dma_dir(map->dir);
+	const enum dma_data_direction dir = map->dir;
 	tpu_addr_t tpu_addr = map->device_address;
 	struct edgetpu_dev *etdev;
 	uint i;
@@ -336,13 +338,15 @@ static void dmabuf_map_callback_show(struct edgetpu_mapping *map,
 		container_of(map, struct edgetpu_dmabuf_map, map);
 
 	if (IS_MIRRORED(dmap->map.flags))
-		seq_printf(s, "  <%s> mirrored: iova=0x%llx pages=%llu %s",
-			   dmap->dmabufs[0]->exp_name, map->device_address, dmap->size / PAGE_SIZE,
+		seq_printf(s, "  <%s> mirrored: iova=%#llx pages=%llu %s",
+			   dmap->dmabufs[0]->exp_name, map->device_address,
+			   DIV_ROUND_UP(dmap->size, PAGE_SIZE),
 			   edgetpu_dma_dir_rw_s(map->dir));
 	else
-		seq_printf(s, "  <%s> die %u: iova=0x%llx pages=%llu %s",
+		seq_printf(s, "  <%s> die %u: iova=%#llx pages=%llu %s",
 			   dmap->dmabufs[0]->exp_name, map->die_index, map->device_address,
-			   dmap->size / PAGE_SIZE, edgetpu_dma_dir_rw_s(map->dir));
+			   DIV_ROUND_UP(dmap->size, PAGE_SIZE),
+			   edgetpu_dma_dir_rw_s(map->dir));
 
 	edgetpu_device_dram_dmabuf_info_show(dmap->dmabufs[0], s);
 	seq_puts(s, " dma=");
@@ -403,7 +407,7 @@ static void dmabuf_bulk_map_callback_release(struct edgetpu_mapping *map)
 	struct edgetpu_dmabuf_map *bmap =
 		container_of(map, struct edgetpu_dmabuf_map, map);
 	struct edgetpu_device_group *group = map->priv;
-	const enum dma_data_direction dir = edgetpu_host_dma_dir(map->dir);
+	const enum dma_data_direction dir = map->dir;
 	const tpu_addr_t tpu_addr = map->device_address;
 	int i;
 
@@ -414,8 +418,7 @@ static void dmabuf_bulk_map_callback_release(struct edgetpu_mapping *map)
 
 		sg_free_table(&entry->shrunk_sgt);
 		if (entry->sgt)
-			dma_buf_unmap_attachment(entry->attachment, entry->sgt,
-						 dir);
+			dma_buf_unmap_attachment(entry->attachment, entry->sgt, dir);
 		if (entry->attachment)
 			dma_buf_detach(bmap->dmabufs[i], entry->attachment);
 		if (bmap->dmabufs[i])
@@ -434,8 +437,8 @@ static void dmabuf_bulk_map_callback_show(struct edgetpu_mapping *map,
 		container_of(map, struct edgetpu_dmabuf_map, map);
 	int i;
 
-	seq_printf(s, "  bulk: iova=0x%llx pages=%llu %s\n",
-		   map->device_address, bmap->size / PAGE_SIZE,
+	seq_printf(s, "  bulk: iova=%#llx pages=%llu %s\n",
+		   map->device_address, DIV_ROUND_UP(bmap->size, PAGE_SIZE),
 		   edgetpu_dma_dir_rw_s(map->dir));
 	for (i = 0; i < bmap->num_entries; i++) {
 		if (!bmap->dmabufs[i]) {
@@ -633,8 +636,7 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 	struct dma_buf *dmabuf;
 	edgetpu_map_flag_t flags = arg->flags;
 	u64 size;
-	const enum dma_data_direction dir =
-		edgetpu_host_dma_dir(flags & EDGETPU_MAP_DIR_MASK);
+	const enum dma_data_direction dir = map_flag_to_host_dma_dir(flags);
 	struct edgetpu_dev *etdev;
 	struct edgetpu_dmabuf_map *dmap;
 	tpu_addr_t tpu_addr;
@@ -668,7 +670,7 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 
 	get_dma_buf(dmabuf);
 	dmap->dmabufs[0] = dmabuf;
-	dmap->size = size = dmabuf->size;
+	dmap->map.map_size = dmap->size = size = dmabuf->size;
 	if (IS_MIRRORED(flags)) {
 		for (i = 0; i < group->n_clients; i++) {
 			etdev = edgetpu_device_group_nth_etdev(group, i);
@@ -681,7 +683,7 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 				goto err_release_map;
 			}
 		}
-		ret = group_map_dmabuf(group, dmap, dir, &tpu_addr);
+		ret = group_map_dmabuf(group, dmap, &tpu_addr);
 		if (ret) {
 			etdev_dbg(group->etdev,
 				  "%s: group_map_dmabuf returns %d\n",
@@ -705,7 +707,7 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 				  __func__, ret);
 			goto err_release_map;
 		}
-		ret = etdev_map_dmabuf(etdev, dmap, dir, &tpu_addr);
+		ret = etdev_map_dmabuf(etdev, dmap, &tpu_addr);
 		if (ret) {
 			etdev_dbg(group->etdev,
 				  "%s: etdev_map_dmabuf returns %d\n",
@@ -721,7 +723,7 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 			  __func__, ret);
 		goto err_release_map;
 	}
-	arg->device_address = dmap->map.device_address;
+	arg->device_address = tpu_addr;
 	mutex_unlock(&group->lock);
 	dma_buf_put(dmabuf);
 	return 0;
@@ -771,8 +773,7 @@ out_unlock:
 int edgetpu_map_bulk_dmabuf(struct edgetpu_device_group *group,
 			    struct edgetpu_map_bulk_dmabuf_ioctl *arg)
 {
-	const enum dma_data_direction dir =
-		edgetpu_host_dma_dir(arg->flags & EDGETPU_MAP_DIR_MASK);
+	const enum dma_data_direction dir = map_flag_to_host_dma_dir(arg->flags);
 	int ret = -EINVAL;
 	struct edgetpu_dmabuf_map *bmap;
 	struct dma_buf *dmabuf;
@@ -820,7 +821,7 @@ int edgetpu_map_bulk_dmabuf(struct edgetpu_device_group *group,
 		if (ret)
 			goto err_release_bmap;
 	}
-	ret = group_map_dmabuf(group, bmap, dir, &tpu_addr);
+	ret = group_map_dmabuf(group, bmap, &tpu_addr);
 	if (ret)
 		goto err_release_bmap;
 	bmap->map.device_address = tpu_addr;

@@ -231,6 +231,10 @@ static void dhd_rtt_handle_rtt_session_end(dhd_pub_t *dhd);
 static void dhd_rtt_timeout_work(struct work_struct *work);
 static bool dhd_rtt_get_report_header(rtt_status_info_t *rtt_status,
 	rtt_results_header_t **rtt_results_header, struct ether_addr *addr);
+static void dhd_rtt_set_ftm_config_param(ftm_config_param_info_t *ftm_params,
+	int *ftm_param_cnt, rtt_target_info_t *rtt_target, uint16 tlvid);
+static int dhd_rtt_ftm_config(dhd_pub_t *dhd, wl_proxd_session_id_t session_id,
+	void *ftm_cfg_opt, int ftm_cfg_opt_cnt, void *ftm_cfg_gen, int ftm_cfg_gen_cnt);
 #ifdef WL_NAN
 static void dhd_rtt_trigger_pending_targets_on_session_end(dhd_pub_t *dhd);
 #endif /* WL_NAN */
@@ -1488,6 +1492,10 @@ dhd_rtt_nan_start_session(dhd_pub_t *dhd, rtt_target_info_t *rtt_target)
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 	nan_ranging_inst_t *ranging_inst = NULL;
 	rtt_status_info_t *rtt_status = GET_RTTSTATE(dhd);
+	ftm_config_param_info_t ftm_params[FTM_MAX_PARAMS];
+	int ftm_param_cnt = 0;
+
+	memset(ftm_params, 0, sizeof(ftm_params));
 
 	NAN_MUTEX_LOCK();
 
@@ -1524,6 +1532,11 @@ dhd_rtt_nan_start_session(dhd_pub_t *dhd, rtt_target_info_t *rtt_target)
 		goto done;
 	}
 
+	/* apply event mask */
+	dhd_rtt_set_ftm_config_param(ftm_params, &ftm_param_cnt, rtt_target,
+		WL_PROXD_TLV_ID_EVENT_MASK);
+	dhd_rtt_ftm_config(dhd, 0, NULL, 0, ftm_params, ftm_param_cnt);
+
 	DHD_RTT(("Trigger nan based range request\n"));
 	err = wl_cfgnan_trigger_ranging(bcmcfg_to_prmry_ndev(cfg),
 			cfg, ranging_inst, NULL, NAN_RANGE_REQ_CMD, TRUE);
@@ -1550,7 +1563,7 @@ done:
 
 static int
 dhd_rtt_ftm_config(dhd_pub_t *dhd, wl_proxd_session_id_t session_id,
-	ftm_config_category_t catagory, void *ftm_configs, int ftm_cfg_cnt)
+	void *ftm_cfg_opt, int ftm_cfg_opt_cnt, void *ftm_cfg_gen, int ftm_cfg_gen_cnt)
 {
 	ftm_subcmd_info_t subcmd_info;
 	wl_proxd_tlv_t *p_tlv;
@@ -1578,12 +1591,13 @@ dhd_rtt_ftm_config(dhd_pub_t *dhd, wl_proxd_session_id_t session_id,
 	p_tlv = &p_proxd_iov->tlvs[0];
 	/* TLV buffer starts with a full size, will decrement for each packed TLV */
 	buf_space_left = bufsize;
-	if (catagory == FTM_CONFIG_CAT_OPTIONS) {
+	if (ftm_cfg_opt) {
 		ret = rtt_handle_config_options(session_id, &p_tlv, &buf_space_left,
-				(ftm_config_options_info_t *)ftm_configs, ftm_cfg_cnt);
-	} else if (catagory == FTM_CONFIG_CAT_GENERAL) {
+				(ftm_config_options_info_t *)ftm_cfg_opt, ftm_cfg_opt_cnt);
+	}
+	if (ftm_cfg_gen) {
 		ret = rtt_handle_config_general(session_id, &p_tlv, &buf_space_left,
-				(ftm_config_param_info_t *)ftm_configs, ftm_cfg_cnt);
+				(ftm_config_param_info_t *)ftm_cfg_gen, ftm_cfg_gen_cnt);
 	}
 	if (ret == BCME_OK) {
 		/* update the iov header, set len to include all TLVs + header */
@@ -1710,6 +1724,29 @@ dhd_rtt_set_next_target_idx(dhd_pub_t *dhd, int start_idx)
 	}
 
 	return (int8)rtt_status->cur_idx;
+}
+
+/* API to know if the all the targets provided in
+ * startRTT call from framework are of type NAN
+ */
+bool
+dhd_rtt_is_taget_list_mode_nan(dhd_pub_t *dhd)
+{
+	rtt_status_info_t *rtt_status = GET_RTTSTATE(dhd);
+	bool nan_mode = FALSE;
+
+	if (!rtt_status) {
+		goto exit;
+	}
+
+	if (rtt_status->rtt_config.target_list_mode ==
+		RNG_TARGET_LIST_MODE_NAN) {
+		nan_mode = TRUE;
+		goto exit;
+	}
+
+exit:
+	return nan_mode;
 }
 
 void
@@ -2566,13 +2603,15 @@ dhd_rtt_stop(dhd_pub_t *dhd, struct ether_addr *mac_list, int mac_cnt)
 		DHD_RTT_ERR(("rtt is not started\n"));
 		return BCME_OK;
 	}
-	DHD_RTT(("%s enter\n", __FUNCTION__));
+	DHD_RTT_ERR(("dhd_rtt_stop tgt_count %d\n", mac_cnt));
 	mutex_lock(&rtt_status->rtt_mutex);
 	for (i = 0; i < mac_cnt; i++) {
 		for (j = 0; j < rtt_status->rtt_config.rtt_target_cnt; j++) {
 			if (!bcmp(&mac_list[i], &rtt_status->rtt_config.target_info[j].addr,
 				ETHER_ADDR_LEN)) {
 				rtt_status->rtt_config.target_info[j].disable = TRUE;
+				dhd_rtt_delete_session(dhd,
+					rtt_status->rtt_config.target_info[j].sid);
 #ifdef WL_RTT_LCI
 				if (rtt_status->rtt_config.target_info[j].LCI) {
 					MFREE(dhd->osh, rtt_status->rtt_config.target_info[j].LCI,
@@ -2593,6 +2632,10 @@ dhd_rtt_stop(dhd_pub_t *dhd, struct ether_addr *mac_list, int mac_cnt)
 	if (rtt_status->all_cancel) {
 		/* cancel all of request */
 		rtt_status->status = RTT_STOPPED;
+		for (i = 0; i < rtt_status->rtt_config.rtt_target_cnt; i++) {
+			dhd_rtt_delete_session(dhd,
+				rtt_status->rtt_config.target_info[i].sid);
+		}
 		DHD_RTT(("current RTT process is cancelled\n"));
 		/* remove the rtt results in cache */
 		if (!list_empty(&rtt_status->rtt_results_cache)) {
@@ -2981,96 +3024,20 @@ dhd_rtt_set_ftm_config_param(ftm_config_param_info_t *ftm_params,
 	return;
 }
 
+/* API to configure a legacy/sta RTT session.
+ * @rtt_target will be having the user configuration for RTT session
+ */
 static int
-dhd_rtt_start(dhd_pub_t *dhd)
+dhd_rtt_config_sta_rtt(dhd_pub_t *dhd, struct net_device *dev,
+	rtt_target_info_t *rtt_target)
 {
-	int err = BCME_OK;
-	int err_at = 0;
 	int ftm_cfg_cnt = 0;
-	int ftm_param_cnt = 0;
 	ftm_config_options_info_t ftm_configs[FTM_MAX_CONFIGS];
 	ftm_config_param_info_t ftm_params[FTM_MAX_PARAMS];
-	rtt_target_info_t *rtt_target;
-	rtt_status_info_t *rtt_status;
-	struct net_device *dev = dhd_linux_get_primary_netdev(dhd);
+	int ftm_param_cnt = 0;
+	int err = BCME_OK;
+	uint8 err_at = 0;
 	u8 ioctl_buf[WLC_IOCTL_SMLEN];
-	u8 rtt_invalid_reason = RTT_STATE_VALID;
-	int rtt_sched_type = RTT_TYPE_INVALID;
-
-	NULL_CHECK(dhd, "dhd is NULL", err);
-
-	rtt_status = GET_RTTSTATE(dhd);
-	NULL_CHECK(rtt_status, "rtt_status is NULL", err);
-
-	DHD_RTT(("Enter %s\n", __FUNCTION__));
-
-	if (RTT_IS_STOPPED(rtt_status)) {
-		DHD_RTT(("No Directed RTT target to process, check for geofence\n"));
-		goto geofence;
-	}
-
-	if (rtt_status->cur_idx >= rtt_status->rtt_config.rtt_target_cnt) {
-		err = BCME_RANGE;
-		err_at = 1;
-		DHD_RTT(("%s : idx %d is out of range\n", __FUNCTION__, rtt_status->cur_idx));
-		if (rtt_status->flags == WL_PROXD_SESSION_FLAG_TARGET) {
-			DHD_RTT_ERR(("STA is set as Target/Responder \n"));
-			err = BCME_ERROR;
-		}
-		goto exit;
-	}
-
-	/* Get a target information */
-	rtt_target = &rtt_status->rtt_config.target_info[rtt_status->cur_idx];
-
-	DHD_RTT(("%s enter\n", __FUNCTION__));
-
-	if (ETHER_ISNULLADDR(rtt_target->addr.octet)) {
-		err = BCME_BADADDR;
-		err_at = 2;
-		DHD_RTT(("RTT Target addr is NULL\n"));
-		goto exit;
-	}
-
-	/* check for dp/others concurrency */
-	rtt_invalid_reason = dhd_rtt_invalid_states(dev, &rtt_target->addr);
-	if (rtt_invalid_reason != RTT_STATE_VALID) {
-		err = BCME_BUSY;
-		err_at = 3;
-		DHD_RTT(("DRV State is not valid for RTT\n"));
-		goto exit;
-	}
-
-	/* enable ftm */
-	err = dhd_rtt_ftm_enable(dhd, TRUE);
-	if (err) {
-		DHD_RTT_ERR(("failed to enable FTM (%d)\n", err));
-		err_at = 4;
-		goto exit;
-	}
-	rtt_status->status = RTT_ENABLED;
-
-#ifdef WL_NAN
-	if (rtt_target->peer == RTT_PEER_NAN) {
-		rtt_sched_type = RTT_TYPE_NAN_DIRECTED;
-		/* apply event mask */
-		DHD_RTT_CHK_SET_PARAM(ftm_params, ftm_param_cnt,
-			rtt_target, WL_PROXD_TLV_ID_EVENT_MASK);
-		dhd_rtt_ftm_config(dhd, 0, FTM_CONFIG_CAT_GENERAL,
-			ftm_params, ftm_param_cnt);
-		/* Ignore return value..failure taken care inside the API */
-		dhd_rtt_nan_start_session(dhd, rtt_target);
-		goto exit;
-	}
-#endif /* WL_NAN */
-
-	/* delete session of index default sesession  */
-	err = dhd_rtt_delete_session(dhd, FTM_DEFAULT_SESSION);
-	if (err < 0 && err != BCME_NOTFOUND) {
-		DHD_RTT_ERR(("failed to delete session of FTM (%d)\n", err));
-		err_at = 5;
-		goto exit;
-	}
 
 	memset(ftm_configs, 0, sizeof(ftm_configs));
 	memset(ftm_params, 0, sizeof(ftm_params));
@@ -3095,12 +3062,10 @@ dhd_rtt_start(dhd_pub_t *dhd)
 #endif /* WL_RTT_LCI */
 		DHD_RTT(("RTT flags for the session %x\n", ftm_configs[ftm_cfg_cnt].flags));
 		ftm_cfg_cnt++;
-		dhd_rtt_ftm_config(dhd, FTM_DEFAULT_SESSION, FTM_CONFIG_CAT_OPTIONS,
-				ftm_configs, ftm_cfg_cnt);
 	} else {
 		DHD_RTT_ERR(("Max FTM Config Options exceeded\n"));
 		err = BCME_ERROR;
-		err_at = 6;
+		err_at = 1;
 		goto exit;
 	}
 
@@ -3111,7 +3076,7 @@ dhd_rtt_start(dhd_pub_t *dhd)
 				ioctl_buf, WLC_IOCTL_SMLEN, NULL);
 		if (err) {
 			DHD_RTT_ERR(("WLC_GET_CUR_ETHERADDR failed, error %d\n", err));
-			err_at = 7;
+			err_at = 2;
 			goto exit;
 		}
 		memcpy(rtt_target->local_addr.octet, ioctl_buf, ETHER_ADDR_LEN);
@@ -3173,14 +3138,129 @@ dhd_rtt_start(dhd_pub_t *dhd)
 	/* legacy rtt randmac */
 	dhd_set_rand_mac_oui(dhd);
 #endif /* !defined(WL_USE_RANDOMIZED_SCAN */
-	dhd_rtt_ftm_config(dhd, FTM_DEFAULT_SESSION, FTM_CONFIG_CAT_GENERAL,
-			ftm_params, ftm_param_cnt);
+	err = dhd_rtt_ftm_config(dhd, rtt_target->sid, ftm_configs,
+			ftm_cfg_cnt, ftm_params, ftm_param_cnt);
+	if (err != BCME_OK) {
+		err_at = 3;
+		goto exit;
+	}
+
+exit:
+	if (err != BCME_OK) {
+		DHD_RTT_ERR(("dhd_rtt_config_sta_rtt: err %d err_at %d\n",
+			err, err_at));
+	}
+	return err;
+}
+
+
+/* Work thread API to start the RTT.
+ * If all targets are AP only, then this API will confgure all sessions
+ * and start(FW) the RTT for first session.
+ * Else, this API will configure and start a single RTT session.
+ * If no host provided targets present, then this API will check for
+ * geofence RTT targets and trigger the same.
+ */
+static int
+dhd_rtt_start(dhd_pub_t *dhd)
+{
+	int err = BCME_OK;
+	int err_at = 0;
+	rtt_target_info_t *rtt_target;
+	rtt_status_info_t *rtt_status;
+	struct net_device *dev = dhd_linux_get_primary_netdev(dhd);
+	u8 rtt_invalid_reason = RTT_STATE_VALID;
+	int rtt_sched_type = RTT_TYPE_INVALID;
+	int i = 0;
+
+	NULL_CHECK(dhd, "dhd is NULL", err);
+
+	rtt_status = GET_RTTSTATE(dhd);
+	NULL_CHECK(rtt_status, "rtt_status is NULL", err);
+
+	DHD_RTT(("Enter %s\n", __FUNCTION__));
+
+	if (RTT_IS_STOPPED(rtt_status)) {
+		DHD_RTT(("No Directed RTT target to process, check for geofence\n"));
+		goto geofence;
+	}
+
+	if (rtt_status->cur_idx >= rtt_status->rtt_config.rtt_target_cnt) {
+		err = BCME_RANGE;
+		err_at = 1;
+		DHD_RTT(("%s : idx %d is out of range\n", __FUNCTION__, rtt_status->cur_idx));
+		if (rtt_status->flags == WL_PROXD_SESSION_FLAG_TARGET) {
+			DHD_RTT_ERR(("STA is set as Target/Responder \n"));
+			err = BCME_ERROR;
+		}
+		goto exit;
+	}
+
+	/* Get a target information */
+	rtt_target = &rtt_status->rtt_config.target_info[rtt_status->cur_idx];
+
+	DHD_RTT(("%s enter\n", __FUNCTION__));
+
+	if (ETHER_ISNULLADDR(rtt_target->addr.octet)) {
+		err = BCME_BADADDR;
+		err_at = 2;
+		DHD_RTT(("RTT Target addr is NULL\n"));
+		goto exit;
+	}
+
+	/* check for dp/others concurrency */
+	rtt_invalid_reason = dhd_rtt_invalid_states(dev, &rtt_target->addr);
+	if (rtt_invalid_reason != RTT_STATE_VALID) {
+		err = BCME_BUSY;
+		err_at = 3;
+		DHD_RTT(("DRV State is not valid for RTT\n"));
+		goto exit;
+	}
+
+	/* enable ftm */
+	DHD_RTT_MEM(("Enabling FTM \n"));
+	err = dhd_rtt_ftm_enable(dhd, TRUE);
+	if (err) {
+		DHD_RTT_ERR(("failed to enable FTM (%d)\n", err));
+		err_at = 4;
+		goto exit;
+	}
+	rtt_status->status = RTT_ENABLED;
+
+#ifdef WL_NAN
+	if (rtt_target->peer == RTT_PEER_NAN) {
+		rtt_sched_type = RTT_TYPE_NAN_DIRECTED;
+		/* Ignore return value..failure taken care inside the API */
+		dhd_rtt_nan_start_session(dhd, rtt_target);
+		goto exit;
+	}
+#endif /* WL_NAN */
 
 	rtt_sched_type = RTT_TYPE_LEGACY;
-	err = dhd_rtt_start_session(dhd, FTM_DEFAULT_SESSION, TRUE);
+	mutex_lock(&rtt_status->rtt_mutex);
+	if (rtt_status->rtt_config.target_list_mode ==
+		RNG_TARGET_LIST_MODE_LEGACY) {
+		uint16 sid = WL_PROXD_SID_HOST_START;
+		DHD_RTT_MEM(("Configuring RTT sessions, count %d\n",
+			rtt_status->rtt_config.rtt_target_cnt));
+		for (i = 0; i < rtt_status->rtt_config.rtt_target_cnt; i++) {
+			rtt_target = &rtt_status->rtt_config.target_info[i];
+			rtt_target->sid = sid++;
+			dhd_rtt_config_sta_rtt(dhd, dev, rtt_target);
+		}
+		rtt_target = &rtt_status->rtt_config.target_info[0];
+		err = dhd_rtt_start_session(dhd, rtt_target->sid, TRUE);
+	} else {
+		rtt_target->sid = FTM_DEFAULT_SESSION;
+		dhd_rtt_delete_session(dhd, FTM_DEFAULT_SESSION);
+		dhd_rtt_config_sta_rtt(dhd, dev, rtt_target);
+		err = dhd_rtt_start_session(dhd, FTM_DEFAULT_SESSION, TRUE);
+	}
+	mutex_unlock(&rtt_status->rtt_mutex);
+
 	if (err) {
 		DHD_RTT_ERR(("failed to start session of FTM : error %d\n", err));
-		err_at = 8;
+		err_at = 5;
 	} else {
 		/* schedule proxd timeout */
 		schedule_delayed_work(&rtt_status->proxd_timeout,
@@ -3195,7 +3275,7 @@ geofence:
 	rtt_sched_type = RTT_TYPE_NAN_GEOFENCE;
 	if ((err = dhd_rtt_sched_geofencing_target(dhd)) != BCME_OK) {
 		DHD_RTT_ERR(("geofencing sched failed, err = %d\n", err));
-		err_at = 9;
+		err_at = 6;
 	}
 #endif /* WL_NAN */
 
@@ -3682,9 +3762,15 @@ dhd_rtt_convert_results_to_host_v2(rtt_result_t *rtt_result, const uint8 *p_data
 	/* rtt_sd */
 	rtt.tmu = ltoh16_ua(&p_sample_avg->rtt.tmu);
 	rtt.intvl = ltoh32_ua(&p_sample_avg->rtt.intvl);
-	rtt_report->rtt = (wifi_timespan)FTM_INTVL2NSEC(&rtt) * 1000; /* nano -> pico seconds */
+	if (rtt.tmu == WL_PROXD_TMU_PICO_SEC) {
+		rtt_report->rtt = (wifi_timespan)rtt.intvl;
+	} else {
+		 /* nano -> pico seconds */
+		rtt_report->rtt = (wifi_timespan)(FTM_INTVL2NSEC(&rtt) * 1000);
+	}
+
 	rtt_report->rtt_sd = ltoh16_ua(&p_data_info->sd_rtt); /* nano -> 0.1 nano */
-	DHD_RTT(("rtt_report->rtt : %llu\n", rtt_report->rtt));
+	DHD_RTT(("rtt_report->rtt : %lld\n", rtt_report->rtt));
 	DHD_RTT(("rtt_report->rssi : %d (0.5db)\n", rtt_report->rssi));
 
 	/* average distance */
@@ -3699,6 +3785,12 @@ dhd_rtt_convert_results_to_host_v2(rtt_result_t *rtt_result, const uint8 *p_data
 	} else {
 		rtt_report->distance = FTM_INVALID;
 	}
+
+	if (p_data_info->flags & WL_PROXD_RESULT_SIGNED) {
+		rtt_report->rtt *= -1;
+		rtt_report->distance *= -1;
+	}
+
 	/* time stamp */
 	/* get the time elapsed from boot time */
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39))
@@ -4086,6 +4178,14 @@ dhd_rtt_handle_rtt_session_end(dhd_pub_t *dhd)
 	struct net_device *ndev = dhd_linux_get_primary_netdev(dhd);
 	struct bcm_cfg80211 *cfg = wiphy_priv(ndev->ieee80211_ptr->wiphy);
 #endif /* WL_NAN */
+	int i;
+	rtt_target_info_t *rtt_target = NULL;
+	rtt_config_params_t *rtt_config = &rtt_status->rtt_config;
+
+	/* Cancel pending proxd timeout work if any */
+	if (delayed_work_pending(&rtt_status->proxd_timeout)) {
+		cancel_delayed_work(&rtt_status->proxd_timeout);
+	}
 
 	/* check if all targets results received */
 	all_targets_done = dhd_rtt_all_directed_targets_done(dhd);
@@ -4117,15 +4217,17 @@ dhd_rtt_handle_rtt_session_end(dhd_pub_t *dhd)
 		/* reinitialize the HEAD */
 		INIT_LIST_HEAD(&rtt_status->rtt_results_cache);
 		/* clear information for rtt_config */
-		rtt_status->rtt_config.rtt_target_cnt = 0;
-		memset_s(rtt_status->rtt_config.target_info, TARGET_INFO_SIZE(RTT_MAX_TARGET_CNT),
+		if (rtt_config->target_list_mode == RNG_TARGET_LIST_MODE_LEGACY) {
+			for (i = 0; i < rtt_config->rtt_target_cnt; i++) {
+				rtt_target = &rtt_status->rtt_config.target_info[i];
+				dhd_rtt_delete_session(dhd, rtt_target->sid);
+			}
+			dhd_rtt_ftm_enable(dhd, FALSE);
+		}
+		rtt_config->rtt_target_cnt = 0;
+		(void)memset_s(rtt_config->target_info, TARGET_INFO_SIZE(RTT_MAX_TARGET_CNT),
 			0, TARGET_INFO_SIZE(RTT_MAX_TARGET_CNT));
 		rtt_status->cur_idx = 0;
-
-		/* Cancel pending proxd timeout work if any */
-		if (delayed_work_pending(&rtt_status->proxd_timeout)) {
-			cancel_delayed_work(&rtt_status->proxd_timeout);
-		}
 #ifdef WL_NAN
 		/* Reset for Geofence */
 		wl_cfgnan_reset_geofence_ranging(cfg, NULL,
@@ -4133,28 +4235,28 @@ dhd_rtt_handle_rtt_session_end(dhd_pub_t *dhd)
 #endif /* WL_NAN */
 	} else {
 		/* Targets still pending */
-		if (rtt_status->rtt_config.target_list_mode == RNG_TARGET_LIST_MODE_LEGACY) {
-			/* Pure legacy target list */
-
-			/* Cancel pending proxd timeout work if any */
-			if (delayed_work_pending(&rtt_status->proxd_timeout)) {
-				cancel_delayed_work(&rtt_status->proxd_timeout);
-			}
-
-			dhd_rtt_set_next_target_idx(dhd, (rtt_status->cur_idx + 1));
-			if (rtt_status->cur_idx < rtt_status->rtt_config.rtt_target_cnt) {
-				/* restart to measure RTT from next device */
-				DHD_INFO(("restart to measure rtt\n"));
-				rtt_status->rtt_sched = TRUE;
-				schedule_work(&rtt_status->work);
-			}
-		}
 #ifdef WL_NAN
-		else if (rtt_status->rtt_config.target_list_mode == RNG_TARGET_LIST_MODE_NAN) {
+		if (rtt_config->target_list_mode == RNG_TARGET_LIST_MODE_NAN) {
 			/* Pure NAN target list */
 			dhd_rtt_trigger_pending_targets_on_session_end(dhd);
-		}
+		} else
 #endif /* WL_NAN */
+		{
+			/* Pure legacy target list or mixed list */
+			dhd_rtt_set_next_target_idx(dhd, (rtt_status->cur_idx + 1));
+			if (rtt_status->cur_idx < rtt_config->rtt_target_cnt) {
+				rtt_target = &rtt_config->target_info[rtt_status->cur_idx];
+				/* restart to measure RTT from next device */
+				if (rtt_config->target_list_mode == RNG_TARGET_LIST_MODE_LEGACY) {
+					dhd_rtt_start_session(dhd, rtt_target->sid, TRUE);
+				} else {
+					dhd_rtt_schedule_rtt_work_thread(dhd,
+						rtt_status->rtt_sched_reason);
+				}
+			}
+		}
+		DHD_RTT_MEM(("Triggered/schedlued next target idx %d mode %d\n",
+			rtt_status->cur_idx, rtt_config->target_list_mode));
 	}
 }
 #endif /* WL_CFG80211 */
@@ -4398,7 +4500,9 @@ dhd_rtt_nan_range_report(struct bcm_cfg80211 *cfg,
 
 	rtt_status = rtt_result->report.status;
 	bzero(&range_res, sizeof(range_res));
-	range_res.dist_mm = rtt_result->report.distance;
+	/* RTT can be negative(for GG req).. for geofence make it zero */
+	range_res.dist_mm = (rtt_result->report.distance < 0) ?
+		0 : rtt_result->report.distance;
 	/* same src and header len, ignoring ret val here */
 	(void)memcpy_s(&range_res.peer_m_addr, ETHER_ADDR_LEN,
 		&rtt_result->report.addr, ETHER_ADDR_LEN);
@@ -4991,8 +5095,8 @@ dhd_rtt_enable_responder(dhd_pub_t *dhd, wifi_channel_info *channel_info)
 	ftm_configs[ftm_cfg_cnt++].flags = WL_PROXD_SESSION_FLAG_TARGET;
 	rtt_status->flags = WL_PROXD_SESSION_FLAG_TARGET;
 	DHD_RTT(("Set the device as responder \n"));
-	err = dhd_rtt_ftm_config(dhd, FTM_DEFAULT_SESSION, FTM_CONFIG_CAT_OPTIONS,
-		ftm_configs, ftm_cfg_cnt);
+	err = dhd_rtt_ftm_config(dhd, FTM_DEFAULT_SESSION,
+		ftm_configs, ftm_cfg_cnt, NULL, 0);
 exit:
 	if (err) {
 		rtt_status->status = RTT_STOPPED;
@@ -5275,6 +5379,7 @@ dhd_rtt_deinit(dhd_pub_t *dhd)
 
 	cancel_delayed_work_sync(&rtt_status->proxd_timeout);
 
+	mutex_lock(&rtt_status->rtt_mutex);
 	/*
 	 * Cleanup attempt is required,
 	 * if legacy RTT session is in progress
@@ -5312,6 +5417,7 @@ dhd_rtt_deinit(dhd_pub_t *dhd)
 			MFREE(dhd->osh, rtt_header, sizeof(rtt_results_header_t));
 		}
 	}
+	mutex_unlock(&rtt_status->rtt_mutex);
 	GCC_DIAGNOSTIC_POP();
 	DHD_RTT_MEM(("dhd_rtt_deinit: EXIT, err = %d\n", err));
 #endif /* WL_CFG80211 */

@@ -15,6 +15,11 @@ struct sec_ts_data *tsp_info;
 #include "sec_ts.h"
 #include <samsung/exynos_drm_connector.h>
 
+/* init the kfifo for debug used. */
+#define SEC_TS_DEBUG_KFIFO_LEN 4 /* must be power of 2. */
+DEFINE_KFIFO(debug_fifo, struct sec_ts_coordinate, SEC_TS_DEBUG_KFIFO_LEN);
+static struct sec_ts_coordinate last_coord[SEC_TS_DEBUG_KFIFO_LEN];
+
 /* Switch GPIO values */
 #define SEC_SWITCH_GPIO_VALUE_SLPI_MASTER	1
 #define SEC_SWITCH_GPIO_VALUE_AP_MASTER		0
@@ -442,8 +447,8 @@ static int sec_ts_read_internal(struct sec_ts_data *ts, u8 reg,
 					input_err(true, &ts->client->dev,
 						"%s: retry %d for 0x%02X size(%d) delay_us(%d)\n",
 						__func__, retry + 1, reg, len, spi_delay_us);
+						ts->comm_err_count++;
 				}
-				ts->comm_err_count++;
 
 				usleep_range(1 * 1000, 1 * 1000);
 				if (ts->power_status ==
@@ -703,6 +708,7 @@ skip_spi_read:
 	 */
 	if (ts->io_err_count >= SEC_TS_IO_RESET_CNT &&
 	    (ts->bus_refmask & SEC_TS_BUS_REF_FW_UPDATE) == 0) {
+		ts->hw_reset_count++;
 		ts->io_err_count = 0;
 		sec_ts_system_reset(ts, RESET_MODE_HW, false, true);
 	}
@@ -1850,6 +1856,100 @@ static void sec_ts_handle_lib_status_event(struct sec_ts_data *ts,
 }
 #endif
 
+#ifdef SEC_TS_DEBUG_KFIFO_LEN
+inline void sec_ts_kfifo_push_coord(struct sec_ts_data *ts, u8 slot)
+{
+	if (slot < MAX_SUPPORT_TOUCH_COUNT) {
+		/*
+		 * Use kfifo as circular buffer by skipping one element
+		 * when fifo is full.
+		 */
+		if (kfifo_is_full(&debug_fifo))
+			kfifo_skip(&debug_fifo);
+		kfifo_in(&debug_fifo, &ts->coord[slot], 1);
+	}
+}
+
+inline void sec_ts_kfifo_pop_all_coords(struct sec_ts_data *ts)
+{
+	/*
+	 * Keep coords without pop-out to support different timing
+	 * print-out by each caller.
+	 */
+	kfifo_out_peek(&debug_fifo, last_coord, kfifo_size(&debug_fifo));
+}
+
+inline void sec_ts_debug_dump(struct sec_ts_data *ts)
+{
+	int i;
+	s64 delta;
+	s64 sec_longest_duration;
+	u32 ms_longest_duration;
+	s64 sec_delta_down;
+	u32 ms_delta_down;
+	s64 sec_delta_duration;
+	u32 ms_delta_duration;
+	s32 px_delta_x, px_delta_y;
+	ktime_t current_time = ktime_get();
+
+	sec_longest_duration = div_u64_rem(ts->longest_duration,
+				MSEC_PER_SEC, &ms_longest_duration);
+
+	sec_ts_kfifo_pop_all_coords(ts);
+	for (i = 0 ; i < ARRAY_SIZE(last_coord) ; i++) {
+		if (last_coord[i].action == SEC_TS_COORDINATE_ACTION_NONE) {
+			input_dbg(true, &ts->client->dev,
+				"dump: #%d: N/A!\n", last_coord[i].id);
+			continue;
+		}
+		sec_delta_down = -1;
+		ms_delta_down = 0;
+		/* calculate the delta of finger down from current time. */
+		delta = ktime_ms_delta(current_time, last_coord[i].ktime_pressed);
+		if (delta > 0)
+			sec_delta_down = div_u64_rem(delta, MSEC_PER_SEC, &ms_delta_down);
+
+		/* calculate the delta of finger duration between finger up and down. */
+		sec_delta_duration = -1;
+		ms_delta_duration = 0;
+		px_delta_x = 0;
+		px_delta_y = 0;
+		if (last_coord[i].action == SEC_TS_COORDINATE_ACTION_RELEASE) {
+			delta = ktime_ms_delta(last_coord[i].ktime_released,
+					last_coord[i].ktime_pressed);
+			if (delta > 0) {
+				sec_delta_duration = div_u64_rem(delta, MSEC_PER_SEC,
+									&ms_delta_duration);
+				px_delta_x = last_coord[i].x - last_coord[i].x_pressed;
+				px_delta_y = last_coord[i].y - last_coord[i].y_pressed;
+			}
+		}
+		input_info(true, &ts->client->dev,
+			"dump: #%d: %lld.%u(%lld.%u) D(%d, %d).\n",
+			last_coord[i].id,
+			sec_delta_down, ms_delta_down,
+			sec_delta_duration, ms_delta_duration,
+			px_delta_x, px_delta_y);
+		input_dbg(true, &ts->client->dev,
+			"dump-dbg: #%d: (%d, %d) (%d, %d).\n",
+			last_coord[i].id,
+			last_coord[i].x_pressed, last_coord[i].y_pressed,
+			last_coord[i].x, last_coord[i].y);
+	}
+	input_info(true, &ts->client->dev,
+		"dump: i/o %u, comm %u, reset %u, longest %lld.%u.\n",
+		ts->io_err_count, ts->comm_err_count, ts->hw_reset_count,
+		sec_longest_duration, ms_longest_duration);
+	input_info(true, &ts->client->dev,
+		"dump: cnt %u, active %u, wet %u, palm %u.\n",
+		ts->pressed_count, ts->touch_count, ts->wet_count, ts->palm_count);
+}
+#else
+#define sec_ts_kfifo_push_coord(ts, slot) do {} while (0)
+#define sec_ts_kfifo_pop_all_coords(ts) do {} while (0)
+#define sec_ts_debug_dump(ts) do {} while (0)
+#endif /* #ifdef SEC_TS_DEBUG_KFIFO_LEN */
+
 static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 				struct sec_ts_event_coordinate *p_event_coord)
 {
@@ -1879,10 +1979,9 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 		ts->coord[t_id].minor = p_event_coord->minor *
 						ts->plat_data->mm2px;
 
-
 		if (!ts->coord[t_id].palm &&
 			(ts->coord[t_id].ttype == SEC_TS_TOUCHTYPE_PALM))
-			ts->coord[t_id].palm_count++;
+			ts->palm_count++;
 
 		ts->coord[t_id].palm =
 			(ts->coord[t_id].ttype == SEC_TS_TOUCHTYPE_PALM);
@@ -1914,17 +2013,14 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 		    (ts->coord[t_id].ttype ==
 		     SEC_TS_TOUCHTYPE_GLOVE)) {
 
-			if (ts->coord[t_id].action ==
-				SEC_TS_COORDINATE_ACTION_RELEASE) {
+			if (ts->coord[t_id].action == SEC_TS_COORDINATE_ACTION_RELEASE) {
+				s64 ms_delta;
 
-				ktime_get_real_ts64(&ts->time_released[t_id]);
-
-				if (ts->time_longest <
-					(ts->time_released[t_id].tv_sec -
-						ts->time_pressed[t_id].tv_sec))
-					ts->time_longest =
-					(ts->time_released[t_id].tv_sec
-					  - ts->time_pressed[t_id].tv_sec);
+				ts->coord[t_id].ktime_released = ktime_get();
+				ms_delta = ktime_ms_delta(ts->coord[t_id].ktime_released,
+							ts->coord[t_id].ktime_pressed);
+				if (ts->longest_duration < ms_delta)
+					ts->longest_duration = ms_delta;
 
 				if (ts->touch_count > 0)
 					ts->touch_count--;
@@ -1960,8 +2056,8 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 #endif
 			} else if (ts->coord[t_id].action ==
 					SEC_TS_COORDINATE_ACTION_PRESS) {
-				ktime_get_real_ts64(&ts->time_pressed[t_id]);
-
+				ts->coord[t_id].ktime_pressed = ktime_get();
+				ts->pressed_count++;
 				ts->touch_count++;
 				if ((ts->touch_count > 4) &&
 					(ts->check_multi == 0)) {
@@ -1970,6 +2066,8 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 				}
 				ts->all_finger_count++;
 
+				ts->coord[t_id].x_pressed = ts->coord[t_id].x;
+				ts->coord[t_id].y_pressed = ts->coord[t_id].y;
 				ts->max_z_value = max_t(unsigned int,
 							ts->coord[t_id].z,
 							ts->max_z_value);
@@ -2138,9 +2236,10 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 				__func__, t_id);
 
 	if (t_id < MAX_SUPPORT_TOUCH_COUNT + MAX_SUPPORT_HOVER_COUNT) {
+
 		if (ts->coord[t_id].action == SEC_TS_COORDINATE_ACTION_PRESS) {
 			input_dbg(false, &ts->client->dev,
-				"%s[P] tID: %d x: %d y: %d z: %d major: %d minor: %d tc: %d type: %X\n",
+				"%s[P] tID: %d x: %d y: %d z: %d major: %d minor: %d tc: %u type: %X\n",
 				ts->dex_name,
 				t_id, ts->coord[t_id].x,
 				ts->coord[t_id].y, ts->coord[t_id].z,
@@ -2151,8 +2250,9 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 
 		} else if (ts->coord[t_id].action ==
 			   SEC_TS_COORDINATE_ACTION_RELEASE) {
+			sec_ts_kfifo_push_coord(ts, t_id);
 			input_dbg(false, &ts->client->dev,
-				"%s[R] tID: %d mc: %d tc: %d lx: %d ly: %d v: %02X%02X cal: %02X(%02X) id(%d,%d) p: %d\n",
+				"%s[R] tID: %d mc: %d tc: %u lx: %d ly: %d v: %02X%02X cal: %02X(%02X) id(%d,%d)\n",
 				ts->dex_name,
 				t_id, ts->coord[t_id].mcount,
 				ts->touch_count,
@@ -2160,11 +2260,9 @@ static void sec_ts_handle_coord_event(struct sec_ts_data *ts,
 				ts->plat_data->img_version_of_ic[2],
 				ts->plat_data->img_version_of_ic[3],
 				ts->cal_status, ts->nv, ts->tspid_val,
-				ts->tspicid_val,
-				ts->coord[t_id].palm_count);
+				ts->tspicid_val);
 
 			ts->coord[t_id].mcount = 0;
-			ts->coord[t_id].palm_count = 0;
 		}
 	}
 }
@@ -2647,42 +2745,63 @@ static void sec_ts_populate_frame(struct sec_ts_data *ts,
 	}
 }
 
-int sec_ts_enable_grip(struct sec_ts_data *ts, bool enable)
+void sec_ts_enable_ptflib(struct sec_ts_data *ts, bool enable)
 {
 	struct sec_ts_plat_data *pdata = ts->plat_data;
-	u8 value = enable ? 1 : 0;
+
+	input_info(true, &ts->client->dev,
+		"%s: enable %d.\n", __func__, enable);
+
+	if (enable) {
+		sec_ts_ptflib_reinit(ts);
+		if (pdata->grip_prescreen_mode == GRIP_PRESCREEN_MODE_2) {
+			sec_ts_ptflib_grip_prescreen_timeout(ts,
+				pdata->grip_prescreen_timeout);
+		}
+		sec_ts_ptflib_grip_prescreen_enable(ts,
+			pdata->grip_prescreen_mode);
+	} else {
+		sec_ts_ptflib_grip_prescreen_enable(ts, GRIP_PRESCREEN_OFF);
+	}
+}
+
+int sec_ts_enable_fw_grip(struct sec_ts_data *ts, bool enable)
+{
+	struct sec_ts_plat_data *pdata = ts->plat_data;
+	u8 value;
 	int ret;
 	int final_result = 0;
 
+	input_info(true, &ts->client->dev,
+		"%s: enable %d.\n", __func__, enable);
+
 	/* Set grip */
+	value = enable ? 0x1F : 0;
 	ret = ts->sec_ts_write(ts, SEC_TS_CMD_SET_GRIP_DETEC, &value, 1);
 	if (ret < 0) {
 		input_err(true, &ts->client->dev,
 			 "%s: SEC_TS_CMD_SET_GRIP_DETEC failed with ret=%d\n",
 			__func__, ret);
 		final_result = ret;
-	}
-
-	/* Set deadzone */
-	value = enable ? 1 : 0;
-	ret = ts->sec_ts_write(ts, SEC_TS_CMD_EDGE_DEADZONE, &value, 1);
-	if (ret < 0) {
-		input_err(true, &ts->client->dev,
-			 "%s: SEC_TS_CMD_EDGE_DEADZONE failed with ret=%d\n",
-			__func__, ret);
-		final_result = ret;
-	}
-
-	if (!enable) {
-		sec_ts_ptflib_reinit(ts);
-		if (pdata->grip_prescreen_mode == GRIP_PRESCREEN_MODE_2) {
-			sec_ts_ptflib_grip_prescreen_timeout(ts,
-			    pdata->grip_prescreen_timeout);
-		}
-		sec_ts_ptflib_grip_prescreen_enable(ts,
-		    pdata->grip_prescreen_mode);
 	} else {
-		sec_ts_ptflib_grip_prescreen_enable(ts, GRIP_PRESCREEN_OFF);
+		/* Configure grip */
+		if (enable) {
+			u8 mm = 10;
+			u8 px_lo = (mm * pdata->mm2px) & 0xFF;
+			u8 px_hi = ((mm * pdata->mm2px) >> 8) & 0xFF;
+			u8 long_press_zone[10] = {0x02, 0x00,	/* long press reject zone type */
+						px_hi, px_lo,	/* left edge */
+						0x00, 0x00,	/* top edge */
+						px_hi, px_lo,	/* right edge */
+						0x00, 0x00};	/* bottom edge */
+			ret = ts->sec_ts_write(ts, SEC_TS_CMD_LONGPRESS_DROP_AREA,
+					long_press_zone, sizeof(long_press_zone));
+			if (ret < 0) {
+				input_err(true, &ts->client->dev,
+					"%s: SEC_TS_CMD_LONGPRESS_DROP_AREA failed with ret=%d\n",
+					__func__, ret);
+			}
+		}
 	}
 
 	return final_result;
@@ -2693,11 +2812,11 @@ static void sec_ts_offload_set_running(struct sec_ts_data *ts, bool running)
 	if (ts->offload.offload_running != running) {
 		ts->offload.offload_running = running;
 		if (running) {
-			pr_info("%s: disabling FW grip.\n", __func__);
-			sec_ts_enable_grip(ts, false);
+			sec_ts_enable_fw_grip(ts, false);
+			sec_ts_enable_ptflib(ts, true);
 		} else {
-			pr_info("%s: enabling FW grip.\n", __func__);
-			sec_ts_enable_grip(ts, true);
+			sec_ts_enable_fw_grip(ts, true);
+			sec_ts_enable_ptflib(ts, false);
 		}
 	}
 }
@@ -2728,37 +2847,6 @@ static void sec_ts_handle_fod_event(struct sec_ts_data *ts,
 
 	input_info(true, &ts->client->dev,
 		   "STATUS: FoD: %s, X,Y: %d, %d\n", p_fod->status ? "ON" : "OFF", x, y);
-
-	if (p_fod->status == false) {
-		mutex_lock(&ts->eventlock);
-		input_mt_slot(ts->input_dev, 0);
-		input_report_key(ts->input_dev, BTN_TOUCH, 1);
-		input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, 1);
-		input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
-		input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
-		input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, 140);
-		input_report_abs(ts->input_dev, ABS_MT_TOUCH_MINOR, 140);
-#ifndef SKIP_PRESSURE
-		input_report_abs(ts->input_dev, ABS_MT_PRESSURE, 1);
-#endif
-		input_sync(ts->input_dev);
-
-		/* Report MT_TOOL_PALM for canceling the touch event. */
-		input_mt_slot(ts->input_dev, 0);
-		input_report_key(ts->input_dev, BTN_TOUCH, 1);
-		input_mt_report_slot_state(ts->input_dev, MT_TOOL_PALM, 1);
-		input_sync(ts->input_dev);
-
-		/* Release slot 0. */
-		input_mt_slot(ts->input_dev, 0);
-		input_report_abs(ts->input_dev, ABS_MT_PRESSURE, 0);
-		input_mt_report_slot_state(ts->input_dev,
-					   MT_TOOL_FINGER, 0);
-		input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, -1);
-		input_report_key(ts->input_dev, BTN_TOUCH, 0);
-		input_sync(ts->input_dev);
-		mutex_unlock(&ts->eventlock);
-	}
 }
 
 static void sec_ts_read_vendor_event(struct sec_ts_data *ts,
@@ -2835,6 +2923,8 @@ static void sec_ts_read_vendor_event(struct sec_ts_data *ts,
 			input_info(true, &ts->client->dev,
 				"STATUS: palm: %d.\n",
 				status_data_1);
+				if (status_data_1)
+					ts->palm_count++;
 			break;
 
 		case SEC_TS_EVENT_STATUS_ID_FOD:
@@ -4770,6 +4860,7 @@ error_allocate_pdata:
 void sec_ts_unlocked_release_all_finger(struct sec_ts_data *ts)
 {
 	int i;
+	s64 ms_delta;
 
 	for (i = 0; i < MAX_SUPPORT_TOUCH_COUNT; i++) {
 		input_mt_slot(ts->input_dev, i);
@@ -4783,22 +4874,22 @@ void sec_ts_unlocked_release_all_finger(struct sec_ts_data *ts)
 			 SEC_TS_COORDINATE_ACTION_MOVE)) {
 
 			input_info(true, &ts->client->dev,
-				"%s: [RA] tID: %d mc: %d tc: %d v: %02X%02X cal: %02X(%02X) id(%d,%d) p: %d\n",
+				"%s: [RA] tID: %d mc: %d tc: %u v: %02X%02X cal: %02X(%02X) id(%d,%d)\n",
 				__func__, i,
 				ts->coord[i].mcount, ts->touch_count,
 				ts->plat_data->img_version_of_ic[2],
 				ts->plat_data->img_version_of_ic[3],
 				ts->cal_status, ts->nv, ts->tspid_val,
-				ts->tspicid_val, ts->coord[i].palm_count);
+				ts->tspicid_val);
 
-			ktime_get_real_ts64(&ts->time_released[i]);
+			ts->coord[i].ktime_released = ktime_get();
+			ms_delta = ktime_ms_delta(ts->coord[i].ktime_released,
+						ts->coord[i].ktime_pressed);
+			if (ts->longest_duration < ms_delta)
+				ts->longest_duration = ms_delta;
 
-			if (ts->time_longest <
-				(ts->time_released[i].tv_sec -
-				 ts->time_pressed[i].tv_sec))
-				ts->time_longest =
-					(ts->time_released[i].tv_sec -
-					 ts->time_pressed[i].tv_sec);
+			/* special case to push into kfifo during release all fingers. */
+			sec_ts_kfifo_push_coord(ts, i);
 		}
 
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_OFFLOAD)
@@ -4809,8 +4900,6 @@ void sec_ts_unlocked_release_all_finger(struct sec_ts_data *ts)
 #endif
 		ts->coord[i].action = SEC_TS_COORDINATE_ACTION_RELEASE;
 		ts->coord[i].mcount = 0;
-		ts->coord[i].palm_count = 0;
-
 	}
 
 	input_mt_slot(ts->input_dev, 0);
@@ -5504,6 +5593,8 @@ static void sec_ts_suspend_work(struct work_struct *work)
 		return;
 	}
 
+	sec_ts_enable_fw_grip(ts, true);
+
 	/* Stop T-IC */
 	sec_ts_fix_tmode(ts, TOUCH_SYSTEM_MODE_SLEEP, TOUCH_MODE_STATE_STOP);
 	ret = sec_ts_write(ts, SEC_TS_CMD_CLEAR_EVENT_STACK, NULL, 0);
@@ -5528,6 +5619,8 @@ static void sec_ts_suspend_work(struct work_struct *work)
 		tbn_release_bus(ts->tbn_register_mask);
 #endif
 	mutex_unlock(&ts->device_mutex);
+
+	sec_ts_debug_dump(ts);
 }
 
 static void sec_ts_resume_work(struct work_struct *work)
@@ -5538,6 +5631,12 @@ static void sec_ts_resume_work(struct work_struct *work)
 	int ret = 0;
 
 	input_info(true, &ts->client->dev, "%s\n", __func__);
+	ts->comm_err_count = 0;
+	ts->hw_reset_count = 0;
+	ts->longest_duration = 0;
+	ts->pressed_count = 0;
+	ts->palm_count = 0;
+	ts->wet_count = 0;
 
 	mutex_lock(&ts->device_mutex);
 
@@ -5635,8 +5734,6 @@ static void sec_ts_resume_work(struct work_struct *work)
 		sec_ts_set_custom_library(ts);
 #endif
 
-	sec_ts_set_grip_type(ts, ONLY_EDGE_HANDLER);
-
 	ts->plat_data->is_heatmap_enabled = false;
 	ts->plat_data->encoded_frame_counter = 0;
 	ts->plat_data->encoded_skip_counter = 0;
@@ -5699,8 +5796,10 @@ static void sec_ts_resume_work(struct work_struct *work)
 		input_info(true, &ts->client->dev,
 			   "applying touch_offload settings.\n");
 
-		if (!ts->offload.config.filter_grip)
-			sec_ts_enable_grip(ts, false);
+		if (!ts->offload.config.filter_grip) {
+			sec_ts_enable_fw_grip(ts, false);
+			sec_ts_enable_ptflib(ts, true);
+		}
 	}
 #endif
 

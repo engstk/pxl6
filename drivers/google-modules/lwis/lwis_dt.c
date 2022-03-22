@@ -350,8 +350,6 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 		int j;
 		struct device_node *event_info = of_node_get(it.node);
 
-		critical_events_num = parse_critical_irq_events(event_info, &critical_events);
-
 		irq_events_num = of_property_count_elems_of_size(event_info, "irq-events", 8);
 		if (irq_events_num <= 0) {
 			pr_err("Error getting irq-events: %d\n", irq_events_num);
@@ -464,6 +462,8 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 
 		of_property_read_u32(event_info, "irq-reg-bitwidth", &irq_reg_bitwidth);
 
+		critical_events_num = parse_critical_irq_events(event_info, &critical_events);
+
 		ret = lwis_interrupt_set_event_info(
 			lwis_dev->irqs, i, irq_reg_space, irq_reg_bid, (int64_t *)irq_events,
 			irq_events_num, int_reg_bits, int_reg_bits_num, irq_src_reg, irq_reset_reg,
@@ -471,6 +471,9 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 			(int64_t *)critical_events, critical_events_num);
 		if (ret) {
 			pr_err("Error setting event info for interrupt %d %d\n", i, ret);
+			if (critical_events) {
+				kfree(critical_events);
+			}
 			kfree(irq_events);
 			kfree(int_reg_bits);
 			goto error_event_infos;
@@ -478,6 +481,9 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 
 		of_node_put(event_info);
 		i++;
+		if (critical_events) {
+			kfree(critical_events);
+		}
 		kfree(irq_events);
 		kfree(int_reg_bits);
 	}
@@ -786,6 +792,17 @@ static int parse_pm_hibernation(struct lwis_device *lwis_dev)
 	return 0;
 }
 
+static int parse_access_mode(struct lwis_device *lwis_dev)
+{
+	struct device_node *dev_node;
+
+	dev_node = lwis_dev->plat_dev->dev.of_node;
+
+	lwis_dev->is_read_only = of_property_read_bool(dev_node, "lwis,read-only");
+
+	return 0;
+}
+
 int lwis_base_parse_dt(struct lwis_device *lwis_dev)
 {
 	struct device *dev;
@@ -883,6 +900,8 @@ int lwis_base_parse_dt(struct lwis_device *lwis_dev)
 		pr_err("Error parsing pm hibernation");
 		return ret;
 	}
+
+	parse_access_mode(lwis_dev);
 
 	parse_bitwidths(lwis_dev);
 

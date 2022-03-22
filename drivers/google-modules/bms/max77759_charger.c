@@ -3289,7 +3289,7 @@ static int bat_oilo_set(void *d, u64 val)
 	struct max77759_chgr_data *data = d;
 	int ret;
 
-	if (val > 0xf)
+	if (val > 0xff)
 		return -EINVAL;
 
 	ret = max77759_reg_write(data->regmap, MAX77759_CHG_CNFG_14, (u8) val);

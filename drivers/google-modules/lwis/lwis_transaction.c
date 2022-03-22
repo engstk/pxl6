@@ -141,11 +141,11 @@ static void free_transaction(struct lwis_transaction *transaction)
 }
 
 static int process_transaction(struct lwis_client *client, struct lwis_transaction *transaction,
-			       struct list_head *pending_events, bool in_irq)
+			       struct list_head *pending_events, bool in_irq, bool skip_err)
 {
 	int i;
 	int ret = 0;
-	struct lwis_io_entry *entry;
+	struct lwis_io_entry *entry = NULL;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 	struct lwis_transaction_info *info = &transaction->info;
 	struct lwis_transaction_response_header *resp = transaction->resp;
@@ -181,6 +181,12 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 							 lwis_dev->native_value_bitwidth);
 			if (ret) {
 				resp->error_code = ret;
+				if (skip_err) {
+					dev_warn(lwis_dev->dev,
+						 "transaction type %d processing failed, skip this error and run the next command\n",
+						 entry->type);
+					continue;
+				}
 				break;
 			}
 		} else if (entry->type == LWIS_IO_ENTRY_READ) {
@@ -192,6 +198,12 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 							 lwis_dev->native_value_bitwidth);
 			if (ret) {
 				resp->error_code = ret;
+				if (skip_err) {
+					dev_warn(lwis_dev->dev,
+						 "transaction type %d processing failed, skip this error and run the next command\n",
+						 entry->type);
+					continue;
+				}
 				break;
 			}
 			memcpy(io_result->values, &entry->rw.val, reg_value_bytewidth);
@@ -206,6 +218,12 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 							 lwis_dev->native_value_bitwidth);
 			if (ret) {
 				resp->error_code = ret;
+				if (skip_err) {
+					dev_warn(lwis_dev->dev,
+						 "transaction type %d processing failed, skip this error and run the next command\n",
+						 entry->type);
+					continue;
+				}
 				break;
 			}
 			read_buf += sizeof(struct lwis_io_result) + io_result->num_value_bytes;
@@ -213,17 +231,35 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 			ret = lwis_entry_poll(lwis_dev, entry, in_irq);
 			if (ret) {
 				resp->error_code = ret;
+				if (skip_err) {
+					dev_warn(lwis_dev->dev,
+						 "transaction type %d processing failed, skip this error and run the next command\n",
+						 entry->type);
+					continue;
+				}
 				break;
 			}
 		} else if (entry->type == LWIS_IO_ENTRY_READ_ASSERT) {
 			ret = lwis_entry_read_assert(lwis_dev, entry);
 			if (ret) {
 				resp->error_code = ret;
+				if (skip_err) {
+					dev_warn(lwis_dev->dev,
+						 "transaction type %d processing failed, skip this error and run the next command\n",
+						 entry->type);
+					continue;
+				}
 				break;
 			}
 		} else {
 			dev_err(lwis_dev->dev, "Unrecognized io_entry command\n");
 			resp->error_code = -EINVAL;
+			if (skip_err) {
+				dev_warn(lwis_dev->dev,
+					 "transaction type %d processing failed, skip this error and run the next command\n",
+					 entry->type);
+				continue;
+			}
 			break;
 		}
 		resp->completion_index = i;
@@ -303,7 +339,8 @@ static void process_transactions_in_queue(struct lwis_client *client,
 					   &pending_events);
 		} else {
 			spin_unlock_irqrestore(&client->transaction_lock, flags);
-			process_transaction(client, transaction, &pending_events, in_irq);
+			process_transaction(client, transaction, &pending_events, in_irq,
+					    /*skip_err=*/false);
 			spin_lock_irqsave(&client->transaction_lock, flags);
 		}
 	}
@@ -454,7 +491,8 @@ int lwis_transaction_client_cleanup(struct lwis_client *client)
 			cancel_transaction(transaction, -ECANCELED, NULL);
 		} else {
 			spin_unlock_irqrestore(&client->transaction_lock, flags);
-			process_transaction(client, transaction, &pending_events, in_irq);
+			process_transaction(client, transaction, &pending_events, in_irq,
+					    /*skip_err=*/true);
 			spin_lock_irqsave(&client->transaction_lock, flags);
 		}
 	}
@@ -565,7 +603,6 @@ static int check_transaction_param_locked(struct lwis_client *client,
 static int prepare_response_locked(struct lwis_client *client, struct lwis_transaction *transaction)
 {
 	struct lwis_transaction_info *info = &transaction->info;
-	struct lwis_io_entry *entry;
 	int i;
 	size_t resp_size;
 	size_t read_buf_size = 0;
@@ -575,7 +612,7 @@ static int prepare_response_locked(struct lwis_client *client, struct lwis_trans
 	info->id = client->transaction_counter;
 
 	for (i = 0; i < info->num_io_entries; ++i) {
-		entry = &info->io_entries[i];
+		struct lwis_io_entry *entry = &info->io_entries[i];
 		if (entry->type == LWIS_IO_ENTRY_READ) {
 			read_buf_size += reg_value_bytewidth;
 			read_entries++;
@@ -708,7 +745,8 @@ static void defer_transaction_locked(struct lwis_client *client,
 
 	if (transaction->info.run_in_event_context) {
 		spin_unlock_irqrestore(&client->transaction_lock, flags);
-		process_transaction(client, transaction, pending_events, in_irq);
+		process_transaction(client, transaction, pending_events, in_irq,
+				    /*skip_err=*/false);
 		spin_lock_irqsave(&client->transaction_lock, flags);
 	} else if (transaction->info.run_at_real_time) {
 		list_add_tail(&transaction->process_queue_node,

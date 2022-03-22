@@ -142,7 +142,7 @@ void fira_frame_control_payload_put(const struct fira_local *local,
 
 	*p++ = n_mngt;
 	*p++ = 0;
-	*p++ = 0;
+	*p++ = session->next_block_stride_len;
 
 	for (i = 0; i < local->access.n_frames - 1; i++) {
 		const struct fira_slot *slot = &local->slots[i + 1];
@@ -384,11 +384,11 @@ bool fira_frame_header_check(const struct fira_local *local,
 
 static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 				    unsigned int ie_len, unsigned int *n_slots,
-				    bool *stop)
+				    bool *stop, int *block_stride_len)
 {
 	const struct fira_session *session = local->current_session;
 	struct fira_slot *slot, last;
-	int n_mngt, stride_len, i;
+	int n_mngt, i;
 	u16 msg_ids = 0;
 	bool stop_found = false;
 
@@ -397,10 +397,7 @@ static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 		return false;
 	p++;
 
-	stride_len = *p++;
-	if (stride_len)
-		/* Not supported for the moment. */
-		return false;
+	*block_stride_len = *p++;
 
 	slot = local->slots;
 	last = *slot++;
@@ -474,7 +471,8 @@ static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 bool fira_frame_control_payload_check(struct fira_local *local,
 				      struct sk_buff *skb,
 				      struct mcps802154_ie_get_context *ie_get,
-				      unsigned int *n_slots, bool *stop_ranging)
+				      unsigned int *n_slots, bool *stop_ranging,
+				      int *block_stride_len)
 {
 	bool fira_payload_seen = false;
 	int r;
@@ -505,7 +503,8 @@ bool fira_frame_control_payload_check(struct fira_local *local,
 				return false;
 
 			if (!fira_frame_control_read(local, p, ie_get->len,
-						     n_slots, stop_ranging))
+						     n_slots, stop_ranging,
+						     block_stride_len))
 				return false;
 
 			fira_payload_seen = true;

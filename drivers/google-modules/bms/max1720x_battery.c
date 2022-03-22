@@ -59,6 +59,8 @@
 
 #define HISTORY_DEVICENAME "maxfg_history"
 
+#define FILTERCFG_TEMP_HYSTERESIS	30
+
 #include "max1720x.h"
 #include "max1730x.h"
 #include "max_m5.h"
@@ -205,6 +207,7 @@ struct max1720x_chip {
 	s16 *temp_convgcfg;
 	u16 *convgcfg_values;
 	struct mutex convgcfg_lock;
+	struct max1720x_dyn_filtercfg dyn_filtercfg;
 	bool shadow_override;
 	int nb_empty_voltage;
 	u16 *empty_voltage;
@@ -889,28 +892,40 @@ static ssize_t max1720x_model_show_state(struct device *dev,
  * force is true when changing the model via debug props.
  * NOTE: call holding model_lock
  */
-static void max1720x_model_reload(struct max1720x_chip *chip, bool force)
+static int max1720x_model_reload(struct max1720x_chip *chip, bool force)
 {
 	const bool disabled = chip->model_reload == MAX_M5_LOAD_MODEL_DISABLED;
 	const bool pending = chip->model_reload != MAX_M5_LOAD_MODEL_IDLE;
+	int version_now, version_load;
+
+	if (chip->gauge_type != MAX_M5_GAUGE_TYPE)
+		return -EINVAL;
 
 	pr_debug("model_reload=%d force=%d pending=%d disabled=%d\n",
 		 chip->model_reload, force, pending, disabled);
 
 	if (!force && (pending || disabled))
-		return;
+		return -EEXIST;
+
+	version_now = max_m5_model_read_version(chip->model_data);
+	version_load = max_m5_fg_model_version(chip->model_data);
+
+	if (!force && version_now == version_load)
+		return -EEXIST;
 
 	/* REQUEST -> IDLE or set to the number of retries */
 	dev_info(chip->dev, "Schedule Load FG Model, ID=%d, ver:%d->%d cap_lsb:%d->%d\n",
 			chip->batt_id,
-			max_m5_model_read_version(chip->model_data),
-			max_m5_fg_model_version(chip->model_data),
+			version_now,
+			version_load,
 			max_m5_model_get_cap_lsb(chip->model_data),
 			max_m5_cap_lsb(chip->model_data));
 
 	chip->model_reload = MAX_M5_LOAD_MODEL_REQUEST;
 	chip->model_ok = false;
 	mod_delayed_work(system_wq, &chip->model_work, 0);
+
+	return 0;
 }
 
 static ssize_t max1720x_model_set_state(struct device *dev,
@@ -1303,13 +1318,54 @@ static void max1720x_handle_update_nconvgcfg(struct max1720x_chip *chip,
 	    (chip->curr_convgcfg_idx == -1 || idx < chip->curr_convgcfg_idx ||
 	     temp >= chip->temp_convgcfg[chip->curr_convgcfg_idx] +
 	     chip->convgcfg_hysteresis)) {
-		REGMAP_WRITE(&chip->regmap_nvram, MAX1720X_NCONVGCFG,
-			     chip->convgcfg_values[idx]);
+		struct max17x0x_regmap *regmap;
+
+		if (chip->gauge_type == MAX_M5_GAUGE_TYPE)
+			regmap = &chip->regmap;
+		else
+			regmap = &chip->regmap_nvram;
+
+		REGMAP_WRITE(regmap, MAX1720X_NCONVGCFG, chip->convgcfg_values[idx]);
 		chip->curr_convgcfg_idx = idx;
 		dev_info(chip->dev, "updating nConvgcfg to 0x%04x as temp is %d (idx:%d)\n",
 			 chip->convgcfg_values[idx], temp, idx);
 	}
 	mutex_unlock(&chip->convgcfg_lock);
+}
+
+static void max1720x_handle_update_filtercfg(struct max1720x_chip *chip,
+					     int temp)
+{
+	struct max1720x_dyn_filtercfg *filtercfg = &chip->dyn_filtercfg;
+	s16 hysteresis_temp;
+	u16 filtercfg_val;
+
+	if (filtercfg->temp == -1)
+		return;
+
+	mutex_lock(&filtercfg->lock);
+	if (temp <= filtercfg->temp)
+		filtercfg_val = filtercfg->adjust_val;
+	else
+		filtercfg_val = filtercfg->default_val;
+
+	hysteresis_temp = filtercfg->temp + filtercfg->hysteresis;
+	if ((filtercfg_val != filtercfg->curr_val) &&
+	    (filtercfg->curr_val == 0 || temp < filtercfg->temp ||
+	     temp >= hysteresis_temp)) {
+		struct max17x0x_regmap *regmap;
+
+		if (chip->gauge_type == MAX_M5_GAUGE_TYPE)
+			regmap = &chip->regmap;
+		else
+			regmap = &chip->regmap_nvram;
+
+		REGMAP_WRITE(regmap, MAX1720X_FILTERCFG, filtercfg_val);
+		dev_info(chip->dev, "updating filtercfg to 0x%04x as temp is %d\n",
+			 filtercfg_val, temp);
+		filtercfg->curr_val = filtercfg_val;
+	}
+	mutex_unlock(&filtercfg->lock);
 }
 
 #define EEPROM_CC_OVERFLOW_BIT	BIT(15)
@@ -1358,8 +1414,11 @@ static void max1720x_restore_battery_cycle(struct max1720x_chip *chip)
 	eeprom_cycle = (chip->eeprom_cycle & 0x7FFF) << 1;
 	dev_info(chip->dev, "reg_cycle:%d, eeprom_cycle:%d, update:%c",
 		 reg_cycle, eeprom_cycle, eeprom_cycle > reg_cycle ? 'Y' : 'N');
-	if (eeprom_cycle > reg_cycle)
-		REGMAP_WRITE(&chip->regmap, MAX1720X_CYCLES, eeprom_cycle);
+	if (eeprom_cycle > reg_cycle) {
+		ret = REGMAP_WRITE_VERIFY(&chip->regmap, MAX1720X_CYCLES, eeprom_cycle);
+		if (ret < 0)
+			dev_warn(chip->dev, "fail to update cycles (%d)", ret);
+	}
 }
 
 static u16 max1720x_save_battery_cycle(const struct max1720x_chip *chip,
@@ -1369,6 +1428,9 @@ static u16 max1720x_save_battery_cycle(const struct max1720x_chip *chip,
 	u16 eeprom_cycle = chip->eeprom_cycle;
 
 	if (chip->gauge_type != MAX_M5_GAUGE_TYPE)
+		return eeprom_cycle;
+
+	if (chip->por)
 		return eeprom_cycle;
 
 	/* save half value to record over 655 cycles case */
@@ -1958,7 +2020,9 @@ static int max1720x_get_property(struct power_supply *psy,
 			chip->por = data & MAX1720X_STATUS_POR;
 			if (chip->por && chip->model_ok) {
 				/* trigger reload model and clear of POR */
+				mutex_unlock(&chip->model_lock);
 				max1720x_fg_irq_thread_fn(-1, chip);
+				return err;
 			}
 		}
 		break;
@@ -1969,6 +2033,7 @@ static int max1720x_get_property(struct power_supply *psy,
 
 		val->intval = reg_to_deci_deg_cel(data);
 		max1720x_handle_update_nconvgcfg(chip, val->intval);
+		max1720x_handle_update_filtercfg(chip, val->intval);
 		max1720x_handle_update_empty_voltage(chip, val->intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
@@ -2431,10 +2496,10 @@ static irqreturn_t max1720x_fg_irq_thread_fn(int irq, void *obj)
 
 		/* trigger model load */
 		mutex_lock(&chip->model_lock);
-		if (chip->gauge_type == MAX_M5_GAUGE_TYPE)
-			max1720x_model_reload(chip, false);
-		else
+		err = max1720x_model_reload(chip, false);
+		if (err < 0)
 			fg_status_clr &= ~MAX1720X_STATUS_POR;
+
 		mutex_unlock(&chip->model_lock);
 	}
 
@@ -3011,6 +3076,45 @@ error:
 	return ret;
 }
 
+static int max1720x_handle_dt_filtercfg(struct max1720x_chip *chip)
+{
+	struct device_node *node = chip->dev->of_node;
+	struct max1720x_dyn_filtercfg *filtercfg = &chip->dyn_filtercfg;
+	int ret = 0;
+
+	mutex_init(&filtercfg->lock);
+
+	ret = of_property_read_s32(node, "maxim,filtercfg-temp",
+				   &filtercfg->temp);
+	if (ret)
+		goto not_enable;
+
+	ret = of_property_read_s32(node, "maxim,filtercfg-temp-hysteresis",
+				   &filtercfg->hysteresis);
+	if (ret)
+		filtercfg->hysteresis = FILTERCFG_TEMP_HYSTERESIS;
+
+	ret = of_property_read_u16(node, "maxim,filtercfg-default",
+				   &filtercfg->default_val);
+	if (ret)
+		goto not_enable;
+
+	ret = of_property_read_u16(node, "maxim,filtercfg-adjust",
+				   &filtercfg->adjust_val);
+	if (ret)
+		goto not_enable;
+
+	dev_info(chip->dev, "%s filtercfg: temp:%d(hys:%d), default:%#X adjust:%#X\n",
+		 node->name, filtercfg->temp, filtercfg->hysteresis,
+		 filtercfg->default_val, filtercfg->adjust_val);
+
+	return ret;
+
+not_enable:
+	filtercfg->temp = -1;
+	return ret;
+}
+
 static int get_irq_none_cnt(void *data, u64 *val)
 {
 	struct max1720x_chip *chip = (struct max1720x_chip *)data;
@@ -3358,17 +3462,23 @@ static ssize_t max1720x_show_reg_all(struct file *filp, char __user *buf,
 					size_t count, loff_t *ppos)
 {
 	struct max1720x_chip *chip = (struct max1720x_chip *)filp->private_data;
+	const struct max17x0x_regmap *map = &chip->regmap;
 	u32 reg_address;
-	u16 data;
+	unsigned int data;
 	char *tmp;
 	int ret = 0, len = 0;
+
+	if (!map->regmap) {
+		pr_err("Failed to read, no regmap\n");
+		return -EIO;
+	}
 
 	tmp = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!tmp)
 		return -ENOMEM;
 
 	for (reg_address = 0; reg_address <= 0xFF; reg_address++) {
-		ret = REGMAP_READ(&chip->regmap, reg_address, &data);
+		ret = regmap_read(map->regmap, reg_address, &data);
 		if (ret < 0)
 			continue;
 
@@ -4176,6 +4286,7 @@ static int max1720x_init_chip(struct max1720x_chip *chip)
 		return ret;
 
 	(void) max1720x_handle_dt_nconvgcfg(chip);
+	(void) max1720x_handle_dt_filtercfg(chip);
 
 	/* recall, force & reset SW */
 	if (chip->needs_reset) {

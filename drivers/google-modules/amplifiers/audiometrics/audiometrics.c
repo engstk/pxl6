@@ -376,6 +376,11 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 		return ret;
 	}
 
+	if (sizeof(params) != _IOC_SIZE(cmd)) {
+		dev_err(&amcs_pdev->dev, "%s: size of cmd 0x%08x is invalid\n", __func__, cmd);
+		return ret;
+	}
+
 	if (copy_from_user(&params, (struct amcs_params *)arg, _IOC_SIZE(cmd)))
 		return ret;
 

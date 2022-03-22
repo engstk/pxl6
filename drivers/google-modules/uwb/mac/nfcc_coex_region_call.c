@@ -29,6 +29,7 @@
 
 #include "nfcc_coex_session.h"
 #include "nfcc_coex_region_call.h"
+#include "nfcc_coex_trace.h"
 
 static const struct nla_policy nfcc_coex_call_nla_policy[NFCC_COEX_CALL_ATTR_MAX +
 							 1] = {
@@ -92,27 +93,27 @@ static int nfcc_coex_session_start(struct nfcc_coex_local *local,
 				   const struct genl_info *info)
 {
 	struct nfcc_coex_session *session = &local->session;
+	const struct nfcc_coex_session_params *p = &session->params;
 	int initiation_time_dtu;
 	u32 now_dtu;
 	int r;
 
-	WARN_ON(local->state != NFCC_COEX_STATE_UNUSED);
+	WARN_ON(session->started);
 
+	trace_region_nfcc_coex_session_start(local, p);
 	r = mcps802154_get_current_timestamp_dtu(local->llhw, &now_dtu);
 	if (r)
 		return r;
 
 	initiation_time_dtu =
-		(session->params.time0_ns * local->llhw->dtu_freq_hz) /
-		NS_PER_SECOND;
+		(p->time0_ns * local->llhw->dtu_freq_hz) / NS_PER_SECOND;
 	session->region_demand.timestamp_dtu = now_dtu + initiation_time_dtu;
 	session->region_demand.duration_dtu = 0;
 	session->event_portid = info->snd_portid;
 	session->first_access = true;
-	local->state = NFCC_COEX_STATE_STARTED;
+	session->started = true;
 
 	mcps802154_reschedule(local->llhw);
-
 	return 0;
 }
 
@@ -139,7 +140,7 @@ static int nfcc_coex_session_start_all(struct nfcc_coex_local *local,
 	if (r)
 		return r;
 
-	if (local->state != NFCC_COEX_STATE_UNUSED)
+	if (local->session.started)
 		return -EBUSY;
 
 	nfcc_coex_session_init(local);
@@ -164,17 +165,23 @@ static int nfcc_coex_session_start_all(struct nfcc_coex_local *local,
  */
 static int nfcc_coex_session_stop(struct nfcc_coex_local *local)
 {
-	switch (local->state) {
-	case NFCC_COEX_STATE_STARTED:
-		local->state = NFCC_COEX_STATE_UNUSED;
-		break;
-	case NFCC_COEX_STATE_ACCESSING:
-		/* The transition from ACCESSING to UNUSED will be done
-		 * in nfcc_coex_get_access function. */
-		local->state = NFCC_COEX_STATE_STOPPING;
-		break;
-	default:
-		break;
+	struct nfcc_coex_session *session = &local->session;
+
+	trace_region_nfcc_coex_session_stop(local);
+
+	if (session->started) {
+		switch (session->state) {
+		case NFCC_COEX_STATE_IDLE:
+			session->started = false;
+			break;
+		case NFCC_COEX_STATE_ACCESSING:
+			/* The transition from ACCESSING to UNUSED will be done
+			 * in nfcc_coex_get_access function. */
+			nfcc_coex_set_state(local, NFCC_COEX_STATE_STOPPING);
+			break;
+		default:
+			break;
+		}
 	}
 
 	return 0;

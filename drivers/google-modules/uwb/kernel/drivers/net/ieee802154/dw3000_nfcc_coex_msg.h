@@ -26,29 +26,48 @@
 #include <linux/module.h>
 #include "dw3000_nfcc_coex.h"
 
+#define TLV_MAX_NB_SLOTS 4
+
 /* Forward declaration. */
 struct dw3000;
 
-/* TLVs types. */
-#define TLV_SESSION_TIME0 1
-#define TLV_SLOT_LIST 2
-#define TLV_UWBCNT_OFFS 3
-#define TLV_ERROR 4
+/**
+ * enum dw3000_nfcc_coex_tlv_type - TLVs types.
+ *
+ * @DW3000_NFCC_COEX_TLV_TYPE_UNSPEC: Invalid command.
+ * @DW3000_NFCC_COEX_TLV_TYPE_SESSION_TIME0:
+ *	Indicate start of UWB session in RCTU time unit.
+ * @DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST:
+ *	Indicate the requested next time slots.
+ * @DW3000_NFCC_COEX_TLV_TYPE_TLV_UWBCNT_OFFS:
+ *	Indicate the UWB clock offset in V1 protocol.
+ * @DW3000_NFCC_COEX_TLV_TYPE_ERROR:
+ *	Indicate error condition.
+ * @DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS:
+ *	Indicate the UWB clock offset in V2 protocol.
+ */
+enum dw3000_nfcc_coex_tlv_type {
+	DW3000_NFCC_COEX_TLV_TYPE_UNSPEC,
 
-#define TLV_MAX_NB_SLOTS 4
+	DW3000_NFCC_COEX_TLV_TYPE_SESSION_TIME0,
+	DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST,
+	DW3000_NFCC_COEX_TLV_TYPE_TLV_UWBCNT_OFFS,
+	DW3000_NFCC_COEX_TLV_TYPE_ERROR,
+	DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS,
+};
 
 /**
  * struct dw3000_nfcc_coex_tlv_slot - TLV slot definition.
  */
 struct dw3000_nfcc_coex_tlv_slot {
 	/**
-	 * @start_sys_time: Start date in sys time unit.
+	 * @t_start_uus: Start date in 65536*RCTU (close to usec unit).
 	 */
-	u32 start_sys_time;
+	u32 t_start_uus;
 	/**
-	 * @end_sys_time: End date in sys time unit.
+	 * @t_end_uus: End date in 65536*RCTU (close to usec unit).
 	 */
-	u32 end_sys_time;
+	u32 t_end_uus;
 };
 
 /**
@@ -67,13 +86,6 @@ struct dw3000_nfcc_coex_tlv_slot_list {
 
 void dw3000_nfcc_coex_header_put(struct dw3000 *dw,
 				 struct dw3000_nfcc_coex_buffer *buffer);
-void dw3000_nfcc_coex_single_tlv_slot_put(
-	struct dw3000_nfcc_coex_buffer *buffer, u32 start, u32 end);
-void dw3000_nfcc_coex_tlv_u32_put(struct dw3000_nfcc_coex_buffer *buffer,
-				  u8 type, u32 value);
-void dw3000_nfcc_coex_tlv_slots_put(
-	struct dw3000_nfcc_coex_buffer *buffer,
-	const struct dw3000_nfcc_coex_tlv_slot_list *slot_list);
 int dw3000_nfcc_coex_message_send(struct dw3000 *dw);
 int dw3000_nfcc_coex_message_check(
 	struct dw3000 *dw, const struct dw3000_nfcc_coex_buffer *buffer,

@@ -75,7 +75,10 @@
 #define P9XXX_NEG_POWER_11W		(11 / 0.5)
 #define P9382_RTX_TIMEOUT_MS		(2 * 1000)
 #define WLCDC_DEBOUNCE_TIME_S		400
-#define WLCDC_AUTH_CHECK_MS		(5 * 1000)
+#define WLCDC_AUTH_CHECK_S		15
+#define WLCDC_AUTH_CHECK_INTERVAL_MS	(2 * 1000)
+#define WLCDC_AUTH_CHECK_INIT_DELAY_MS	(6 * 1000)
+
 /*
  * P9221 common registers
  */
@@ -140,6 +143,7 @@
 #define P9221R5_EPP_TX_GUARANTEED_POWER_REG	0x84
 #define P9221R5_EPP_TX_POTENTIAL_POWER_REG	0x85
 #define P9221R5_EPP_TX_CAPABILITY_FLAGS_REG	0x86
+#define P9221R5_EPP_TX_CAPABILITY_FLAGS_AR	BIT(6)
 #define P9221R5_EPP_RENEGOTIATION_REG		0x87
 #define P9221R5_EPP_CUR_RPP_HEADER_REG		0x88
 #define P9221R5_EPP_CUR_NEGOTIATED_POWER_REG	0x89
@@ -363,6 +367,7 @@
 #define TX_ACCESSORY_TYPE			(ACCESSORY_TYPE_PHONE | \
 						 AICL_ENABLED)
 #define TXID_SEND_DELAY_MS			(1 * 1000)
+#define TXID_SEND_AGAIN_DELAY_MS		(300 * 1000)
 #define TXSOC_SEND_DELAY_MS			(5 * 1000)
 
 #define COM_BUSY_MAX				10
@@ -615,6 +620,7 @@ struct p9221_charger_data {
 	struct p9221_charger_ints_bit	ints;
 	struct power_supply		*wc_psy;
 	struct power_supply		*dc_psy;
+	struct power_supply		*fg_psy;
 	struct votable			*dc_icl_votable;
 	struct votable			*dc_suspend_votable;
 	struct votable			*tx_icl_votable;
@@ -635,6 +641,7 @@ struct p9221_charger_data {
 	struct delayed_work		rtx_work;
 	struct delayed_work		power_mitigation_work;
 	struct delayed_work		auth_dc_icl_work;
+	struct delayed_work		fg_work;
 	struct work_struct		uevent_work;
 	struct work_struct		rtx_disable_work;
 	struct work_struct		rtx_reset_work;
@@ -725,6 +732,9 @@ struct p9221_charger_data {
 	int 				ll_bpp_cep;
 	int				last_disable;
 	bool				send_eop;
+	wait_queue_head_t		ccreset_wq;
+	bool				cc_reset_pending;
+	int				send_txid_cnt;
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	struct gpio_chip gpio;
@@ -846,6 +856,5 @@ enum p9382_rtx_err {
       -ENOTSUPP : chgr->reg_write_n(chgr, chgr->reg_set_fod_addr, data, len))
 #define p9xxx_chip_get_fod_reg(chgr, data, len) (chgr->reg_set_fod_addr == 0 ? \
       -ENOTSUPP : chgr->reg_read_n(chgr, chgr->reg_set_fod_addr, data, len))
-
 
 #endif /* __P9221_CHARGER_H__ */

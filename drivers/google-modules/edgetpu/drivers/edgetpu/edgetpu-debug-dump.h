@@ -10,7 +10,7 @@
 
 #include "edgetpu-internal.h"
 
-#define DEBUG_DUMP_HOST_CONTRACT_VERSION 2
+#define DEBUG_DUMP_HOST_CONTRACT_VERSION 3
 
 enum edgetpu_dump_type_bit_position {
 	DUMP_TYPE_CRASH_REASON_BIT = 0,
@@ -24,11 +24,16 @@ enum edgetpu_dump_type_bit_position {
 
 };
 
-enum edgetpu_dump_request_reason {
-	DUMP_REQ_REASON_DEFAULT = 0,
-	DUMP_REQ_REASON_WDT_TIMEOUT = 1,
-	DUMP_REQ_REASON_BY_USER = 2,
-	DUMP_REQ_REASON_NUM = 3
+enum edgetpu_dump_reason {
+	DUMP_REASON_DEFAULT = 0,
+	/* Host request reasons */
+	DUMP_REASON_REQ_BY_USER = 1,
+
+	/* FW side dump reasons */
+	DUMP_REASON_FW_CHECKPOINT = 2,
+	DUMP_REASON_RECOVERABLE_FAULT = 3,
+
+	DUMP_REASON_NUM = 4
 };
 
 struct edgetpu_crash_reason {
@@ -51,6 +56,7 @@ struct edgetpu_debug_dump {
 	u64 magic;	/* word identifying the beginning of the dump info */
 	u64 version;	/* host-firmware dump info contract version */
 	u64 host_dump_available_to_read;	/* is new info available */
+	u64 dump_reason;	/* Reason or context for debug dump */
 	u64 reserved[2];
 	u64 crash_reason_offset;	/* byte offset to crash reason */
 	u64 crash_reason_size;	/* crash reason size */
@@ -64,7 +70,6 @@ struct edgetpu_debug_dump_setup {
 	/* types of dumps requested by host */
 	u64 type;
 	u64 dump_mem_size;	/* total size of memory allocated to dump */
-	u64 dump_req_reason; /* debug dump request reason */
 	u64 reserved[2];
 };
 

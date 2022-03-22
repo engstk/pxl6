@@ -317,6 +317,10 @@ int lwis_debug_print_event_states_info(struct lwis_device *lwis_dev)
 	/* Buffer to store information */
 	const size_t buffer_size = 8192;
 	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate event states log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_event_states_info(lwis_dev, buffer, buffer_size);
 	if (ret) {
@@ -335,6 +339,10 @@ int lwis_debug_print_transaction_info(struct lwis_device *lwis_dev)
 	/* Buffer to store information */
 	const size_t buffer_size = 10240;
 	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate transaction info log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_transaction_info(lwis_dev, buffer, buffer_size);
 	if (ret) {
@@ -353,6 +361,10 @@ int lwis_debug_print_buffer_info(struct lwis_device *lwis_dev)
 	/* Buffer to store information */
 	const size_t buffer_size = 2048;
 	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate buffer info log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_buffer_info(lwis_dev, buffer, buffer_size);
 	if (ret) {
@@ -391,8 +403,12 @@ static ssize_t event_states_read(struct file *fp, char __user *user_buf, size_t 
 	int ret = 0;
 	/* Buffer to store information */
 	const size_t buffer_size = 8192;
-	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
 	struct lwis_device *lwis_dev = fp->f_inode->i_private;
+	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate event states log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_event_states_info(lwis_dev, buffer, buffer_size);
 	if (ret) {
@@ -411,8 +427,12 @@ static ssize_t transaction_info_read(struct file *fp, char __user *user_buf, siz
 	int ret = 0;
 	/* Buffer to store information */
 	const size_t buffer_size = 10240;
-	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
 	struct lwis_device *lwis_dev = fp->f_inode->i_private;
+	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate transaction info log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_transaction_info(lwis_dev, buffer, buffer_size);
 	if (ret) {
@@ -432,8 +452,12 @@ static ssize_t buffer_info_read(struct file *fp, char __user *user_buf, size_t c
 	int ret = 0;
 	/* Buffer to store information */
 	const size_t buffer_size = 2048;
-	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
 	struct lwis_device *lwis_dev = fp->f_inode->i_private;
+	char *buffer = kzalloc(buffer_size, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(lwis_dev->dev, "Failed to allocate buffer info log buffer\n");
+		return -ENOMEM;
+	}
 
 	ret = generate_buffer_info(lwis_dev, buffer, buffer_size);
 	if (ret) {

@@ -28,7 +28,6 @@
 
 #include "mcps802154_i.h"
 #include "trace.h"
-#include "nfcc_coex_trace.h"
 
 static inline int llhw_start(struct mcps802154_local *local)
 {
@@ -311,13 +310,13 @@ static inline int llhw_vendor_cmd(struct mcps802154_local *local, u32 vendor_id,
 {
 	int r;
 
-	trace_nfcc_coex_llhw_vendor_cmd(local, vendor_id, subcmd);
+	trace_llhw_vendor_cmd(local, vendor_id, subcmd, data_len);
 	if (local->ops->vendor_cmd)
 		r = local->ops->vendor_cmd(&local->llhw, vendor_id, subcmd,
 					   data, data_len);
 	else
 		r = -EOPNOTSUPP;
-	trace_nfcc_coex_llhw_return_int(local, r);
+	trace_llhw_return_int(local, r);
 	return r;
 }
 

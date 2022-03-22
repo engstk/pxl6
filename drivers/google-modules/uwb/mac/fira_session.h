@@ -59,6 +59,7 @@ struct fira_session_params {
 	int max_number_of_measurements;
 	int max_rr_retry;
 	bool round_hopping;
+	int block_stride_len;
 	int priority;
 	bool result_report_phase;
 	/* Radio. */
@@ -135,6 +136,15 @@ struct fira_session {
 	 * @next_round_index: Round index of the block after the reference block.
 	 */
 	int next_round_index;
+	/**
+	 * @block_stride_len: Stride length for the reference block.
+	 */
+	int block_stride_len;
+	/**
+	 * @next_block_stride_len: Stride length for the block after the
+	 * reference block.
+	 */
+	int next_block_stride_len;
 	/**
 	 * @tx_ant: Antenna index to use for transmission in the reference
 	 * block.
@@ -307,6 +317,14 @@ bool fira_session_is_ready(struct fira_local *local,
 			   struct fira_session *session);
 
 /**
+ * fira_session_prepare() - Prepare a FiRa session to run.
+ * @local: FiRa context.
+ * @session: Session.
+ */
+void fira_session_prepare(struct fira_local *local,
+			  struct fira_session *session);
+
+/**
  * fira_session_next() - Find the next session to use after the given timestamp.
  * @local: FiRa context.
  * @next_timestamp_dtu: Next access opportunity.
@@ -319,10 +337,10 @@ struct fira_session *fira_session_next(struct fira_local *local,
 				       u32 max_access_duration_dtu);
 
 /**
- * fira_session_round_hopping() - Update round index for round hopping.
+ * fira_session_update_round_index() - Update round index for round hopping.
  * @session: Session to update.
  */
-void fira_session_round_hopping(struct fira_session *session);
+void fira_session_update_round_index(struct fira_session *session);
 
 /**
  * fira_session_resync() - Resync session parameters on control message.
@@ -381,6 +399,7 @@ fira_session_get_block_duration_margin(struct fira_local *local,
 				       const struct fira_session *session)
 {
 	return (long long int)session->params.block_duration_dtu *
+	       (session->block_stride_len + 1) *
 	       local->block_duration_rx_margin_ppm / 1000000;
 }
 

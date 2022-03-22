@@ -293,11 +293,14 @@ static int copy_io_entries(struct lwis_device *lwis_dev, struct lwis_io_entries 
 
 	/* Copy io_entries from userspace */
 	if (copy_from_user(k_msg, (void __user *)user_msg, sizeof(*k_msg))) {
-		ret = -EFAULT;
-		dev_err(lwis_dev->dev, "Failed to copy io_entries header from userspace.");
-		return ret;
+		dev_err(lwis_dev->dev, "Failed to copy io_entries header from userspace.\n");
+		return -EFAULT;
 	}
 	buf_size = sizeof(struct lwis_io_entry) * k_msg->num_io_entries;
+	if (buf_size / sizeof(struct lwis_io_entry) != k_msg->num_io_entries) {
+		dev_err(lwis_dev->dev, "Failed to copy io_entries due to integer overflow.\n");
+		return -EINVAL;
+	}
 	io_entries = kvmalloc(buf_size, GFP_KERNEL);
 	if (!io_entries) {
 		dev_err(lwis_dev->dev, "Failed to allocate io_entries buffer\n");
@@ -306,7 +309,7 @@ static int copy_io_entries(struct lwis_device *lwis_dev, struct lwis_io_entries 
 	if (copy_from_user(io_entries, (void __user *)k_msg->io_entries, buf_size)) {
 		ret = -EFAULT;
 		kvfree(io_entries);
-		dev_err(lwis_dev->dev, "Failed to copy io_entries from userspace.");
+		dev_err(lwis_dev->dev, "Failed to copy io_entries from userspace.\n");
 		return ret;
 	}
 	*k_entries = io_entries;
@@ -393,7 +396,7 @@ reg_io_exit:
 static int ioctl_buffer_alloc(struct lwis_client *lwis_client,
 			      struct lwis_alloc_buffer_info __user *msg)
 {
-	unsigned long ret;
+	unsigned long ret = 0;
 	struct lwis_alloc_buffer_info alloc_info;
 	struct lwis_allocated_buffer *buffer;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
@@ -432,7 +435,7 @@ error_alloc:
 
 static int ioctl_buffer_free(struct lwis_client *lwis_client, int __user *msg)
 {
-	int ret;
+	int ret = 0;
 	int fd;
 	struct lwis_allocated_buffer *buffer;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
@@ -461,7 +464,7 @@ static int ioctl_buffer_free(struct lwis_client *lwis_client, int __user *msg)
 
 static int ioctl_buffer_enroll(struct lwis_client *lwis_client, struct lwis_buffer_info __user *msg)
 {
-	unsigned long ret;
+	unsigned long ret = 0;
 	struct lwis_enrolled_buffer *buffer;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
 
@@ -501,7 +504,7 @@ error_enroll:
 static int ioctl_buffer_disenroll(struct lwis_client *lwis_client,
 				  struct lwis_enrolled_buffer_info __user *msg)
 {
-	unsigned long ret;
+	unsigned long ret = 0;
 	struct lwis_enrolled_buffer_info info;
 	struct lwis_enrolled_buffer *buffer;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
@@ -712,7 +715,7 @@ soft_reset_exit:
 static int ioctl_event_control_get(struct lwis_client *lwis_client,
 				   struct lwis_event_control __user *msg)
 {
-	unsigned long ret;
+	unsigned long ret = 0;
 	struct lwis_event_control control;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
 
@@ -743,7 +746,8 @@ static int ioctl_event_control_set(struct lwis_client *lwis_client,
 	struct lwis_event_control_list k_msg;
 	struct lwis_event_control *k_event_controls;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
-	int ret, i;
+	int ret = 0;
+	int i;
 	size_t buf_size;
 
 	if (copy_from_user((void *)&k_msg, (void __user *)msg,
@@ -781,7 +785,8 @@ out:
 
 static int ioctl_event_dequeue(struct lwis_client *lwis_client, struct lwis_event_info __user *msg)
 {
-	unsigned long ret, err = 0;
+	unsigned long ret = 0;
+	unsigned long err = 0;
 	struct lwis_event_entry *event;
 	struct lwis_event_info info_user;
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
@@ -884,7 +889,7 @@ static int construct_transaction(struct lwis_client *client,
 				 struct lwis_transaction **transaction)
 {
 	int i;
-	int ret;
+	int ret = 0;
 	int last_buf_alloc_idx = -1;
 	size_t entry_size;
 	struct lwis_transaction *k_transaction;
@@ -984,7 +989,7 @@ static void free_transaction(struct lwis_transaction *transaction)
 static int ioctl_transaction_submit(struct lwis_client *client,
 				    struct lwis_transaction_info __user *msg)
 {
-	int ret;
+	int ret = 0;
 	unsigned long flags;
 	struct lwis_transaction *k_transaction = NULL;
 	struct lwis_transaction_info k_transaction_info;
@@ -1022,7 +1027,7 @@ static int ioctl_transaction_submit(struct lwis_client *client,
 static int ioctl_transaction_replace(struct lwis_client *client,
 				     struct lwis_transaction_info __user *msg)
 {
-	int ret;
+	int ret = 0;
 	unsigned long flags;
 	struct lwis_transaction *k_transaction;
 	struct lwis_transaction_info k_transaction_info;
@@ -1060,7 +1065,7 @@ static int ioctl_transaction_replace(struct lwis_client *client,
 
 static int ioctl_transaction_cancel(struct lwis_client *client, int64_t __user *msg)
 {
-	int ret;
+	int ret = 0;
 	int64_t id;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
@@ -1082,7 +1087,8 @@ static int ioctl_transaction_cancel(struct lwis_client *client, int64_t __user *
 static int prepare_io_entry(struct lwis_client *client, struct lwis_io_entry *user_entries,
 			    size_t num_io_entries, struct lwis_io_entry **io_entries)
 {
-	int i, ret;
+	int i;
+	int ret = 0;
 	int last_buf_alloc_idx = 0;
 	size_t entry_size;
 	struct lwis_io_entry *k_entries;
@@ -1091,6 +1097,11 @@ static int prepare_io_entry(struct lwis_client *client, struct lwis_io_entry *us
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
 	entry_size = num_io_entries * sizeof(struct lwis_io_entry);
+	if (entry_size / sizeof(struct lwis_io_entry) != num_io_entries) {
+		dev_err(lwis_dev->dev, "Failed to prepare io entry due to integer overflow\n");
+		return -EINVAL;
+	}
+
 	k_entries = kvmalloc(entry_size, GFP_KERNEL);
 	if (!k_entries) {
 		dev_err(lwis_dev->dev, "Failed to allocate periodic io entries\n");
@@ -1147,7 +1158,7 @@ error_free_entries:
 static int prepare_periodic_io(struct lwis_client *client, struct lwis_periodic_io_info __user *msg,
 			       struct lwis_periodic_io **periodic_io)
 {
-	int ret;
+	int ret = 0;
 	struct lwis_periodic_io *k_periodic_io;
 	struct lwis_periodic_io_info *user_periodic_io;
 	struct lwis_device *lwis_dev = client->lwis_dev;
@@ -1183,7 +1194,7 @@ error_free_periodic_io:
 static int ioctl_periodic_io_submit(struct lwis_client *client,
 				    struct lwis_periodic_io_info __user *msg)
 {
-	int ret;
+	int ret = 0;
 	struct lwis_periodic_io *k_periodic_io = NULL;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
@@ -1214,7 +1225,7 @@ static int ioctl_periodic_io_submit(struct lwis_client *client,
 
 static int ioctl_periodic_io_cancel(struct lwis_client *client, int64_t __user *msg)
 {
-	int ret;
+	int ret = 0;
 	int64_t id;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
@@ -1265,7 +1276,8 @@ static int ioctl_dpm_qos_update(struct lwis_device *lwis_dev,
 {
 	struct lwis_dpm_qos_requirements k_msg;
 	struct lwis_qos_setting *k_qos_settings;
-	int ret, i;
+	int ret = 0;
+	int i;
 	size_t buf_size;
 
 	if (lwis_dev->type != DEVICE_TYPE_DPM) {

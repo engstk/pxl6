@@ -17241,6 +17241,7 @@ enum {
 	WL_PROXD_FLAG_MBURST_FOLLOWUP		= 0x00000200, /* new multi-burst algorithm */
 	WL_PROXD_FLAG_SECURE			= 0x00000400, /* per bsscfg option */
 	WL_PROXD_FLAG_NO_TSF_SYNC		= 0x00000800, /* disable tsf sync */
+	WL_PROXD_FLAG_SIGNED_RTT		= 0x00002000, /* Send negative RTT/distance */
 	WL_PROXD_FLAG_ALL			= 0xffffffff
 };
 typedef uint32 wl_proxd_flags_t;
@@ -17368,6 +17369,10 @@ enum {
 #define WL_PROXD_SID_CHRE_START WL_PROXD_SID_EXT_BLK_START(3)
 #define WL_PROXD_SID_CHRE_END WL_PROXD_SID_EXT_BLK_END(WL_PROXD_SID_CHRE_START)
 #endif /* CHRE */
+
+/* host block */
+#define WL_PROXD_SID_HOST_START WL_PROXD_SID_EXT_BLK_START(4)
+#define WL_PROXD_SID_HOST_END WL_PROXD_SID_EXT_BLK_END(WL_PROXD_SID_HOST_START)
 
 /** maximum number sessions that can be allocated, may be less if tunable */
 #define WL_PROXD_MAX_SESSIONS 16
@@ -17502,6 +17507,7 @@ enum {
 	WL_PROXD_REQUEST_SENT		= 0x0010,	/* FTM request was sent */
 	WL_PROXD_REQUEST_ACKED		= 0x0020,	/* FTM request was acked */
 	WL_PROXD_LTFSEQ_STARTED		= 0x0040,	/* LTF sequence started */
+	WL_PROXD_RESULT_SIGNED		= 0x0080,	/* RTT & Distance are negative */
 	WL_PROXD_RESULT_FLAG_ALL	= 0xffff
 };
 typedef int16 wl_proxd_result_flags_t;

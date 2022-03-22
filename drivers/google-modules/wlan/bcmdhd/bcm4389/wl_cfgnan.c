@@ -9000,8 +9000,9 @@ wl_cfgnan_notify_nan_status(struct bcm_cfg80211 *cfg,
 			 * and max sessions, not running already,
 			 * schedule next target for RTT
 			 */
-			if ((!dhd_rtt_nan_all_directed_sessions_triggered(dhd)) &&
-					dhd_rtt_nan_directed_sessions_allowed(dhd)) {
+			if (dhd_rtt_is_taget_list_mode_nan(dhd) &&
+				!dhd_rtt_nan_all_directed_sessions_triggered(dhd) &&
+				dhd_rtt_nan_directed_sessions_allowed(dhd)) {
 				/* Find and set next directed target */
 				dhd_rtt_set_next_target_idx(dhd,
 					(dhd_rtt_get_cur_target_idx(dhd) + 1));

@@ -22,32 +22,11 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-pm.h"
-#include "edgetpu-shared-fw.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
 
 static char *firmware_name;
 module_param(firmware_name, charp, 0660);
-
-/*
- * Descriptor for loaded firmware, either in shared buffer mode or legacy mode
- * (non-shared, custom allocated memory).
- */
-struct edgetpu_firmware_desc {
-	/*
-	 * Mode independent buffer information. This is either passed into or
-	 * updated by handlers.
-	 */
-	struct edgetpu_firmware_buffer buf;
-	/*
-	 * Shared firmware buffer when we're using shared buffer mode. This
-	 * pointer to keep and release the reference count on unloading this
-	 * shared firmware buffer.
-	 *
-	 * This is NULL when firmware is loaded in legacy mode.
-	 */
-	struct edgetpu_shared_fw_buffer *shared_buf;
-};
 
 struct edgetpu_firmware_private {
 	const struct edgetpu_firmware_chip_data *chip_fw;
@@ -70,107 +49,6 @@ void *edgetpu_firmware_get_data(struct edgetpu_firmware *et_fw)
 	return et_fw->p->data;
 }
 
-static int edgetpu_firmware_legacy_load_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc, const char *name)
-{
-	int ret;
-	struct edgetpu_dev *etdev = et_fw->etdev;
-	struct device *dev = etdev->dev;
-	const struct firmware *fw;
-	size_t aligned_size;
-
-	ret = request_firmware(&fw, name, dev);
-	if (ret) {
-		etdev_dbg(etdev,
-			  "%s: request '%s' failed: %d\n", __func__, name, ret);
-		return ret;
-	}
-
-	aligned_size = ALIGN(fw->size, fw_desc->buf.used_size_align);
-	if (aligned_size > fw_desc->buf.alloc_size) {
-		etdev_dbg(etdev,
-			  "%s: firmware buffer too small: alloc size=0x%zx, required size=0x%zx\n",
-			  __func__, fw_desc->buf.alloc_size, aligned_size);
-		ret = -ENOSPC;
-		goto out_release_firmware;
-	}
-
-	memcpy(fw_desc->buf.vaddr, fw->data, fw->size);
-	fw_desc->buf.used_size = aligned_size;
-	fw_desc->buf.name = kstrdup(name, GFP_KERNEL);
-
-out_release_firmware:
-	release_firmware(fw);
-	return ret;
-}
-
-static void edgetpu_firmware_legacy_unload_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc)
-{
-	kfree(fw_desc->buf.name);
-	fw_desc->buf.name = NULL;
-	fw_desc->buf.used_size = 0;
-}
-
-static int edgetpu_firmware_shared_load_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc, const char *name)
-{
-	int ret;
-	struct edgetpu_dev *etdev = et_fw->etdev;
-	struct edgetpu_shared_fw_buffer *shared_buf;
-
-	shared_buf = edgetpu_shared_fw_load(name, etdev);
-	if (IS_ERR(shared_buf)) {
-		ret = PTR_ERR(shared_buf);
-		etdev_dbg(etdev, "shared buffer loading failed: %d\n", ret);
-		return ret;
-	}
-	fw_desc->shared_buf = shared_buf;
-	fw_desc->buf.vaddr = edgetpu_shared_fw_buffer_vaddr(shared_buf);
-	fw_desc->buf.alloc_size = edgetpu_shared_fw_buffer_size(shared_buf);
-	fw_desc->buf.used_size = fw_desc->buf.alloc_size;
-	fw_desc->buf.name = edgetpu_shared_fw_buffer_name(shared_buf);
-	return 0;
-}
-
-static void edgetpu_firmware_shared_unload_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc)
-{
-	fw_desc->buf.vaddr = NULL;
-	fw_desc->buf.alloc_size = 0;
-	fw_desc->buf.used_size = 0;
-	fw_desc->buf.name = NULL;
-	edgetpu_shared_fw_put(fw_desc->shared_buf);
-	fw_desc->shared_buf = NULL;
-}
-
-static int edgetpu_firmware_do_load_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc, const char *name)
-{
-	/* Use shared firmware from host if not allocated a buffer space. */
-	if (!fw_desc->buf.vaddr)
-		return edgetpu_firmware_shared_load_locked(et_fw, fw_desc,
-							   name);
-	else
-		return edgetpu_firmware_legacy_load_locked(et_fw, fw_desc,
-							   name);
-}
-
-static void edgetpu_firmware_do_unload_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc)
-{
-	if (fw_desc->shared_buf)
-		edgetpu_firmware_shared_unload_locked(et_fw, fw_desc);
-	else
-		edgetpu_firmware_legacy_unload_locked(et_fw, fw_desc);
-}
-
 static int edgetpu_firmware_load_locked(
 		struct edgetpu_firmware *et_fw,
 		struct edgetpu_firmware_desc *fw_desc, const char *name,
@@ -191,7 +69,7 @@ static int edgetpu_firmware_load_locked(
 		}
 	}
 
-	ret = edgetpu_firmware_do_load_locked(et_fw, fw_desc, name);
+	ret = edgetpu_firmware_chip_load_locked(et_fw, fw_desc, name);
 	if (ret) {
 		etdev_err(etdev, "firmware request failed: %d\n", ret);
 		goto out_free_buffer;
@@ -202,14 +80,14 @@ static int edgetpu_firmware_load_locked(
 		if (ret) {
 			etdev_err(etdev, "handler setup_buffer failed: %d\n",
 				  ret);
-			goto out_do_unload_locked;
+			goto out_unload_locked;
 		}
 	}
 
 	return 0;
 
-out_do_unload_locked:
-	edgetpu_firmware_do_unload_locked(et_fw, fw_desc);
+out_unload_locked:
+	edgetpu_firmware_chip_unload_locked(et_fw, fw_desc);
 out_free_buffer:
 	if (chip_fw->free_buffer)
 		chip_fw->free_buffer(et_fw, &fw_desc->buf);
@@ -227,7 +105,7 @@ static void edgetpu_firmware_unload_locked(
 	 */
 	if (chip_fw->teardown_buffer)
 		chip_fw->teardown_buffer(et_fw, &fw_desc->buf);
-	edgetpu_firmware_do_unload_locked(et_fw, fw_desc);
+	edgetpu_firmware_chip_unload_locked(et_fw, fw_desc);
 	/*
 	 * Platform specific implementation for freeing allocated buffer.
 	 */
@@ -463,7 +341,7 @@ int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	if (ret)
 		goto out_failed;
 
-	etdev_dbg(et_fw->etdev, "run fw %s flags=0x%x", name, flags);
+	etdev_dbg(et_fw->etdev, "run fw %s flags=%#x", name, flags);
 	if (chip_fw->prepare_run) {
 		/* Note this may recursively call us to run BL1 */
 		ret = chip_fw->prepare_run(et_fw, &new_fw_desc.buf);
@@ -867,7 +745,7 @@ void edgetpu_firmware_mappings_show(struct edgetpu_dev *etdev,
 		return;
 	fw_iova_target = fw_buf->dram_tpa ? fw_buf->dram_tpa : fw_buf->dma_addr;
 	iova = edgetpu_chip_firmware_iova(etdev);
-	seq_printf(s, "  0x%lx %lu fw - %pad %s\n", iova,
-		   fw_buf->alloc_size / PAGE_SIZE, &fw_iova_target,
+	seq_printf(s, "  %#lx %lu fw - %pad %s\n", iova,
+		   DIV_ROUND_UP(fw_buf->alloc_size, PAGE_SIZE), &fw_iova_target,
 		   fw_buf->flags & FW_ONDEV ? "dev" : "");
 }

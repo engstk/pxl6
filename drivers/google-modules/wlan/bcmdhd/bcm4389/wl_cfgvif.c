@@ -656,10 +656,11 @@ wl_cfg80211_disc_if_mgmt(struct bcm_cfg80211 *cfg,
 						* Fall through
 						*/
 					} else {
-						/* Active iface is present, returning error */
-						WL_INFORM_MEM(("P2P group is active,"
-							" cant support new iface\n"));
-						ret = BCME_ERROR;
+                                                /* clear associated group interfaces */
+                                                WL_INFORM_MEM(("remove P2P group,"
+                                                        " to support new iface\n"));
+                                                ret = wl_cfg80211_delete_iface(cfg,
+                                                        sec_wl_if_type);
 					}
 				} else if (sec_wl_if_type == WL_IF_TYPE_NAN) {
 					ret = wl_cfg80211_delete_iface(cfg, sec_wl_if_type);
@@ -2849,6 +2850,16 @@ wl_cfg80211_parse_ies(const u8 *ptr, u32 len, struct parsed_ies *ies)
 	} else {
 		WL_ERR(("No WPSIE in beacon \n"));
 	}
+	/* find rates IEs */
+	if ((ies->rate_ie = bcm_parse_tlvs(ptr, len,
+		DOT11_MNG_RATES_ID)) != NULL) {
+		ies->rate_ie_len = ies->rate_ie->len;
+	}
+
+	if ((ies->ext_rate_ie = bcm_parse_tlvs(ptr, len,
+		DOT11_MNG_EXT_RATES_ID)) != NULL) {
+		ies->ext_rate_ie_len = ies->ext_rate_ie->len;
+	}
 
 	/* find the RSN_IE */
 	if ((ies->wpa2_ie = bcm_parse_tlvs(ptr, len,
@@ -3229,6 +3240,43 @@ exit:
 			WL_DBG(("cancelled ap_work\n"));
 		}
 	}
+	return err;
+}
+
+static s32
+wl_cfg80211_config_bss_selector(
+	struct net_device *dev,
+	struct parsed_ies *ies,
+	u32 dev_role, s32 bssidx)
+{
+	int err = BCME_OK;
+	bool sae_h2e_required = FALSE;
+	int i, j;
+	const bcm_tlv_t *rates[2] = {ies->rate_ie, ies->ext_rate_ie};
+
+	/* check and config h2e config */
+	for (i = 0; i < 2; i++) {
+		if (rates[i]) {
+			for (j = 0; j < rates[i]->len; j++) {
+				if (rates[i]->data[j] == DOT11_BSS_SAE_HASH_TO_ELEMENT) {
+					sae_h2e_required = TRUE;
+				}
+			}
+		}
+	}
+
+	if (sae_h2e_required) {
+		u32 sae_pwe = SAE_PWE_H2E;
+		err = wl_cfg80211_set_wsec_info(dev, &sae_pwe,
+				sizeof(sae_pwe), WL_WSEC_INFO_BSS_SAE_PWE);
+		if (unlikely(err)) {
+			WL_ERR(("set wsec_info_sae_pwe failed \n"));
+		}
+	}
+
+	WL_INFORM_MEM(("Config BSS Selector Done err %d, h2e_req %d\n",
+		err, sae_h2e_required));
+
 	return err;
 }
 
@@ -3695,6 +3743,11 @@ wl_cfg80211_start_ap(
 		dev_role, bssidx)) < 0) {
 		WL_ERR(("Beacon bring up AP/GO failed \n"));
 		goto fail;
+	}
+
+	if ((err = wl_cfg80211_config_bss_selector(dev, &ies,
+		dev_role, bssidx)) < 0) {
+		WL_ERR(("Config BSS selector failed \n"));
 	}
 
 	/* Set GC/STA SCB expiry timings. */

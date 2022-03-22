@@ -7092,6 +7092,11 @@ static void fill_chanspec_to_channel_info(chanspec_t cur_chanspec,
 	}
 }
 
+static const uint16 pwrstats_req_type[] = {
+	WL_PWRSTATS_TYPE_SCAN,
+	WL_PWRSTATS_TYPE_SLICE_INDEX
+};
+#define PWRSTATS_REQ_TYPE_NUM	sizeof(pwrstats_req_type) / sizeof(uint16)
 #define LSTAT_SLICE_MAIN	0	/* SLICE ID for 5/6GHZ */
 #define LSTAT_SLICE_AUX		1	/* SLICE ID for 2GHZ */
 
@@ -7109,13 +7114,14 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 	wifi_radio_stat_v2_t *radio_v2;
 	wifi_radio_stat_v2_t radio_req_v2;
 #ifdef LINKSTAT_EXT_SUPPORT
+	wl_pwr_slice_index_t *p_slice_index = NULL;
+	scan_stat_cache_cores_t *scan_stat_cores = &(cfg->scan_stat_cores);
 	wifi_channel_stat *all_chan_stats = NULL;
 	cca_congest_ext_channel_req_v2_t *per_chspec_stats = NULL;
 	uint per_chspec_stats_size = 0;
 	cca_congest_ext_channel_req_v3_t *all_chan_results;
 	cca_congest_ext_channel_req_v3_t all_chan_req;
 	wl_bssload_t *bssload;
-	uint32 curr_band, curr_core_idx;
 #else
 	/* cca_get_stats_ext iovar for Wifi channel statics */
 	cca_congest_ext_channel_req_v2_t *cca_v2_results = NULL;
@@ -7135,10 +7141,9 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 	wl_if_stats_t *if_stats = NULL;
 	wl_if_infra_enh_stats_v2_t *if_infra_enh_stats = NULL;
 	dhd_pub_t *dhdp = (dhd_pub_t *)(cfg->pub);
-	wl_pwrstats_query_t scan_query;
-	wl_pwrstats_t *pwrstats;
-	wl_pwr_scan_stats_t scan_stats;
-	int scan_time_len;
+	wl_pwrstats_query_t *p_query = NULL;
+	wl_pwrstats_t *pwrstats = NULL;
+	wl_pwr_scan_stats_t *p_scan_stats = NULL;
 	uint32 tot_pno_dur = 0;
 	wifi_channel_stat cur_channel_stat;
 	cca_congest_channel_req_t *cca_result;
@@ -7146,6 +7151,9 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 	uint32 cca_busy_time = 0;
 	int cur_chansp, cur_band;
 	chanspec_t cur_chanspec;
+	uint query_len;
+	uint16 type, taglen;
+	void *p_data = NULL;
 
 	COMPAT_STRUCT_IFACE(wifi_iface_stat, iface);
 
@@ -7226,11 +7234,23 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 		radio_h.on_time_hs20 = radio_v1->on_time_hs20;
 	}
 
-	scan_query.length = 1;
-	scan_query.type[0] = WL_PWRSTATS_TYPE_SCAN;
+	/* Alloc req buffer */
+	query_len = OFFSETOF(wl_pwrstats_query_t, type) +
+		PWRSTATS_REQ_TYPE_NUM * sizeof(uint16);
+	p_query = (wl_pwrstats_query_t *)MALLOCZ(cfg->osh, query_len);
+	if (p_query == NULL) {
+		WL_ERR(("%s Fail to malloc buffer\n", __FUNCTION__));
+		goto exit;
+	}
 
-	err = wldev_iovar_getbuf(inet_ndev, "pwrstats", &scan_query,
-		sizeof(scan_query), iovar_buf, WLC_IOCTL_MAXLEN, NULL);
+	/* Build a list of types */
+	p_query->length = PWRSTATS_REQ_TYPE_NUM;
+	for (i = 0; i < PWRSTATS_REQ_TYPE_NUM; i++) {
+		p_query->type[i] = pwrstats_req_type[i];
+	}
+
+	err = wldev_iovar_getbuf(inet_ndev, "pwrstats", p_query,
+		query_len, iovar_buf, WLC_IOCTL_MAXLEN, NULL);
 	if (err != BCME_OK && err != BCME_UNSUPPORTED) {
 		WL_ERR(("error (%d) - size = %zu\n", err, sizeof(wl_pwrstats_t)));
 		goto exit;
@@ -7244,16 +7264,18 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 		goto exit;
 	}
 
-	scan_time_len = dtoh16(*(((uint16 *)pwrstats->data) + 1));
+	p_data = pwrstats->data;
+	type = dtoh16(((uint16*)p_data)[0]);
+	taglen = dtoh16(((uint16*)p_data)[1]);
 
-	if (scan_time_len < sizeof(wl_pwr_scan_stats_t)) {
-		WL_ERR(("WL_PWRSTATS_TYPE_SCAN IOVAR info short len :  %d < %d\n",
-			scan_time_len, (int)sizeof(wl_pwr_scan_stats_t)));
+	if (taglen < sizeof(wl_pwr_scan_stats_t)) {
+		WL_ERR(("WL_PWRSTATS_TYPE_SCAN(%d) info short len :  %d < %d\n",
+			type, taglen, (int)sizeof(wl_pwr_scan_stats_t)));
 		err = BCME_ERROR;
 		goto exit;
 	}
 
-	(void) memcpy_s(&scan_stats, sizeof(wl_pwr_scan_stats_t), pwrstats->data, scan_time_len);
+	p_scan_stats = (wl_pwr_scan_stats_t *)p_data;
 
 	/* wl_pwr_scan_stats structure has the array of pno_scans.
 	 * scan_data_t pno_scans[8];
@@ -7264,7 +7286,7 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 	 */
 
 	for (i = 0; i < NUM_PNO_SCANS; i++) {
-		tot_pno_dur += dtoh32(scan_stats.pno_scans[i].dur);
+		tot_pno_dur += dtoh32(p_scan_stats->pno_scans[i].dur);
 	}
 
 	/*  Android Framework defines the total scan time in ms.
@@ -7273,27 +7295,71 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 	 */
 
 	radio_h.on_time_scan = (uint32)((tot_pno_dur +
-		dtoh32(scan_stats.user_scans.dur) +
-		dtoh32(scan_stats.assoc_scans.dur) +
-		dtoh32(scan_stats.other_scans.dur)) / 1000);
+		dtoh32(p_scan_stats->user_scans.dur) +
+		dtoh32(p_scan_stats->assoc_scans.dur) +
+		dtoh32(p_scan_stats->other_scans.dur)) / 1000);
 
-	radio_h.on_time_scan += dtoh32(scan_stats.roam_scans.dur);
-	radio_h.on_time_roam_scan = dtoh32(scan_stats.roam_scans.dur);
+	radio_h.on_time_scan += dtoh32(p_scan_stats->roam_scans.dur);
+	radio_h.on_time_roam_scan = dtoh32(p_scan_stats->roam_scans.dur);
 	radio_h.on_time_pno_scan = (uint32)(tot_pno_dur / 1000);
 
 	WL_TRACE(("pwr_scan_stats : %u %u %u %u %u %u\n",
 		radio_h.on_time_scan,
-		dtoh32(scan_stats.user_scans.dur),
-		dtoh32(scan_stats.assoc_scans.dur),
-		dtoh32(scan_stats.roam_scans.dur),
+		dtoh32(p_scan_stats->user_scans.dur),
+		dtoh32(p_scan_stats->assoc_scans.dur),
+		dtoh32(p_scan_stats->roam_scans.dur),
 		tot_pno_dur,
-		dtoh32(scan_stats.other_scans.dur)));
+		dtoh32(p_scan_stats->other_scans.dur)));
 
 	err = wldev_iovar_getint(inet_ndev, "chanspec", (int*)&cur_chansp);
 	if (err != BCME_OK) {
 		WL_ERR(("error (%d) \n", err));
 		goto exit;
 	}
+
+#ifdef LINKSTAT_EXT_SUPPORT
+	p_data = pwrstats->data + taglen;
+	type = dtoh16(((uint16*)p_data)[0]);
+	taglen = dtoh16(((uint16*)p_data)[1]);
+
+	if (taglen < sizeof(wl_pwr_slice_index_t)) {
+		WL_ERR(("WL_PWRSTATS_TYPE_SLICE_INDEX(%d) info short len :  %d < %d\n",
+			type, taglen, (int)sizeof(wl_pwr_slice_index_t)));
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	p_slice_index = (wl_pwr_slice_index_t *)p_data;
+
+	if (p_slice_index->slice_index == LSTAT_SLICE_AUX) {
+		scan_stat_cores->on_time_scan_aux = radio_h.on_time_scan;
+		scan_stat_cores->on_time_roam_scan_aux = radio_h.on_time_roam_scan;
+		scan_stat_cores->on_time_pno_scan_aux = radio_h.on_time_pno_scan;
+	} else if (p_slice_index->slice_index == LSTAT_SLICE_MAIN) {
+		scan_stat_cores->on_time_scan_main = radio_h.on_time_scan;
+		scan_stat_cores->on_time_roam_scan_main = radio_h.on_time_roam_scan;
+		scan_stat_cores->on_time_pno_scan_main = radio_h.on_time_pno_scan;
+	} else {
+		WL_ERR(("Invalid slice : %x\n", p_slice_index->slice_index));
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	WL_INFORM_MEM(("scan_stats : %u %u %u %u %u %u\n",
+		scan_stat_cores->on_time_scan_main,
+		scan_stat_cores->on_time_roam_scan_main,
+		scan_stat_cores->on_time_pno_scan_main,
+		scan_stat_cores->on_time_scan_aux,
+		scan_stat_cores->on_time_roam_scan_aux,
+		scan_stat_cores->on_time_pno_scan_aux));
+
+	radio_h.on_time_scan = scan_stat_cores->on_time_scan_main +
+		scan_stat_cores->on_time_scan_aux;
+	radio_h.on_time_roam_scan = scan_stat_cores->on_time_roam_scan_main +
+		scan_stat_cores->on_time_roam_scan_aux;
+	radio_h.on_time_pno_scan = scan_stat_cores->on_time_pno_scan_main +
+		scan_stat_cores->on_time_pno_scan_aux;
+#endif /* LINKSTAT_EXT_SUPPORT  */
 
 	cur_chanspec = wl_chspec_driver_to_host(cur_chansp);
 
@@ -7302,34 +7368,6 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 		err = BCME_ERROR;
 		goto exit;
 	}
-
-#ifdef LINKSTAT_EXT_SUPPORT
-	curr_band = CHSPEC_TO_WLC_BAND(CHSPEC_BAND(cur_chansp));
-	if (curr_band == WLC_BAND_2G) {
-		curr_core_idx = LSTAT_SLICE_AUX;
-	} else if (curr_band == WLC_BAND_5G || curr_band == WLC_BAND_6G) {
-		curr_core_idx = LSTAT_SLICE_MAIN;
-	} else {
-		WL_ERR(("Invalid band : %x\n", curr_band));
-		err = BCME_ERROR;
-		goto exit;
-	}
-
-	if (curr_core_idx != cfg->prev_core_idx) {
-		cfg->cached_scan_time = cfg->prev_scan_time;
-		cfg->cached_pno_scan_time = cfg->prev_pno_scan_time;
-		cfg->cached_roam_scan_time = cfg->prev_roam_scan_time;
-	} else {
-		cfg->prev_scan_time = radio_h.on_time_scan;
-		cfg->prev_pno_scan_time = radio_h.on_time_pno_scan;
-		cfg->prev_roam_scan_time = radio_h.on_time_roam_scan;
-	}
-
-	radio_h.on_time_scan += cfg->cached_scan_time;
-	radio_h.on_time_pno_scan += cfg->cached_pno_scan_time;
-	radio_h.on_time_roam_scan += cfg->cached_roam_scan_time;
-	cfg->prev_core_idx = curr_core_idx;
-#endif /* LINKSTAT_EXT_SUPPORT  */
 
 	fill_chanspec_to_channel_info(cur_chanspec, &cur_channel_stat.channel, &cur_band);
 	WL_TRACE(("chanspec : %x, BW : %d, Cur Band : %x, freq : %d, freq0 :%d, freq1 : %d\n",
@@ -7702,6 +7740,9 @@ exit:
 	}
 
 #ifdef LINKSTAT_EXT_SUPPORT
+	if (p_query) {
+		MFREE(cfg->osh, p_query, len);
+	}
 	if (all_chan_stats) {
 		MFREE(cfg->osh, all_chan_stats, chan_stats_size);
 	}

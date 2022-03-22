@@ -1,43 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Power management header for Abrolhos.
+ * Chip-dependent power configuration and states.
  *
- * Copyright (C) 2020 Google, Inc.
+ * Copyright (C) 2021 Google, Inc.
  */
-#ifndef __ABROLHOS_PM_H__
-#define __ABROLHOS_PM_H__
 
-#include "edgetpu-kci.h"
-#include "edgetpu-internal.h"
-
-/* Can't build out of tree with acpm_dvfs unless kernel supports ACPM */
-#if IS_ENABLED(CONFIG_ACPM_DVFS) || IS_ENABLED(CONFIG_EDGETPU_TEST)
-
-#include <linux/acpm_dvfs.h>
-
-#else
-
-static unsigned long exynos_acpm_rate;
-static inline int exynos_acpm_set_rate(unsigned int id, unsigned long rate)
-{
-	exynos_acpm_rate = rate;
-	return 0;
-}
-static inline int exynos_acpm_set_init_freq(unsigned int dfs_id,
-					    unsigned long freq)
-{
-	return 0;
-}
-static inline unsigned long exynos_acpm_get_rate(unsigned int id,
-						 unsigned long dbg_val)
-{
-	return exynos_acpm_rate;
-}
-static inline int exynos_acpm_set_policy(unsigned int id, unsigned long policy)
-{
-	return 0;
-}
-#endif /* IS_ENABLED(CONFIG_ACPM_DVFS) || IS_ENABLED(CONFIG_EDGETPU_TEST) */
+#ifndef __ABROLHOS_CONFIG_PWR_STATE_H__
+#define __ABROLHOS_CONFIG_PWR_STATE_H__
 
 /*
  * TPU Power States:
@@ -54,7 +23,7 @@ static inline int exynos_acpm_set_policy(unsigned int id, unsigned long policy)
  * 1000000:	Nominal @1066MHz
  * 1200000:	Overdrive @1230MHz
  */
-enum tpu_pwr_state {
+enum edgetpu_pwr_state {
 	TPU_OFF = 0,
 	TPU_DEEP_SLEEP_CLOCKS_OFF  = 1,
 	TPU_DEEP_SLEEP_CLOCKS_SLOW = 2,
@@ -69,30 +38,17 @@ enum tpu_pwr_state {
 	TPU_ACTIVE_OD  = 1230000,
 };
 
-/*
- * Request codes from firmware
- * Values must match with firmware code base
- */
-enum abrolhos_reverse_kci_code {
-	RKCI_CODE_PM_QOS = RKCI_CHIP_CODE_FIRST + 1,
-	RKCI_CODE_BTS = RKCI_CHIP_CODE_FIRST + 2,
-};
+#define MIN_ACTIVE_STATE	TPU_DEEP_SLEEP_CLOCKS_SLOW
+
+#define EDGETPU_NUM_STATES 5
+
+extern enum edgetpu_pwr_state edgetpu_active_states[];
+
+extern uint32_t *edgetpu_states_display;
 
 #define TPU_POLICY_MAX	TPU_ACTIVE_OD
 
 #define TPU_ACPM_DOMAIN			7
-
-#define TPU_DEBUG_REQ			(1 << 31)
-#define TPU_VDD_TPU_DEBUG		(0 << 27)
-#define TPU_VDD_TPU_M_DEBUG		(1 << 27)
-#define TPU_VDD_INT_M_DEBUG		(2 << 27)
-#define TPU_CLK_CORE_DEBUG		(3 << 27)
-#define TPU_CLK_CTL_DEBUG		(4 << 27)
-#define TPU_CLK_AXI_DEBUG		(5 << 27)
-#define TPU_CLK_APB_DEBUG		(6 << 27)
-#define TPU_CLK_UART_DEBUG		(7 << 27)
-#define TPU_CORE_PWR_DEBUG		(8 << 27)
-#define TPU_DEBUG_VALUE_MASK		((1 << 27) - 1)
 
 #define OSCCLK_RATE			24576
 #define PLL_SHARED0_DIV0		1066000
@@ -157,12 +113,4 @@ enum abrolhos_reverse_kci_code {
 #define DIV_CMU_RATIO_MASK		0xf
 #define DIV_USER_RATIO_MASK		0x7
 
-int abrolhos_pm_create(struct edgetpu_dev *etdev);
-
-void abrolhos_pm_destroy(struct edgetpu_dev *etdev);
-
-void abrolhos_pm_set_pm_qos(struct edgetpu_dev *etdev, u32 pm_qos_val);
-
-void abrolhos_pm_set_bts(struct edgetpu_dev *etdev, u32 bts_val);
-
-#endif /* __ABROLHOS_PM_H__ */
+#endif /* __ABROLHOS_CONFIG_PWR_STATE_H__ */

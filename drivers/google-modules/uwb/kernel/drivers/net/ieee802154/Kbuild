@@ -8,7 +8,6 @@ dw3000-y := \
 		dw3000_nfcc_coex_buffer.o \
 		dw3000_nfcc_coex_msg.o \
 		dw3000_nfcc_coex_mcps.o \
-		dw3000_nfcc_coex_testmode.o \
 		dw3000_calib.o \
 		dw3000_chip_c0.o \
 		dw3000_chip_d0.o \

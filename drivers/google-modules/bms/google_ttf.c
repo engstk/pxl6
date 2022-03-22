@@ -340,7 +340,7 @@ static int ttf_elap(ktime_t *estimate, const struct batt_ttf_stats *stats,
 	pr_debug("%s: soc=%d estimate=%lld elap=%lld ratio=%d\n",
 		 __func__, soc, *estimate, elap, ratio);
 
-	return 0;
+	return ratio;
 }
 
 /*
@@ -354,7 +354,7 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 {
 	const int ssoc_in = ce_data->charging_stats.ssoc_in;
 	ktime_t elap, estimate = 0;
-	int i = 0, ret, frac;
+	int i = 0, ratio, frac, max_ratio = 0;
 
 	if (last > qnum_rconst(100) || last < soc)
 		return -EINVAL;
@@ -368,8 +368,8 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 	frac = (int)qnum_nfracdgt(soc, 2);
 	if (frac) {
 
-		ret = ttf_elap(&elap, stats, ce_data, qnum_toint(soc));
-		if (ret == 0)
+		ratio = ttf_elap(&elap, stats, ce_data, qnum_toint(soc));
+		if (ratio >= 0)
 			estimate += (elap * (100 - frac)) / 100;
 
 		i += 1;
@@ -383,9 +383,11 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 			elap = ce_data->soc_stats.elap[i] * 100;
 		} else {
 			/* future (and soc before ssoc_in) */
-			ret = ttf_elap(&elap, stats, ce_data, i);
-			if (ret < 0)
-				return ret;
+			ratio = ttf_elap(&elap, stats, ce_data, i);
+			if (ratio < 0)
+				return ratio;
+			if (ratio > max_ratio)
+				max_ratio = ratio;
 		}
 
 		estimate += elap;
@@ -394,13 +396,13 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 	/* LAST: first 2 digits of the fractional part of soc if any */
 	frac = (int)qnum_nfracdgt(last, 2);
 	if (frac) {
-		ret = ttf_elap(&elap, stats, ce_data, qnum_toint(last));
-		if (ret == 0)
+		ratio = ttf_elap(&elap, stats, ce_data, qnum_toint(last));
+		if (ratio >= 0)
 			estimate += (elap * frac) / 100;
 	}
 
 	*res = estimate / 100;
-	return 0;
+	return max_ratio;
 }
 
 int ttf_soc_cstr(char *buff, int size, const struct ttf_soc_stats *soc_stats,

@@ -258,8 +258,8 @@ struct pca9468_charger {
 
 
 	bool wlc_ramp_out_iin;
-	bool wlc_ramp_out_vout;
 	u32 wlc_ramp_out_delay;
+	u32 wlc_ramp_out_vout_target;
 
 	struct p9468_chg_stats	chg_data;
 /* Google Integration END */
