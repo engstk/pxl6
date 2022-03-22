@@ -57,7 +57,7 @@
 		thermal-sensors = <&max77759_chg 0>;
 		trips {
 			vdroop1: vdroop1{
-				temperature = <1150>;
+				temperature = <1000>;
 				hysteresis = <100>;
 				type = "passive";
 			};
@@ -71,7 +71,7 @@
 		thermal-sensors = <&max77759_chg 1>;
 		trips {
 			vdroop2: vdroop2{
-				temperature = <1350>;
+				temperature = <1200>;
 				hysteresis = <100>;
 				type = "passive";
 			};
@@ -150,7 +150,7 @@
 
 		trips {
 			smpl:smpl_0 {
-				temperature = <1400>;
+				temperature = <1100>;
 				hysteresis = <100>;
 				type = "passive";
 			};
