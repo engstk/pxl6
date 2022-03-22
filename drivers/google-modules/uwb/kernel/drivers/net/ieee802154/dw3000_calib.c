@@ -288,16 +288,6 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 	int ant_rf1, ant_rf2, antpair;
 	int chanidx, prfidx;
 
-	ant_rf1 = config->ant[0];
-	ant_rf2 = config->ant[1];
-	/* At least, RF1 port must have a valid antenna */
-	if (ant_rf1 < 0)
-		/* Not configured yet, does nothing. */
-		return 0;
-	if (ant_rf1 >= ANTMAX)
-		return -1;
-	ant_calib = &dw->calib_data.ant[ant_rf1];
-
 	dw->llhw->hw->phy->supported.channels[4] = DW3000_SUPPORTED_CHANNELS &
 						   ~dw->restricted_channels;
 	/* Change channel if the current one is restricted. */
@@ -307,6 +297,16 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 			ffs(dw->llhw->hw->phy->supported.channels[4]) - 1;
 		dw->llhw->hw->phy->current_channel = config->chan;
 	}
+
+	ant_rf1 = config->ant[0];
+	ant_rf2 = config->ant[1];
+	/* At least, RF1 port must have a valid antenna */
+	if (ant_rf1 < 0)
+		/* Not configured yet, does nothing. */
+		return 0;
+	if (ant_rf1 >= ANTMAX)
+		return -1;
+	ant_calib = &dw->calib_data.ant[ant_rf1];
 
 	/* Convert config into index of array. */
 	chanidx = config->chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :

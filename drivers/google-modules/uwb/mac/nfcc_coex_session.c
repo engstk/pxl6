@@ -37,9 +37,8 @@ void nfcc_coex_session_init(struct nfcc_coex_local *local)
 		      local->llhw->dtu_freq_hz;
 }
 
-static void nfcc_coex_session_update(struct nfcc_coex_session *session,
-				     u32 next_timestamp_dtu,
-				     int region_duration_dtu)
+void nfcc_coex_session_update(struct nfcc_coex_session *session,
+			      u32 next_timestamp_dtu, int region_duration_dtu)
 {
 	s32 diff_dtu =
 		session->region_demand.timestamp_dtu - next_timestamp_dtu;
@@ -61,26 +60,5 @@ static void nfcc_coex_session_update(struct nfcc_coex_session *session,
 				region_duration_dtu;
 		}
 #endif
-	}
-}
-
-struct nfcc_coex_session *nfcc_coex_session_next(struct nfcc_coex_local *local,
-						 u32 next_timestamp_dtu,
-						 int region_duration_dtu)
-{
-	struct nfcc_coex_session *session;
-
-	switch (local->state) {
-	case NFCC_COEX_STATE_STARTED:
-	case NFCC_COEX_STATE_ACCESSING:
-		/* Get unique session. */
-		session = &local->session;
-
-		nfcc_coex_session_update(session, next_timestamp_dtu,
-					 region_duration_dtu);
-		return session;
-
-	default:
-		return NULL;
 	}
 }

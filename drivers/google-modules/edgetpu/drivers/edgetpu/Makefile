@@ -13,11 +13,10 @@ else
 	ccflags-y       += -DGIT_REPO_TAG=\"Not\ a\ git\ repository\"
 endif
 
-edgetpu-fw-objs := edgetpu-firmware-util.o edgetpu-firmware.o edgetpu-shared-fw.o
 edgetpu-objs	:= edgetpu-async.o edgetpu-dmabuf.o edgetpu-iremap-pool.o \
 		   edgetpu-kci.o edgetpu-mailbox.o edgetpu-mapping.o \
 		   edgetpu-sw-watchdog.o edgetpu-telemetry.o \
-		   $(edgetpu-fw-objs)
+		   edgetpu-firmware-util.o edgetpu-firmware.o
 
 abrolhos-objs	:= abrolhos-core.o abrolhos-debug-dump.o \
 		   abrolhos-device-group.o abrolhos-device.o \
@@ -25,6 +24,8 @@ abrolhos-objs	:= abrolhos-core.o abrolhos-debug-dump.o \
 		   abrolhos-platform.o abrolhos-pm.o abrolhos-thermal.o \
 		   abrolhos-usage-stats.o abrolhos-wakelock.o \
 		   $(edgetpu-objs)
+
+
 
 KBUILD_OPTIONS += CONFIG_ABROLHOS=m
 

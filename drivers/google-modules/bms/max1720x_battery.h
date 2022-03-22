@@ -276,6 +276,15 @@ struct max1720x_drift_data {
 	int ini_filtercfg;
 };
 
+struct max1720x_dyn_filtercfg {
+	s32 temp;
+	s32 hysteresis;
+	u16 curr_val;
+	u16 default_val;
+	u16 adjust_val;
+	struct mutex lock;
+};
+
 extern int max1720x_fixup_comp(struct max1720x_drift_data *ddata,
 			       struct max17x0x_regmap *map,
 			       int plugged);

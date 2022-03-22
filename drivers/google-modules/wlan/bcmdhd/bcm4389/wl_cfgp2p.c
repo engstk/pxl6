@@ -1782,6 +1782,23 @@ wl_actframe_fillup_v2(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	return err;
 }
 
+s32
+wl_cfg80211_abort_action_frame(struct bcm_cfg80211 *cfg, struct net_device *dev, s32 bssidx)
+{
+	s32 ret = BCME_OK;
+
+	ret = wldev_iovar_setint_bsscfg(dev, "actframe_abort", 1, bssidx);
+	if (ret < 0) {
+		if (ret == BCME_UNSUPPORTED) {
+			WL_ERR(("actframe_abort unsupported. ret:%d\n", ret));
+			wl_cfgscan_cancel_scan(cfg);
+		} else {
+			WL_ERR(("actframe_abort failed. ret:%d\n", ret));
+		}
+	}
+	return ret;
+}
+
 /* Send an action frame immediately without doing channel synchronization.
  *
  * This function does not wait for a completion event before returning.
@@ -1864,7 +1881,13 @@ wl_cfgp2p_tx_action_frame(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	timeout = wait_for_completion_timeout(&cfg->send_af_done,
 		msecs_to_jiffies(af_params->dwell_time + WL_AF_TX_EXTRA_TIME_MAX));
 
-	if (timeout >= 0 && wl_get_p2p_status(cfg, ACTION_TX_COMPLETED)) {
+	if (timeout == 0) {
+		CFGP2P_DBG(("action frame dwell timeout completed\n"));
+		/* Call actframe_abort to cleanup FW state, when
+		 * dwell timeout occurs.
+		 */
+		ret = wl_cfg80211_abort_action_frame(cfg, dev, bssidx);
+	} else if (timeout > 0 && wl_get_p2p_status(cfg, ACTION_TX_COMPLETED)) {
 		CFGP2P_DBG(("tx action frame operation is completed\n"));
 		ret = BCME_OK;
 	} else if (ETHER_ISBCAST(&cfg->afx_hdl->tx_dst_addr)) {

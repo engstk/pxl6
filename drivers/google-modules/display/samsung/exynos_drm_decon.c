@@ -149,6 +149,20 @@ static inline bool decon_is_te_enabled(const struct decon_device *decon)
 		(decon->config.mode.trig_mode == DECON_HW_TRIG);
 }
 
+void decon_enable_te_irq(struct decon_device *decon, bool enable)
+{
+	if (enable) {
+		if (atomic_inc_return(&decon->te_ref) == 1)
+			enable_irq(decon->irq_te);
+	} else {
+		int ret = atomic_dec_if_positive(&decon->te_ref);
+		if (!ret)
+			disable_irq_nosync(decon->irq_te);
+		else if (ret < 0)
+			WARN(1, "unbalanced te irq (%d)\n", ret);
+	}
+}
+
 static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 {
 	struct decon_device *decon = crtc->ctx;
@@ -158,8 +172,8 @@ static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 	hibernation_block(decon->hibernation);
 
 	if (decon_is_te_enabled(decon))
-		enable_irq(decon->irq_te);
-	else /* use framestart interrupt to track vsyncs */
+		decon_enable_te_irq(decon, true);
+	else /* if te is not enabled, use framestart interrupt to track vsyncs */
 		enable_irq(decon->irq_fs);
 
 	DPU_EVENT_LOG(DPU_EVT_VBLANK_ENABLE, decon->id, NULL);
@@ -176,8 +190,8 @@ static void decon_disable_vblank(struct exynos_drm_crtc *crtc)
 	decon_debug(decon, "%s +\n", __func__);
 
 	if (decon_is_te_enabled(decon))
-		disable_irq_nosync(decon->irq_te);
-	else
+		decon_enable_te_irq(decon, false);
+	else /* if te is not enabled, we're using framestart interrupt to track vsyncs */
 		disable_irq_nosync(decon->irq_fs);
 
 	DPU_EVENT_LOG(DPU_EVT_VBLANK_DISABLE, decon->id, NULL);
@@ -977,8 +991,7 @@ static void decon_enable(struct exynos_drm_crtc *exynos_crtc, struct drm_crtc_st
 
 		decon_update_config(&decon->config, crtc_state, exynos_conn_state);
 
-		if ((decon->config.mode.op_mode == DECON_COMMAND_MODE) &&
-		    (decon->config.mode.trig_mode == DECON_HW_TRIG))
+		if (decon_is_te_enabled(decon))
 			decon_request_te_irq(exynos_crtc, exynos_conn_state);
 	}
 
@@ -1079,6 +1092,8 @@ static void decon_disable(struct exynos_drm_crtc *crtc)
 
 	if (crtc_state->mode_changed || crtc_state->connectors_changed) {
 		if (decon->irq_te >= 0) {
+			if (atomic_read(&decon->te_ref))
+				disable_irq(decon->irq_te);
 			devm_free_irq(decon->dev, decon->irq_te, decon);
 			decon->irq_te = -1;
 		}
@@ -1604,6 +1619,7 @@ static irqreturn_t decon_te_irq_handler(int irq, void *dev_id)
 		goto end;
 
 	DPU_EVENT_LOG(DPU_EVT_TE_INTERRUPT, decon->id, NULL);
+	DPU_ATRACE_INT_PID("TE", decon->d.te_cnt++ & 1, decon->thread->pid);
 
 	if (decon->config.mode.op_mode == DECON_COMMAND_MODE)
 		drm_crtc_handle_vblank(&decon->crtc->base);
@@ -1630,8 +1646,9 @@ static int decon_request_te_irq(struct exynos_drm_crtc *exynos_crtc,
 	ret = devm_request_irq(decon->dev, irq, decon_te_irq_handler, IRQF_TRIGGER_RISING,
 			       exynos_crtc->base.name, decon);
 	if (!ret) {
-		disable_irq(irq);
 		decon->irq_te = irq;
+		if (!atomic_read(&decon->te_ref))
+			disable_irq(irq);
 	}
 
 	return ret;

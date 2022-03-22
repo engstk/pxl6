@@ -115,8 +115,8 @@ int dw3000_d0_init(struct dw3000 *dw)
 	int rc = 0;
 
 	if (dw->current_operational_state != DW3000_OP_STATE_DEEP_SLEEP) {
-		/* Disable CCC Mailbox only if the chip is not in deep sleep.
-		 * Else, on wake up, the CCC state will be not detectable. */
+		/* Disable nfcc_coex mail box only if the chip is not in deep sleep.
+		 * Else, on wake up, the nfcc_coex state will be not detectable. */
 		rc = dw3000_nfcc_coex_disable(dw);
 	}
 	return rc;

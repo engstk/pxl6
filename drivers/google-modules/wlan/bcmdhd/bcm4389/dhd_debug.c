@@ -3016,46 +3016,73 @@ dhd_dbg_attach(dhd_pub_t *dhdp, dbg_pullreq_t os_pullreq,
 	dhd_pktlog_ring_t *pktlog_ring = NULL;
 #endif /* DHD_PKT_LOGGING_DBGRING */
 
-	dbg = MALLOCZ(dhdp->osh, sizeof(dhd_dbg_t));
-	if (!dbg)
+	dbg = VMALLOCZ(dhdp->osh, sizeof(dhd_dbg_t));
+	if (!dbg) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for dbg, size %d\n",
+			__FUNCTION__, __LINE__, (uint32)sizeof(dhd_dbg_t)));
 		return BCME_NOMEM;
+	}
 
 #ifdef DHD_DEBUGABILITY_EVENT_RING
-	buf = MALLOCZ(dhdp->osh, DHD_EVENT_RING_SIZE);
-	if (!buf)
+	buf = VMALLOCZ(dhdp->osh, DHD_EVENT_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for event_ring, size %d\n",
+			__FUNCTION__, __LINE__, DHD_EVENT_RING_SIZE));
+		ret = BCME_NOMEM;
 		goto error;
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DHD_EVENT_RING_ID], DHD_EVENT_RING_ID,
-			(uint8 *)DHD_EVENT_RING_NAME, DHD_EVENT_RING_SIZE, buf, FALSE);
-	if (ret)
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DHD_EVENT_RING_ID],
+		DHD_EVENT_RING_ID, (uint8 *)DHD_EVENT_RING_NAME,
+		DHD_EVENT_RING_SIZE, buf, FALSE);
+	if (ret) {
 		goto error;
+	}
 #endif /* DHD_DEBUGABILITY_EVENT_RING */
 
 #if defined(DHD_DEBUGABILITY_LOG_DUMP_RING)
-	buf = MALLOCZ(dhdp->osh, FW_VERBOSE_RING_SIZE);
-	if (!buf)
+	buf = VMALLOCZ(dhdp->osh, FW_VERBOSE_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for fw_verbose_ring, size %d\n",
+			__FUNCTION__, __LINE__, FW_VERBOSE_RING_SIZE));
+		ret = BCME_NOMEM;
 		goto error;
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[FW_VERBOSE_RING_ID], FW_VERBOSE_RING_ID,
-			(uint8 *)FW_VERBOSE_RING_NAME, FW_VERBOSE_RING_SIZE, buf, FALSE);
-	if (ret)
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[FW_VERBOSE_RING_ID],
+		FW_VERBOSE_RING_ID, (uint8 *)FW_VERBOSE_RING_NAME,
+		FW_VERBOSE_RING_SIZE, buf, FALSE);
+	if (ret) {
 		goto error;
+	}
 #endif
 
 #ifdef DHD_DEBUGABILITY_LOG_DUMP_RING
-	buf = MALLOCZ(dhdp->osh, DRIVER_LOG_RING_SIZE);
-	if (!buf)
+	buf = VMALLOCZ(dhdp->osh, DRIVER_LOG_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for driver_log_ring, size %d\n",
+			__FUNCTION__, __LINE__, DRIVER_LOG_RING_SIZE));
+		ret = BCME_NOMEM;
 		goto error;
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DRIVER_LOG_RING_ID], DRIVER_LOG_RING_ID,
-			(uint8 *)DRIVER_LOG_RING_NAME, DRIVER_LOG_RING_SIZE, buf, FALSE);
-	if (ret)
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DRIVER_LOG_RING_ID],
+		DRIVER_LOG_RING_ID, (uint8 *)DRIVER_LOG_RING_NAME,
+		DRIVER_LOG_RING_SIZE, buf, FALSE);
+	if (ret) {
 		goto error;
+	}
 
-	buf = MALLOCZ(dhdp->osh, ROAM_STATS_RING_SIZE);
-	if (!buf)
+	buf = VMALLOCZ(dhdp->osh, ROAM_STATS_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for roam_stats_ring, size %d\n",
+			__FUNCTION__, __LINE__, ROAM_STATS_RING_SIZE));
+		ret = BCME_NOMEM;
 		goto error;
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[ROAM_STATS_RING_ID], ROAM_STATS_RING_ID,
-			(uint8 *)ROAM_STATS_RING_NAME, ROAM_STATS_RING_SIZE, buf, FALSE);
-	if (ret)
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[ROAM_STATS_RING_ID],
+		ROAM_STATS_RING_ID, (uint8 *)ROAM_STATS_RING_NAME,
+		ROAM_STATS_RING_SIZE, buf, FALSE);
+	if (ret) {
 		goto error;
+	}
 #endif /* DHD_DEBUGABILITY_LOG_DUMP_RING */
 
 #ifdef DHD_DEBUGABILITY_DEBUG_DUMP
@@ -3063,15 +3090,17 @@ dhd_dbg_attach(dhd_pub_t *dhdp, dbg_pullreq_t os_pullreq,
 	 * delayed memory allocation. memory will be allocated when debug_dump is invoked
 	 * To prepare the ringbuffer in legacy HAL, we should initialize ring at this time
 	 */
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DEBUG_DUMP_RING1_ID], DEBUG_DUMP_RING1_ID,
-		(uint8 *)DEBUG_DUMP_RING1_NAME, DEBUG_DUMP_RING1_SIZE, NULL, FALSE);
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DEBUG_DUMP_RING1_ID],
+		DEBUG_DUMP_RING1_ID, (uint8 *)DEBUG_DUMP_RING1_NAME,
+		DEBUG_DUMP_RING1_SIZE, NULL, FALSE);
 	if (ret) {
 		DHD_ERROR(("%s: Failed to init debug ring1\n", __func__));
 		goto error;
 	}
 
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DEBUG_DUMP_RING2_ID], DEBUG_DUMP_RING2_ID,
-		(uint8 *)DEBUG_DUMP_RING2_NAME, DEBUG_DUMP_RING2_SIZE, NULL, FALSE);
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[DEBUG_DUMP_RING2_ID],
+		DEBUG_DUMP_RING2_ID, (uint8 *)DEBUG_DUMP_RING2_NAME,
+		DEBUG_DUMP_RING2_SIZE, NULL, FALSE);
 	if (ret) {
 		DHD_ERROR(("%s: Failed to init debug ring2\n", __func__));
 		goto error;
@@ -3079,29 +3108,38 @@ dhd_dbg_attach(dhd_pub_t *dhdp, dbg_pullreq_t os_pullreq,
 #endif /* DHD_DEBUGABILITY_DEBUG_DUMP */
 
 #ifdef BTLOG
-	buf = MALLOCZ(dhdp->osh, BT_LOG_RING_SIZE);
-	if (!buf)
+	buf = VMALLOCZ(dhdp->osh, BT_LOG_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for bt_log_ring, size %d\n",
+			__FUNCTION__, __LINE__, BT_LOG_RING_SIZE));
+		ret = BCME_NOMEM;
 		goto error;
-	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[BT_LOG_RING_ID], BT_LOG_RING_ID,
-			BT_LOG_RING_NAME, BT_LOG_RING_SIZE, buf, FALSE);
-	if (ret)
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[BT_LOG_RING_ID],
+		BT_LOG_RING_ID, (uint8 *)BT_LOG_RING_NAME,
+		BT_LOG_RING_SIZE, buf, FALSE);
+	if (ret) {
 		goto error;
+	}
 #endif	/* BTLOG */
 #ifdef DHD_PKT_LOGGING_DBGRING
 	if (dhdp && dhdp->pktlog && dhdp->pktlog->pktlog_ring) {
 		pktlog_ring = dhdp->pktlog->pktlog_ring;
 	}
 
-	if (!pktlog_ring || !pktlog_ring->ring_info_mem) {
+	if (!pktlog_ring) {
+		DHD_ERROR(("%s: pktlog_ring is NULL. return.\n", __FUNCTION__));
 		goto error;
 	}
 
 	buf = pktlog_ring->ring_info_mem;
 	if (!buf) {
+		DHD_ERROR(("%s: ring_info_mem is NULL. return.\n", __FUNCTION__));
 		goto error;
 	}
+
 	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[PACKET_LOG_RING_ID],
-			PACKET_LOG_RING_ID, DHD_PACKET_LOG_RING_NAME,
+			PACKET_LOG_RING_ID, (uint8 *)DHD_PACKET_LOG_RING_NAME,
 			DHD_PACKET_LOG_RING_SIZE, buf, FALSE);
 	if (ret) {
 		goto error;
@@ -3117,6 +3155,7 @@ dhd_dbg_attach(dhd_pub_t *dhdp, dbg_pullreq_t os_pullreq,
 	ring_buf = &g_ring_buf;
 	ring_buf->dhd_pub = dhdp;
 #endif /* DHD_DEBUGABILITY_LOG_DUMP_RING */
+
 	return BCME_OK;
 
 #if defined(DHD_DEBUGABILITY_LOG_DUMP_RING) || defined(BTLOG) || \
@@ -3131,14 +3170,16 @@ error:
 				if (ring_id != PACKET_LOG_RING_ID)
 #endif /* DHD_PKT_LOGGING_DBGRING */
 				{
-					MFREE(dhdp->osh, ring->ring_buf, ring->ring_size);
+					VMFREE(dhdp->osh, ring->ring_buf, ring->ring_size);
 				}
 				ring->ring_buf = NULL;
 			}
 			ring->ring_size = 0;
 		}
 	}
-	MFREE(dhdp->osh, dbg, sizeof(dhd_dbg_t));
+
+	VMFREE(dhdp->osh, dbg, sizeof(dhd_dbg_t));
+
 	return ret;
 #endif /* DHD_DEBUGABILITY_LOG_DUMP_RING || BTLOG ||
 	* DHD_DEBUGABILITY_EVENT_RING || DHD_PKT_LOGGING_DBGRING ||
@@ -3152,14 +3193,23 @@ error:
 void
 dhd_dbg_detach(dhd_pub_t *dhdp)
 {
-	int ring_id;
 	dhd_dbg_t *dbg;
+#if defined(DHD_DEBUGABILITY_LOG_DUMP_RING) || defined(BTLOG) || \
+	defined(DHD_DEBUGABILITY_EVENT_RING) || defined(DHD_PKT_LOGGING_DBGRING)
+	int ring_id;
 	dhd_dbg_ring_t *ring = NULL;
-
-	if (!dhdp->dbg)
-		return;
+#endif /* DHD_DEBUGABILITY_LOG_DUMP_RING || BTLOG ||
+	* DHD_DEBUGABILITY_EVENT_RING || DHD_PKT_LOGGING_DBGRING ||
+	* (DEBUGABILITY && CUSTOMER_HW6)
+	*/
 
 	dbg = dhdp->dbg;
+	if (!dbg) {
+		return;
+	}
+
+#if defined(DHD_DEBUGABILITY_LOG_DUMP_RING) || defined(BTLOG) || \
+	defined(DHD_DEBUGABILITY_EVENT_RING) || defined(DHD_PKT_LOGGING_DBGRING)
 	for (ring_id = DEBUG_RING_ID_INVALID + 1; ring_id < DEBUG_RING_ID_MAX; ring_id++) {
 		if (VALID_RING(dbg->dbg_rings[ring_id].id)) {
 			ring = &dbg->dbg_rings[ring_id];
@@ -3175,15 +3225,19 @@ dhd_dbg_detach(dhd_pub_t *dhdp)
 				if (ring_id != PACKET_LOG_RING_ID)
 #endif /* DHD_PKT_LOGGING_DBGRING */
 				{
-					MFREE(dhdp->osh, ring->ring_buf, ring->ring_size);
+					VMFREE(dhdp->osh, ring->ring_buf, ring->ring_size);
 				}
 				ring->ring_buf = NULL;
 			}
 			ring->ring_size = 0;
 		}
 	}
-	MFREE(dhdp->osh, dhdp->dbg, sizeof(dhd_dbg_t));
 
+	VMFREE(dhdp->osh, dhdp->dbg, sizeof(dhd_dbg_t));
+#endif /* DHD_DEBUGABILITY_LOG_DUMP_RING || BTLOG ||
+	* DHD_DEBUGABILITY_EVENT_RING || DHD_PKT_LOGGING_DBGRING ||
+	* (DEBUGABILITY && CUSTOMER_HW6)
+	*/
 #ifdef DHD_DEBUGABILITY_LOG_DUMP_RING
 	g_ring_buf.dhd_pub = NULL;
 #endif /* DHD_DEBUGABILITY_LOG_DUMP_RING */

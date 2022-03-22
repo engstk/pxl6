@@ -3068,7 +3068,6 @@ dhd_ifadd_event_handler(void *handle, void *event_info, u8 event)
 	}
 
 	dhd_net_if_lock_local(dhd);
-	DHD_OS_WAKE_LOCK(&dhd->pub);
 
 	ifidx = if_event->event.ifidx;
 	bssidx = if_event->event.bssidx;
@@ -3134,7 +3133,6 @@ done:
 
 	MFREE(dhd->pub.osh, if_event, sizeof(dhd_if_event_t));
 
-	DHD_OS_WAKE_UNLOCK(&dhd->pub);
 	dhd_net_if_unlock_local(dhd);
 }
 
@@ -3161,7 +3159,6 @@ dhd_ifdel_event_handler(void *handle, void *event_info, u8 event)
 	}
 
 	dhd_net_if_lock_local(dhd);
-	DHD_OS_WAKE_LOCK(&dhd->pub);
 
 	ifidx = if_event->event.ifidx;
 	DHD_TRACE(("Removing interface with idx %d\n", ifidx));
@@ -3188,7 +3185,6 @@ dhd_ifdel_event_handler(void *handle, void *event_info, u8 event)
 
 done:
 	MFREE(dhd->pub.osh, if_event, sizeof(dhd_if_event_t));
-	DHD_OS_WAKE_UNLOCK(&dhd->pub);
 	dhd_net_if_unlock_local(dhd);
 }
 
@@ -4009,11 +4005,13 @@ void
 dhd_cancel_logtrace_process_sync(dhd_info_t *dhd)
 {
 #ifdef DHD_USE_KTHREAD_FOR_LOGTRACE
-	if (dhd->thr_logtrace_ctl.thr_pid >= 0) {
-		PROC_STOP_USING_BINARY_SEMA(&dhd->thr_logtrace_ctl);
+	tsk_ctl_t *tsk = &dhd->thr_logtrace_ctl;
+
+	if (tsk->parent && tsk->thr_pid >= 0) {
+		PROC_STOP_USING_BINARY_SEMA(tsk);
 	} else {
-		DHD_ERROR(("%s: thr_logtrace_ctl(%ld) not inited\n", __FUNCTION__,
-			dhd->thr_logtrace_ctl.thr_pid));
+		DHD_ERROR(("%s: thr_logtrace_ctl(%ld) not inited\n",
+			__FUNCTION__, tsk->thr_pid));
 	}
 #else
 	cancel_delayed_work_sync(&dhd->event_log_dispatcher_work);
@@ -5169,11 +5167,11 @@ typedef struct dhd_mon_dev_priv {
 #define DHD_MON_DEV_INFO(dev)		(((dhd_mon_dev_priv_t *)DEV_PRIV(dev))->dhd)
 #define DHD_MON_DEV_STATS(dev)		(((dhd_mon_dev_priv_t *)DEV_PRIV(dev))->stats)
 
-static int
+static netdev_tx_t
 dhd_monitor_start(struct sk_buff *skb, struct net_device *dev)
 {
 	PKTFREE(NULL, skb, FALSE);
-	return 0;
+	return NETDEV_TX_OK;
 }
 
 #ifdef WL_CFG80211_MONITOR
@@ -5547,6 +5545,14 @@ dhd_add_monitor_if(dhd_info_t *dhd)
 	dev->type = ARPHRD_IEEE80211_RADIOTAP;
 
 	dev->netdev_ops = &netdev_monitor_ops;
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9))
+	/* as priv_destructor calls free_netdev, no need to set need_free_netdev */
+	dev->needs_free_netdev = 0;
+	dev->priv_destructor = free_netdev;
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9) */
+	dev->destructor = free_netdev;
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9) */
 
 	/* XXX: This is called from IOCTL path, in this case, rtnl_lock is already taken.
 	 * So, register_netdev() shouldn't be called. It leads to deadlock.
@@ -7056,6 +7062,7 @@ dhd_static_if_open(struct net_device *net)
 		/* Allow transmit calls */
 		netif_start_queue(net);
 	}
+	dhd_clear_del_in_progress(cfg->pub, net);
 done:
 	return ret;
 }
@@ -7076,6 +7083,7 @@ dhd_static_if_stop(struct net_device *net)
 		return BCME_OK;
 	}
 
+	dhd_set_del_in_progress(cfg->pub, net);
 	/* Ensure queue is disabled */
 	netif_tx_disable(net);
 	ret = wl_cfg80211_static_if_close(net);
@@ -7483,6 +7491,7 @@ dhd_allocate_if(dhd_pub_t *dhdpub, int ifidx, const char *name,
 	ifp->info = dhdinfo;
 	ifp->idx = ifidx;
 	ifp->bssidx = bssidx;
+	ifp->del_in_progress = FALSE;
 #ifdef DHD_MCAST_REGEN
 	ifp->mcast_regen_bss_enable = FALSE;
 #endif
@@ -7693,7 +7702,7 @@ dhd_remove_if(dhd_pub_t *dhdpub, int ifidx, bool need_rtnl_lock)
 			DHD_ERROR(("deleting interface '%s' idx %d\n", ifp->net->name, ifp->idx));
 
 			DHD_GENERAL_LOCK(dhdpub, flags);
-			ifp->del_in_progress = true;
+			ifp->del_in_progress = TRUE;
 			DHD_GENERAL_UNLOCK(dhdpub, flags);
 
 			/* If TX is in progress, hold the if del */
@@ -7733,9 +7742,6 @@ dhd_remove_if(dhd_pub_t *dhdpub, int ifidx, bool need_rtnl_lock)
 					unregister_netdevice(ifp->net);
 			}
 			ifp->net = NULL;
-			DHD_GENERAL_LOCK(dhdpub, flags);
-			ifp->del_in_progress = false;
-			DHD_GENERAL_UNLOCK(dhdpub, flags);
 		}
 #ifdef DHD_WMF
 		dhd_wmf_cleanup(dhdpub, ifidx);
@@ -13441,6 +13447,7 @@ dhd_register_if(dhd_pub_t *dhdp, int ifidx, bool need_rtnl_lock)
 	struct net_device *net = NULL;
 	int err = 0;
 	uint8 temp_addr[ETHER_ADDR_LEN] = { 0x00, 0x90, 0x4c, 0x11, 0x22, 0x33 };
+	unsigned long flags;
 
 	DHD_TRACE(("%s: ifidx %d\n", __FUNCTION__, ifidx));
 
@@ -13581,6 +13588,11 @@ dhd_register_if(dhd_pub_t *dhdp, int ifidx, bool need_rtnl_lock)
 		}
 	}
 #endif /* OEM_ANDROID && (BCMPCIE || (BCMLXSDMMC) */
+
+	DHD_GENERAL_LOCK(dhdp, flags);
+	ifp->del_in_progress = FALSE;
+	DHD_GENERAL_UNLOCK(dhdp, flags);
+
 	return 0;
 
 fail:

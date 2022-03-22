@@ -730,7 +730,7 @@ static ssize_t holding_time_store(struct device *dev,
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
 
-	ts->time_longest = 0;
+	ts->longest_duration = 0;
 
 	input_info(true, &ts->client->dev, "%s: clear\n", __func__);
 
@@ -743,10 +743,10 @@ static ssize_t holding_time_show(struct device *dev,
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
 
-	input_info(true, &ts->client->dev, "%s: %ld\n", __func__,
-		ts->time_longest);
+	input_info(true, &ts->client->dev, "%s: %lld ms\n",
+		__func__, ts->longest_duration);
 
-	return snprintf(buf, SEC_CMD_BUF_SIZE, "%ld", ts->time_longest);
+	return snprintf(buf, SEC_CMD_BUF_SIZE, "%lld ms", ts->longest_duration);
 }
 
 static ssize_t all_touch_count_show(struct device *dev,
@@ -8108,10 +8108,12 @@ static void force_touch_active(void *device_data)
 	if (sec->cmd_param[0] == 2) {
 		bus_ref = SEC_TS_BUS_REF_BUGREPORT;
 		active = (sec->cmd_param[1]) ? true : false;
-		if (active)
+		if (active) {
+			sec_ts_debug_dump(ts);
 			ts->bugreport_ktime_start = ktime_get();
-		else
+		} else {
 			ts->bugreport_ktime_start = 0;
+		}
 	} else {
 		active = sec->cmd_param[0];
 	}

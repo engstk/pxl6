@@ -21,6 +21,7 @@
 #endif
 
 #include "edgetpu-internal.h"
+#include "edgetpu-mmu.h"
 
 struct edgetpu_mapping_root {
 	struct rb_root rb;
@@ -39,6 +40,8 @@ struct edgetpu_mapping {
 	u64 host_address;
 	u32 die_index; /* this mapping is mapped on the @die_index-th die */
 	tpu_addr_t device_address;
+	/* Size of buffer mapped in bytes. Always set. */
+	size_t map_size;
 	/*
 	 * The size used for allocating @alloc_iova in bytes. This field may be
 	 * set by edgetpu_mmu_map().
@@ -144,24 +147,36 @@ void edgetpu_mapping_clear(struct edgetpu_mapping_root *mappings);
 void edgetpu_mappings_show(struct edgetpu_mapping_root *mappings,
 			   struct seq_file *s);
 
-static inline int __dma_dir_to_iommu_prot(enum dma_data_direction dir, struct device *dev)
+static inline int __dma_dir_to_iommu_prot(enum dma_data_direction dir)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-	int prot = dev_is_dma_coherent(dev) ? IOMMU_CACHE : 0;
-#else
-	int prot = 0;	/* hardcode to non-dma-coherent for prior kernels */
-#endif
-
 	switch (dir) {
 	case DMA_BIDIRECTIONAL:
-		return prot | IOMMU_READ | IOMMU_WRITE;
+		return IOMMU_READ | IOMMU_WRITE;
 	case DMA_TO_DEVICE:
-		return prot | IOMMU_READ;
+		return IOMMU_READ;
 	case DMA_FROM_DEVICE:
-		return prot | IOMMU_WRITE;
+		return IOMMU_WRITE;
 	default:
 		return 0;
 	}
 }
+
+/* Returns iommu prot based on @flags and @dir */
+static inline int mmu_flag_to_iommu_prot(u32 mmu_flags, struct device *dev,
+					 enum dma_data_direction dir)
+{
+	int prot = 0; /* hardcode to non-dma-coherent for prior kernels */
+
+	if (mmu_flags & EDGETPU_MMU_COHERENT) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+		prot = dev_is_dma_coherent(dev) ? IOMMU_CACHE : 0;
+#endif
+	}
+	prot |= __dma_dir_to_iommu_prot(dir);
+	return prot;
+}
+
+/* Return total size of mappings under the supplied root. */
+size_t edgetpu_mappings_total_size(struct edgetpu_mapping_root *mappings);
 
 #endif /* __EDGETPU_MAPPING_H__ */

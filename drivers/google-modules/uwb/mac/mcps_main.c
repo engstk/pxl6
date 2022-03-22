@@ -227,6 +227,15 @@ s64 mcps802154_difference_timestamp_rctu(struct mcps802154_llhw *llhw,
 }
 EXPORT_SYMBOL(mcps802154_difference_timestamp_rctu);
 
+int mcps802154_vendor_cmd(struct mcps802154_llhw *llhw, u32 vendor_id,
+			  u32 subcmd, void *data, size_t data_len)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	return llhw_vendor_cmd(local, vendor_id, subcmd, data, data_len);
+}
+EXPORT_SYMBOL(mcps802154_vendor_cmd);
+
 struct mcps802154_local *mcps802154_get_first_by_idx(int hw_idx)
 {
 	struct mcps802154_local *result = NULL, *local;

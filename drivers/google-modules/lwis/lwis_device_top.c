@@ -132,9 +132,9 @@ static int lwis_top_event_unsubscribe(struct lwis_device *lwis_dev, int64_t trig
 				      int receiver_device_id)
 {
 	struct lwis_top_device *lwis_top_dev = (struct lwis_top_device *)lwis_dev;
-	struct lwis_device *trigger_dev;
-	struct lwis_event_subscribe_info *p;
-	struct hlist_node *tmp;
+	struct lwis_device *trigger_dev = NULL;
+	struct lwis_event_subscribe_info *p = NULL;
+	struct hlist_node *tmp = NULL;
 	struct lwis_trigger_event_info *pending_event, *n;
 	unsigned long flags;
 	bool has_subscriber = false;
@@ -293,10 +293,11 @@ static int lwis_top_register_io(struct lwis_device *lwis_dev, struct lwis_io_ent
 		entry->rw.val = top_dev->scratch_mem[entry->rw.offset];
 	} else if (entry->type == LWIS_IO_ENTRY_READ_BATCH) {
 		rw_batch = &entry->rw_batch;
-		if (rw_batch->offset + rw_batch->size_in_bytes > SCRATCH_MEMORY_SIZE) {
+		if (rw_batch->offset > SCRATCH_MEMORY_SIZE ||
+		    SCRATCH_MEMORY_SIZE - rw_batch->offset < rw_batch->size_in_bytes) {
 			dev_err(top_dev->base_dev.dev,
-				"Read range (%llu) exceeds scratch memory (%d)\n",
-				rw_batch->offset + rw_batch->size_in_bytes, SCRATCH_MEMORY_SIZE);
+				"Read range[offset(%llu) + size_in_bytes(%zu)] exceeds scratch memory (%d)\n",
+				rw_batch->offset, rw_batch->size_in_bytes, SCRATCH_MEMORY_SIZE);
 			return -EINVAL;
 		}
 		for (i = 0; i < rw_batch->size_in_bytes; ++i) {
@@ -311,10 +312,11 @@ static int lwis_top_register_io(struct lwis_device *lwis_dev, struct lwis_io_ent
 		top_dev->scratch_mem[entry->rw.offset] = entry->rw.val;
 	} else if (entry->type == LWIS_IO_ENTRY_WRITE_BATCH) {
 		rw_batch = &entry->rw_batch;
-		if (rw_batch->offset + rw_batch->size_in_bytes > SCRATCH_MEMORY_SIZE) {
+		if (rw_batch->offset > SCRATCH_MEMORY_SIZE ||
+		    SCRATCH_MEMORY_SIZE - rw_batch->offset < rw_batch->size_in_bytes) {
 			dev_err(top_dev->base_dev.dev,
-				"Write range (%llu) exceeds scratch memory (%d)\n",
-				rw_batch->offset + rw_batch->size_in_bytes, SCRATCH_MEMORY_SIZE);
+				"Write range[offset(%llu) + size_in_bytes(%zu)] exceeds scratch memory (%d)\n",
+				rw_batch->offset, rw_batch->size_in_bytes, SCRATCH_MEMORY_SIZE);
 			return -EINVAL;
 		}
 		for (i = 0; i < rw_batch->size_in_bytes; ++i) {

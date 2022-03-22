@@ -45,6 +45,21 @@ struct nfcc_coex_session_params {
 };
 
 /**
+ * enum nfcc_coex_state - State of the unique session.
+ * @NFCC_COEX_STATE_IDLE:
+ *     Session is not used by access right now.
+ * @NFCC_COEX_STATE_ACCESSING:
+ *     Session is currently used on an access.
+ * @NFCC_COEX_STATE_STOPPING:
+ *     Session is currently used for the last access.
+ */
+enum nfcc_coex_state {
+	NFCC_COEX_STATE_IDLE,
+	NFCC_COEX_STATE_ACCESSING,
+	NFCC_COEX_STATE_STOPPING,
+};
+
+/**
  * struct nfcc_coex_session - Session information.
  */
 struct nfcc_coex_session {
@@ -69,6 +84,14 @@ struct nfcc_coex_session {
 	 * @first_access: True on the first access.
 	 */
 	bool first_access;
+	/**
+	 * @state: State of the unique session.
+	 */
+	enum nfcc_coex_state state;
+	/**
+	 * @started: Session is currently started.
+	 */
+	bool started;
 };
 
 /* Forward declaration. */
@@ -81,15 +104,12 @@ struct nfcc_coex_local;
 void nfcc_coex_session_init(struct nfcc_coex_local *local);
 
 /**
- * nfcc_coex_session_next() - Find the next session to use after the given timestamp.
- * @local: NFCC coex context.
+ * nfcc_coex_session_update() - Update session timestamps.
+ * @session: Session context.
  * @next_timestamp_dtu: Next start access opportunity.
  * @region_duration_dtu: Region duration, or 0 for endless region.
- *
- * Return: The session or NULL if none.
  */
-struct nfcc_coex_session *nfcc_coex_session_next(struct nfcc_coex_local *local,
-						 u32 next_timestamp_dtu,
-						 int region_duration_dtu);
+void nfcc_coex_session_update(struct nfcc_coex_session *session,
+			      u32 next_timestamp_dtu, int region_duration_dtu);
 
 #endif /* NET_MCPS802154_NFCC_COEX_SESSION_H */

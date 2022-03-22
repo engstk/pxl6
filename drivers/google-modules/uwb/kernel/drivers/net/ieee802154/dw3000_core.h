@@ -359,10 +359,16 @@ void dw3000_sysfs_init(struct dw3000 *dw);
 void dw3000_sysfs_remove(struct dw3000 *dw);
 
 void dw3000_isr(struct dw3000 *dw);
-enum hrtimer_restart dw3000_wakeup_timer(struct hrtimer *timer);
+enum hrtimer_restart dw3000_idle_timeout(struct hrtimer *timer);
 void dw3000_wakeup_timer_start(struct dw3000 *dw, int delay_us);
 void dw3000_wakeup_and_wait(struct dw3000 *dw);
 int dw3000_deep_sleep_and_wakeup(struct dw3000 *dw, int delay_us);
+int dw3000_idle(struct dw3000 *dw, bool timestamp, u32 timestamp_dtu,
+		dw3000_idle_timeout_cb idle_timeout_cb,
+		enum operational_state next_operational_state);
+int dw3000_deepsleep_wakeup_now(struct dw3000 *dw,
+				dw3000_idle_timeout_cb idle_timeout_cb,
+				enum operational_state next_operational_state);
 int dw3000_can_deep_sleep(struct dw3000 *dw, int delay_us);
 int dw3000_trace_rssi_info(struct dw3000 *dw, u32 regid, char *chipver);
 

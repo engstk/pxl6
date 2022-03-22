@@ -8,13 +8,13 @@
 #include <linux/irqreturn.h>
 
 #include "abrolhos-platform.h"
-#include "abrolhos-pm.h"
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mailbox.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
+#include "mobile-pm.h"
 
 #define HOST_NONSECURE_INTRSRCMASKREG	0x000f0004
 
@@ -86,18 +86,18 @@ u64 edgetpu_chip_tpu_timestamp(struct edgetpu_dev *etdev)
 void edgetpu_chip_init(struct edgetpu_dev *etdev)
 {
 	int i;
-	struct abrolhos_platform_dev *abpdev = to_abrolhos_dev(etdev);
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
 	/* Disable the CustomBlock Interrupt. */
 	edgetpu_dev_write_32(etdev, HOST_NONSECURE_INTRSRCMASKREG, 0x1);
 
-	if (!abpdev->ssmt_base)
+	if (!etmdev->ssmt_base)
 		return;
 
 	/* Setup non-secure SCIDs, assume VID = SCID */
 	for (i = 0; i < EDGETPU_NCONTEXTS; i++) {
-		writel(i, SSMT_NS_READ_STREAM_VID_REG(abpdev->ssmt_base, i));
-		writel(i, SSMT_NS_WRITE_STREAM_VID_REG(abpdev->ssmt_base, i));
+		writel(i, SSMT_NS_READ_STREAM_VID_REG(etmdev->ssmt_base, i));
+		writel(i, SSMT_NS_WRITE_STREAM_VID_REG(etmdev->ssmt_base, i));
 	}
 }
 
@@ -109,25 +109,15 @@ void edgetpu_mark_probe_fail(struct edgetpu_dev *etdev)
 {
 }
 
-static void edgetpu_chip_set_pm_qos(struct edgetpu_dev *etdev, u32 value)
-{
-	abrolhos_pm_set_pm_qos(etdev, value);
-}
-
-static void edgetpu_chip_set_bts(struct edgetpu_dev *etdev, u32 value)
-{
-	abrolhos_pm_set_bts(etdev, value);
-}
-
 void edgetpu_chip_handle_reverse_kci(struct edgetpu_dev *etdev,
 				     struct edgetpu_kci_response_element *resp)
 {
 	switch (resp->code) {
 	case RKCI_CODE_PM_QOS:
-		edgetpu_chip_set_pm_qos(etdev, resp->retval);
+		mobile_pm_set_pm_qos(etdev, resp->retval);
 		break;
 	case RKCI_CODE_BTS:
-		edgetpu_chip_set_bts(etdev, resp->retval);
+		mobile_pm_set_bts(etdev, resp->retval);
 		break;
 	default:
 		etdev_warn(etdev, "%s: Unrecognized KCI request: %u\n",
@@ -156,7 +146,7 @@ static int abrolhos_check_ext_mailbox_args(const char *func,
 int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
 				     struct edgetpu_ext_mailbox_ioctl *args)
 {
-	struct abrolhos_platform_dev *apdev = to_abrolhos_dev(client->etdev);
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
 	int ret;
 
 	ret = abrolhos_check_ext_mailbox_args(__func__, client->etdev,
@@ -164,25 +154,25 @@ int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
 	if (ret)
 		return ret;
 
-	mutex_lock(&apdev->tz_mailbox_lock);
-	if (apdev->secure_client) {
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (etmdev->secure_client) {
 		etdev_err(client->etdev,
 			  "TZ mailbox already in use by PID %d\n",
-			  apdev->secure_client->pid);
-		mutex_unlock(&apdev->tz_mailbox_lock);
+			  etmdev->secure_client->pid);
+		mutex_unlock(&etmdev->tz_mailbox_lock);
 		return -EBUSY;
 	}
 	ret = edgetpu_mailbox_enable_ext(client, ABROLHOS_TZ_MAILBOX_ID, NULL);
 	if (!ret)
-		apdev->secure_client = client;
-	mutex_unlock(&apdev->tz_mailbox_lock);
+		etmdev->secure_client = client;
+	mutex_unlock(&etmdev->tz_mailbox_lock);
 	return ret;
 }
 
 int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
 				     struct edgetpu_ext_mailbox_ioctl *args)
 {
-	struct abrolhos_platform_dev *apdev = to_abrolhos_dev(client->etdev);
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
 	int ret = 0;
 
 	ret = abrolhos_check_ext_mailbox_args(__func__, client->etdev,
@@ -190,32 +180,32 @@ int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
 	if (ret)
 		return ret;
 
-	mutex_lock(&apdev->tz_mailbox_lock);
-	if (!apdev->secure_client) {
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (!etmdev->secure_client) {
 		etdev_warn(client->etdev, "TZ mailbox already released\n");
-		mutex_unlock(&apdev->tz_mailbox_lock);
+		mutex_unlock(&etmdev->tz_mailbox_lock);
 		return 0;
 	}
-	if (apdev->secure_client != client) {
+	if (etmdev->secure_client != client) {
 		etdev_err(client->etdev,
 			  "TZ mailbox owned by different client\n");
-		mutex_unlock(&apdev->tz_mailbox_lock);
+		mutex_unlock(&etmdev->tz_mailbox_lock);
 		return -EBUSY;
 	}
-	apdev->secure_client = NULL;
+	etmdev->secure_client = NULL;
 	ret = edgetpu_mailbox_disable_ext(client, ABROLHOS_TZ_MAILBOX_ID);
-	mutex_unlock(&apdev->tz_mailbox_lock);
+	mutex_unlock(&etmdev->tz_mailbox_lock);
 	return ret;
 }
 
 void edgetpu_chip_client_remove(struct edgetpu_client *client)
 {
-	struct abrolhos_platform_dev *apdev = to_abrolhos_dev(client->etdev);
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
 
-	mutex_lock(&apdev->tz_mailbox_lock);
-	if (apdev->secure_client == client) {
-		apdev->secure_client = NULL;
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (etmdev->secure_client == client) {
+		etmdev->secure_client = NULL;
 		edgetpu_mailbox_disable_ext(client, ABROLHOS_TZ_MAILBOX_ID);
 	}
-	mutex_unlock(&apdev->tz_mailbox_lock);
+	mutex_unlock(&etmdev->tz_mailbox_lock);
 }
