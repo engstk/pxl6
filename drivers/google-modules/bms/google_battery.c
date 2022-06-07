@@ -79,10 +79,16 @@
 #define HCC_DEFAULT_DELTA_CYCLE_CNT	10
 #define HCC_DELAY_INIT_MS	30000
 
-/* Interval value used when health is settings disabled when not running */
-#define CHG_DEADLINE_SETTING -1
-/* Internal value used when health is settings disabled while running */
-#define CHG_DEADLINE_SETTING_STOP -2
+enum batt_health_ui {
+	/* Internal value used when health is cleared via dialog */
+	CHG_DEADLINE_DIALOG = -3,
+	/* Internal value used when health is settings disabled while running */
+	CHG_DEADLINE_SETTING_STOP = -2,
+	/* Internal value used when health is settings disabled */
+	CHG_DEADLINE_SETTING = -1,
+	/* Internal value used when health is cleared via alarms/re-plug */
+	CHG_DEADLINE_CLEARED = 0,
+};
 
 #undef MODULE_PARAM_PREFIX
 #define MODULE_PARAM_PREFIX	"androidboot."
@@ -298,6 +304,7 @@ struct batt_drv {
 
 	int fv_uv;
 	int cc_max;
+	int topoff;
 	int msc_update_interval;
 
 	bool disable_votes;
@@ -1565,6 +1572,8 @@ static int batt_chg_health_vti(const struct batt_chg_health *chg_health)
 			tier_idx = GBMS_STATS_AC_TI_DISABLE_SETTING;
 		else if (rest_deadline == CHG_DEADLINE_SETTING_STOP)
 			tier_idx = GBMS_STATS_AC_TI_DISABLE_SETTING_STOP;
+		else if (rest_deadline == CHG_DEADLINE_DIALOG)
+			tier_idx = GBMS_STATS_AC_TI_DISABLE_DIALOG;
 		else
 			tier_idx = GBMS_STATS_AC_TI_DISABLE_MISC;
 		break;
@@ -2107,8 +2116,12 @@ static inline void batt_reset_rest_state(struct batt_chg_health *chg_health)
 	chg_health->rest_cc_max = -1;
 	chg_health->rest_fv_uv = -1;
 
-	/* keep negative deadlines (they mean USER disabled) */
-	if (chg_health->rest_deadline < 0) {
+	/* Keep negative deadlines (they mean user has disabled via settings)
+	 * NOTE: CHG_DEADLINE_DIALOG needs to be applied only for the current
+	 * session. Therefore, it should be cleared on disconnect.
+	 */
+	if (chg_health->rest_deadline < 0 &&
+	    chg_health->rest_deadline != CHG_DEADLINE_DIALOG) {
 		chg_health->rest_state = CHG_HEALTH_USER_DISABLED;
 	} else {
 		chg_health->rest_state = CHG_HEALTH_INACTIVE;
@@ -2163,7 +2176,7 @@ static bool msc_logic_soft_jeita(struct batt_drv *batt_drv, int temp)
 	const struct gbms_chg_profile *profile = &batt_drv->chg_profile;
 
 	if (temp < profile->temp_limits[0] ||
-	    temp > profile->temp_limits[profile->temp_nb_limits - 1]) {
+	    temp >= profile->temp_limits[profile->temp_nb_limits - 1]) {
 		if (batt_drv->jeita_stop_charging < 0) {
 			batt_drv->jeita_stop_charging = 1;
 			batt_prlog(BATT_PRLOG_ALWAYS,
@@ -2484,7 +2497,12 @@ static bool batt_health_set_chg_deadline(struct batt_chg_health *chg_health,
 		new_deadline = chg_health->rest_deadline != deadline_s;
 		chg_health->rest_state = CHG_HEALTH_USER_DISABLED;
 
-		if (chg_health->rest_deadline > 0) /* was active */
+		/* disabled with notification; assumes that the dialog exists
+		 * only if there is a >0 deadline.
+		 */
+		if (deadline_s == CHG_DEADLINE_DIALOG)
+			chg_health->rest_deadline = CHG_DEADLINE_DIALOG;
+		else if (chg_health->rest_deadline > 0) /* was active */
 			chg_health->rest_deadline = CHG_DEADLINE_SETTING_STOP;
 		else
 			chg_health->rest_deadline = CHG_DEADLINE_SETTING;
@@ -2498,8 +2516,7 @@ static bool batt_health_set_chg_deadline(struct batt_chg_health *chg_health,
 		if (chg_health->rest_state != CHG_HEALTH_DONE)
 			chg_health->rest_state = CHG_HEALTH_USER_DISABLED;
 
-		/* enabled from any previous state */
-	} else {
+	} else { /* enabled from any previous state */
 		const ktime_t rest_deadline = get_boot_sec() + deadline_s;
 
 		/* ->always_on SOC overrides the deadline */
@@ -3035,6 +3052,7 @@ static int msc_logic(struct batt_drv *batt_drv)
 	batt_drv->vbatt_idx = vbatt_idx;
 	batt_drv->temp_idx = temp_idx;
 	batt_drv->cc_max = GBMS_CCCM_LIMITS(profile, temp_idx, vbatt_idx);
+	batt_drv->topoff = profile->topoff_limits[temp_idx];
 	batt_drv->fv_uv = fv_uv;
 
 	return 0;
@@ -5918,12 +5936,12 @@ static int gbatt_get_property(struct power_supply *psy,
 		int max_ratio;
 
 		max_ratio = batt_ttf_estimate(&res, batt_drv);
-		if (max_ratio == 0) {
+		if (max_ratio >= TTF_REPORT_MAX_RATIO) {
+			val->intval = 0;
+		} else if (max_ratio >= 0) {
 			if (res < 0)
 				res = 0;
 			val->intval = res;
-		} else if (max_ratio >= TTF_REPORT_MAX_RATIO) {
-			val->intval = 0;
 		} else if (!batt_drv->fg_psy) {
 			val->intval = -1;
 		} else {
@@ -5961,6 +5979,13 @@ static int gbatt_get_property(struct power_supply *psy,
 		} else {
 			err = -EINVAL;
 		}
+		break;
+
+	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
+		if (batt_drv->topoff)
+			val->intval = batt_drv->topoff;
+		else
+			val->intval = -1;
 		break;
 
 	default:

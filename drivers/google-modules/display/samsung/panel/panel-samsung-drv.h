@@ -47,9 +47,10 @@
 #define PANEL_REV_PROTO1_1	BIT(1)
 #define PANEL_REV_EVT1		BIT(2)
 #define PANEL_REV_EVT1_1	BIT(3)
-#define PANEL_REV_DVT1		BIT(4)
-#define PANEL_REV_DVT1_1	BIT(5)
-#define PANEL_REV_PVT		BIT(6)
+#define PANEL_REV_EVT1_2	BIT(4)
+#define PANEL_REV_DVT1		BIT(5)
+#define PANEL_REV_DVT1_1	BIT(6)
+#define PANEL_REV_PVT		BIT(7)
 #define PANEL_REV_LATEST	BIT(31)
 #define PANEL_REV_ALL		(~0)
 #define PANEL_REV_GE(rev)	(~((rev) - 1))
@@ -252,7 +253,14 @@ struct exynos_panel_funcs {
 	 *
 	 * This callback is used to get panel HW revision from panel_extinfo.
 	 */
-	u32 (*get_panel_rev)(u32 id);
+	void (*get_panel_rev)(struct exynos_panel *exynos_panel, u32 id);
+
+	/**
+	 * @read_id:
+	 *
+	 * This callback is used to read panel id.
+	 */
+	int (*read_id)(struct exynos_panel *exynos_panel);
 
 	/**
 	 * @get_te2_edges:
@@ -663,6 +671,7 @@ int exynos_panel_get_modes(struct drm_panel *panel, struct drm_connector *connec
 int exynos_panel_disable(struct drm_panel *panel);
 int exynos_panel_unprepare(struct drm_panel *panel);
 int exynos_panel_prepare(struct drm_panel *panel);
+void exynos_panel_get_panel_rev(struct exynos_panel *ctx, u8 rev);
 int exynos_panel_init(struct exynos_panel *ctx);
 void exynos_panel_reset(struct exynos_panel *ctx);
 int exynos_panel_set_power(struct exynos_panel *ctx, bool on);

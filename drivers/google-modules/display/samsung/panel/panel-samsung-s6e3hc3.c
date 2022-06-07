@@ -1090,14 +1090,13 @@ static bool s6e3hc3_is_mode_seamless(const struct exynos_panel *ctx,
 	       (c->flags == n->flags);
 }
 
-static u32 s6e3hc3_get_panel_rev(u32 id)
+static void s6e3hc3_get_panel_rev(struct exynos_panel *ctx, u32 id)
 {
-	u8 build_code;
-
 	/* extract command 0xDB */
-	build_code = (id & 0xFF00) >> 8;
+	u8 build_code = (id & 0xFF00) >> 8;
+	u8 rev = ((build_code & 0xE0) >> 3) | (build_code & 0x03);
 
-	return (((build_code & 0xE0) >> 3) | (build_code & 0x03));
+	exynos_panel_get_panel_rev(ctx, rev);
 }
 
 static const struct exynos_display_underrun_param underrun_param = {

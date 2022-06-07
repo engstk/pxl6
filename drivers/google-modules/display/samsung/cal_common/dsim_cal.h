@@ -190,6 +190,7 @@ struct dsim_reg_config {
 	unsigned int		bpp;
 	unsigned int num_dphy_diags;
 	struct dsim_dphy_diag *dphy_diags;
+	bool			dual_dsi;
 };
 
 void dsim_regs_desc_init(void __iomem *reg_base, phys_addr_t start,

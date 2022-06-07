@@ -239,8 +239,10 @@ dhd_debug_dump_ring_push(dhd_pub_t *dhdp, int ring_id, uint32 len, void *data)
 		msg_hdr.type = DBG_RING_ENTRY_DATA_TYPE;
 		msg_hdr.len = MIN(remain_len, DHD_DEBUG_DUMP_NETLINK_MAX);
 		ret = dhd_dbg_ring_push(ring, &msg_hdr, cur_buf);
-		cur_buf += msg_hdr.len;
-		remain_len -= msg_hdr.len;
+		if (ret == BCME_OK) {
+			cur_buf += msg_hdr.len;
+			remain_len -= msg_hdr.len;
+		}
 	}
 	return ret;
 }

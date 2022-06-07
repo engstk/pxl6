@@ -136,9 +136,7 @@ static int parse_regulators(struct lwis_device *lwis_dev)
 
 error_parse_reg:
 	/* In case of error, free all the other regulators that were alloc'ed */
-	for (i = 0; i < count; ++i) {
-		lwis_regulator_put_by_idx(lwis_dev->regulators, i);
-	}
+	lwis_regulator_put_all(lwis_dev->regulators);
 	lwis_regulator_list_free(lwis_dev->regulators);
 	lwis_dev->regulators = NULL;
 	return ret;
@@ -591,6 +589,7 @@ static int parse_power_up_seqs(struct lwis_device *lwis_dev)
 	const char *type;
 	int delay_us;
 	int type_gpio_count = 0;
+	int type_regulator_count = 0;
 
 	dev = &lwis_dev->plat_dev->dev;
 	dev_node = dev->of_node;
@@ -637,6 +636,8 @@ static int parse_power_up_seqs(struct lwis_device *lwis_dev)
 			LWIS_MAX_NAME_STRING_LEN);
 		if (strcmp(type, "gpio") == 0) {
 			type_gpio_count++;
+		} else if (strcmp(type, "regulator") == 0) {
+			type_regulator_count++;
 		}
 
 		ret = of_property_read_u32_index(dev_node, "power-up-seq-delays-us", i, &delay_us);
@@ -653,46 +654,80 @@ static int parse_power_up_seqs(struct lwis_device *lwis_dev)
 
 	lwis_dev->power_up_seqs_present = true;
 
-	if (type_gpio_count == 0) {
-		return 0;
+	if (type_gpio_count > 0) {
+		lwis_dev->gpios_list = lwis_gpios_list_alloc(type_gpio_count);
+		if (IS_ERR(lwis_dev->gpios_list)) {
+			pr_err("Failed to allocate gpios list\n");
+			ret = PTR_ERR(lwis_dev->gpios_list);
+			goto error_parse_power_up_seqs;
+		}
+
+		type_gpio_count = 0;
+		for (i = 0; i < power_seq_count; ++i) {
+			struct lwis_gpios_info *gpios_info;
+			char *seq_item_name;
+
+			if (strcmp(lwis_dev->power_up_sequence->seq_info[i].type, "gpio") != 0) {
+				continue;
+			}
+
+			gpios_info = &lwis_dev->gpios_list->gpios_info[type_gpio_count];
+			seq_item_name = lwis_dev->power_up_sequence->seq_info[i].name;
+
+			gpios_info->gpios = NULL;
+			strlcpy(gpios_info->name, seq_item_name, LWIS_MAX_NAME_STRING_LEN);
+
+			if (strncmp(SHARED_STRING, seq_item_name, strlen(SHARED_STRING)) == 0) {
+				gpios_info->is_shared = true;
+			} else {
+				gpios_info->is_shared = false;
+			}
+			if (strncmp(PULSE_STRING, seq_item_name, strlen(PULSE_STRING)) == 0) {
+				gpios_info->is_pulse = true;
+			} else {
+				gpios_info->is_pulse = false;
+			}
+			type_gpio_count++;
+		}
 	}
 
-	lwis_dev->gpios_list = lwis_gpios_list_alloc(type_gpio_count);
-	if (IS_ERR(lwis_dev->gpios_list)) {
-		pr_err("Failed to allocate gpios list\n");
-		ret = PTR_ERR(lwis_dev->gpios_list);
-		goto error_parse_power_up_seqs;
-	}
-
-	type_gpio_count = 0;
-	for (i = 0; i < power_seq_count; ++i) {
-		if (strcmp(lwis_dev->power_up_sequence->seq_info[i].type, "gpio") != 0) {
-			continue;
+	if (type_regulator_count > 0) {
+		lwis_dev->regulators = lwis_regulator_list_alloc(type_regulator_count);
+		if (IS_ERR(lwis_dev->regulators)) {
+			pr_err("Failed to allocate regulator list\n");
+			ret = PTR_ERR(lwis_dev->regulators);
+			goto error_parse_power_up_seqs;
 		}
 
-		lwis_dev->gpios_list->gpios_info[type_gpio_count].gpios = NULL;
+		for (i = 0; i < power_seq_count; ++i) {
+			struct device *dev;
+			char *seq_item_name;
 
-		strlcpy(lwis_dev->gpios_list->gpios_info[type_gpio_count].name,
-			lwis_dev->power_up_sequence->seq_info[i].name, LWIS_MAX_NAME_STRING_LEN);
+			if (strcmp(lwis_dev->power_up_sequence->seq_info[i].type,
+				   "regulator") != 0) {
+				continue;
+			}
 
-		if (strncmp(SHARED_STRING, lwis_dev->power_up_sequence->seq_info[i].name,
-			    strlen(SHARED_STRING)) == 0) {
-			lwis_dev->gpios_list->gpios_info[type_gpio_count].is_shared = true;
-		} else {
-			lwis_dev->gpios_list->gpios_info[type_gpio_count].is_shared = false;
+			dev = &lwis_dev->plat_dev->dev;
+			seq_item_name = lwis_dev->power_up_sequence->seq_info[i].name;
+
+			ret = lwis_regulator_get(lwis_dev->regulators, seq_item_name,
+						 /*voltage=*/0, dev);
+			if (ret < 0) {
+				pr_err("Cannot find regulator: %s\n", seq_item_name);
+				goto error_parse_power_up_seqs;
+			}
 		}
-		if (strncmp(PULSE_STRING, lwis_dev->power_up_sequence->seq_info[i].name,
-			    strlen(PULSE_STRING)) == 0) {
-			lwis_dev->gpios_list->gpios_info[type_gpio_count].is_pulse = true;
-		} else {
-			lwis_dev->gpios_list->gpios_info[type_gpio_count].is_pulse = false;
-		}
-		type_gpio_count++;
 	}
 
 	return 0;
 
 error_parse_power_up_seqs:
+	if (lwis_dev->regulators) {
+		lwis_regulator_put_all(lwis_dev->regulators);
+		lwis_regulator_list_free(lwis_dev->regulators);
+		lwis_dev->regulators = NULL;
+	}
 	lwis_gpios_list_free(lwis_dev->gpios_list);
 	lwis_dev->gpios_list = NULL;
 	lwis_dev_power_seq_list_free(lwis_dev->power_up_sequence);
@@ -780,11 +815,9 @@ error_parse_power_down_seqs:
 
 static int parse_pm_hibernation(struct lwis_device *lwis_dev)
 {
-	struct device *dev;
 	struct device_node *dev_node;
 
-	dev = &(lwis_dev->plat_dev->dev);
-	dev_node = dev->of_node;
+	dev_node = lwis_dev->plat_dev->dev.of_node;
 	lwis_dev->pm_hibernation = 1;
 
 	of_property_read_u32(dev_node, "pm-hibernation", &lwis_dev->pm_hibernation);
@@ -799,6 +832,18 @@ static int parse_access_mode(struct lwis_device *lwis_dev)
 	dev_node = lwis_dev->plat_dev->dev.of_node;
 
 	lwis_dev->is_read_only = of_property_read_bool(dev_node, "lwis,read-only");
+
+	return 0;
+}
+
+static int parse_thread_priority(struct lwis_device *lwis_dev)
+{
+	struct device_node *dev_node;
+
+	dev_node = lwis_dev->plat_dev->dev.of_node;
+	lwis_dev->adjust_thread_priority = 0;
+
+	of_property_read_u32(dev_node, "thread-priority", &lwis_dev->adjust_thread_priority);
 
 	return 0;
 }
@@ -865,10 +910,12 @@ int lwis_base_parse_dt(struct lwis_device *lwis_dev)
 		return ret;
 	}
 
-	ret = parse_regulators(lwis_dev);
-	if (ret) {
-		pr_err("Error parsing regulators\n");
-		return ret;
+	if (lwis_dev->regulators == NULL) {
+		ret = parse_regulators(lwis_dev);
+		if (ret) {
+			pr_err("Error parsing regulators\n");
+			return ret;
+		}
 	}
 
 	ret = parse_clocks(lwis_dev);
@@ -902,6 +949,8 @@ int lwis_base_parse_dt(struct lwis_device *lwis_dev)
 	}
 
 	parse_access_mode(lwis_dev);
+
+	parse_thread_priority(lwis_dev);
 
 	parse_bitwidths(lwis_dev);
 

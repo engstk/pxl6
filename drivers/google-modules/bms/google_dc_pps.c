@@ -24,7 +24,7 @@
 #include "google_bms.h"
 #include "google_psy.h"
 #include "google_dc_pps.h"
-#include "../../drivers/usb/typec/tcpm/max77759_export.h"
+#include "../../drivers/usb/typec/tcpm/google/max77759_export.h"
 
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
@@ -128,7 +128,9 @@ static struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy)
 
 	/* port is valid for a tcpm power supply but not for gcpm */
 	ret = power_supply_get_property(tcpm_psy, POWER_SUPPLY_PROP_USB_TYPE, &pval);
-	if (ret == 0 && pval.intval == POWER_SUPPLY_USB_TYPE_PD_PPS)
+	if (ret == 0 && (pval.intval == POWER_SUPPLY_USB_TYPE_PD_PPS ||
+			 pval.intval == POWER_SUPPLY_USB_TYPE_PD ||
+			 pval.intval == POWER_SUPPLY_USB_TYPE_C))
 		port = power_supply_get_drvdata(tcpm_psy);
 
 	/* TODO: make sure that tcpm_psy is really a tcpm source */

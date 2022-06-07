@@ -13,6 +13,12 @@
 
 #include "cs40l26.h"
 
+static inline bool is_owt(unsigned int index)
+{
+	return index >= CS40L26_OWT_INDEX_START &&
+						index <= CS40L26_OWT_INDEX_END;
+}
+
 static int cs40l26_dsp_read(struct cs40l26_private *cs40l26, u32 reg, u32 *val)
 {
 	struct regmap *regmap = cs40l26->regmap;
@@ -81,9 +87,7 @@ static int cs40l26_ack_read(struct cs40l26_private *cs40l26, u32 reg,
 		if (ret)
 			return ret;
 
-		if (val != ack_val)
-			dev_dbg(dev, "Ack'ed value not equal to expected\n");
-		else
+		if (val == ack_val)
 			break;
 
 		usleep_range(CS40L26_DSP_TIMEOUT_US_MIN,
@@ -112,50 +116,19 @@ int cs40l26_ack_write(struct cs40l26_private *cs40l26, u32 reg, u32 write_val,
 }
 EXPORT_SYMBOL(cs40l26_ack_write);
 
-int cs40l26_class_h_set(struct cs40l26_private *cs40l26, bool class_h)
-{
-	int ret;
-
-	ret = regmap_update_bits(cs40l26->regmap, CS40L26_BLOCK_ENABLES2,
-			CS40L26_CLASS_H_EN_MASK, class_h <<
-			CS40L26_CLASS_H_EN_SHIFT);
-	if (ret)
-		dev_err(cs40l26->dev, "Failed to update CLASS H tracking\n");
-
-	return ret;
-}
-EXPORT_SYMBOL(cs40l26_class_h_set);
-
 int cs40l26_dsp_state_get(struct cs40l26_private *cs40l26, u8 *state)
 {
-	u32 algo_id, reg, dsp_state;
-	int ret;
+	u32 reg, dsp_state;
+	int ret = 0;
 
-	if (cs40l26->fw_loaded) {
-		if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-			algo_id = CS40L26_PM_ALGO_ID;
-		else
-			algo_id = CS40L26_PM_ROM_ALGO_ID;
-
+	if (cs40l26->fw_loaded)
 		ret = cl_dsp_get_reg(cs40l26->dsp, "PM_CUR_STATE",
-				CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
-		if (ret)
-			return ret;
-	} else {
-		switch (cs40l26->revid) {
-		case CS40L26_REVID_A0:
-			reg = CS40L26_A0_PM_CUR_STATE_STATIC_REG;
-			break;
-		case CS40L26_REVID_A1:
-			reg = CS40L26_A1_PM_CUR_STATE_STATIC_REG;
-			break;
-		default:
-			dev_err(cs40l26->dev,
-					"Revid ID not supported: 0x%02X\n",
-					cs40l26->revid);
-			return -EINVAL;
-		}
-	}
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_PM_ALGO_ID, &reg);
+	else
+		reg = CS40L26_A1_PM_CUR_STATE_STATIC_REG;
+
+	if (ret)
+		return ret;
 
 	ret = cs40l26_dsp_read(cs40l26, reg, &dsp_state);
 	if (ret)
@@ -185,7 +158,7 @@ int cs40l26_pm_timeout_ms_set(struct cs40l26_private *cs40l26,
 {
 	u32 timeout_ticks = timeout_ms * CS40L26_PM_TICKS_MS_DIV;
 	struct regmap *regmap = cs40l26->regmap;
-	u32 lower_val, reg, algo_id;
+	u32 lower_val, reg;
 	u8 upper_val;
 	int ret;
 
@@ -194,13 +167,8 @@ int cs40l26_pm_timeout_ms_set(struct cs40l26_private *cs40l26,
 
 	lower_val = timeout_ticks & CS40L26_PM_TIMEOUT_TICKS_LOWER_MASK;
 
-	if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-		algo_id = CS40L26_PM_ALGO_ID;
-	else
-		algo_id = CS40L26_PM_ROM_ALGO_ID;
-
 	ret = cl_dsp_get_reg(cs40l26->dsp, "PM_TIMER_TIMEOUT_TICKS",
-			CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_PM_ALGO_ID, &reg);
 	if (ret)
 		return ret;
 
@@ -217,33 +185,17 @@ EXPORT_SYMBOL(cs40l26_pm_timeout_ms_set);
 int cs40l26_pm_timeout_ms_get(struct cs40l26_private *cs40l26,
 		u32 *timeout_ms)
 {
-	u32 lower_val, upper_val, algo_id, reg;
-	int ret;
+	u32 lower_val, upper_val, reg;
+	int ret = 0;
 
-	if (cs40l26->fw_loaded) {
-		if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-			algo_id = CS40L26_PM_ALGO_ID;
-		else
-			algo_id = CS40L26_PM_ROM_ALGO_ID;
-
+	if (cs40l26->fw_loaded)
 		ret = cl_dsp_get_reg(cs40l26->dsp, "PM_TIMER_TIMEOUT_TICKS",
-				CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
-		if (ret)
-			return ret;
-	} else {
-		switch (cs40l26->revid) {
-		case CS40L26_REVID_A0:
-			reg = CS40L26_A0_PM_TIMEOUT_TICKS_STATIC_REG;
-			break;
-		case CS40L26_REVID_A1:
-			reg = CS40L26_A1_PM_TIMEOUT_TICKS_STATIC_REG;
-			break;
-		default:
-			dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-				cs40l26->revid);
-			return -EINVAL;
-		}
-	}
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_PM_ALGO_ID, &reg);
+	else
+		reg = CS40L26_A1_PM_TIMEOUT_TICKS_STATIC_REG;
+
+	if (ret)
+		return ret;
 
 	ret = regmap_read(cs40l26->regmap, reg +
 			CS40L26_PM_STDBY_TIMEOUT_LOWER_OFFSET, &lower_val);
@@ -405,27 +357,21 @@ static int cs40l26_dsp_shutdown(struct cs40l26_private *cs40l26)
 
 static int cs40l26_dsp_pre_config(struct cs40l26_private *cs40l26)
 {
+	u32 halo_state, timeout_ms;
 	u8 dsp_state;
-	u32 halo_state, halo_state_reg;
-	int ret;
+	int ret, i;
 
-	switch (cs40l26->revid) {
-	case CS40L26_REVID_A0:
-		halo_state_reg = CS40L26_A0_DSP_HALO_STATE_REG;
-		break;
-	case CS40L26_REVID_A1:
-		halo_state_reg = CS40L26_A1_DSP_HALO_STATE_REG;
-		break;
-	default:
-		dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-			cs40l26->revid);
-		return -EINVAL;
-	}
-
-	ret = regmap_read(cs40l26->regmap, halo_state_reg,
-			&halo_state);
+	ret = cs40l26_pm_state_transition(cs40l26,
+			CS40L26_PM_STATE_PREVENT_HIBERNATE);
 	if (ret)
 		return ret;
+
+	ret = regmap_read(cs40l26->regmap, CS40L26_A1_DSP_HALO_STATE_REG,
+			&halo_state);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get HALO state\n");
+		return ret;
+	}
 
 	if (halo_state != CS40L26_DSP_HALO_STATE_RUN) {
 		dev_err(cs40l26->dev, "DSP not Ready: HALO_STATE: %08X\n",
@@ -433,24 +379,34 @@ static int cs40l26_dsp_pre_config(struct cs40l26_private *cs40l26)
 		return -EINVAL;
 	}
 
-	ret = cs40l26_pm_state_transition(cs40l26,
-			CS40L26_PM_STATE_PREVENT_HIBERNATE);
+
+	ret = cs40l26_pm_timeout_ms_get(cs40l26, &timeout_ms);
 	if (ret)
 		return ret;
 
-	ret = cs40l26_dsp_state_get(cs40l26, &dsp_state);
-	if (ret)
-		return ret;
+	for (i = 0; i < 10; i++) {
+		ret = cs40l26_dsp_state_get(cs40l26, &dsp_state);
+		if (ret)
+			return ret;
 
-	if (dsp_state != CS40L26_DSP_STATE_SHUTDOWN &&
-			dsp_state != CS40L26_DSP_STATE_STANDBY) {
-		dev_err(cs40l26->dev, "DSP core not safe to kill\n");
+		if (dsp_state != CS40L26_DSP_STATE_SHUTDOWN &&
+				dsp_state != CS40L26_DSP_STATE_STANDBY)
+			dev_warn(cs40l26->dev, "DSP core not safe to kill\n");
+		else
+			break;
+
+		usleep_range(CS40L26_MS_TO_US(timeout_ms),
+			CS40L26_MS_TO_US(timeout_ms) + 100);
+	}
+
+	if (i == 10) {
+		dev_err(cs40l26->dev, "DSP Core could not be shut down\n");
 		return -EINVAL;
 	}
 
 	/* errata write fixing indeterminent PLL lock time */
 	ret = regmap_update_bits(cs40l26->regmap, CS40L26_PLL_REFCLK_DETECT_0,
-			CS40L26_PLL_REFCLK_DET_EN_MASK, CS40L26_DISABLE);
+			CS40L26_PLL_REFCLK_DET_EN_MASK, 0);
 	if (ret) {
 		dev_err(cs40l26->dev, "Failed to disable PLL refclk detect\n");
 		return ret;
@@ -588,6 +544,12 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 				return -EINVAL;
 			}
 			break;
+		case CS40L26_DSP_MBOX_LE_EST_START:
+			dev_dbg(dev, "LE_EST_START\n");
+			break;
+		case CS40L26_DSP_MBOX_LE_EST_DONE:
+			dev_dbg(dev, "LE_EST_DONE\n");
+			break;
 		case CS40L26_DSP_MBOX_SYS_ACK:
 			dev_err(dev, "Mbox buffer value (0x%X) not supported\n",
 					val);
@@ -602,25 +564,24 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 	return 0;
 }
 
+void cs40l26_asp_worker(struct work_struct *work)
+{
+	struct cs40l26_private *cs40l26 =
+			container_of(work, struct cs40l26_private, asp_work);
+
+	cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
+			CS40L26_DSP_MBOX_CMD_START_I2S, CS40L26_DSP_MBOX_RESET);
+}
+EXPORT_SYMBOL(cs40l26_asp_worker);
+
 void cs40l26_vibe_state_set(struct cs40l26_private *cs40l26,
 		enum cs40l26_vibe_state new_state)
 {
 	if (cs40l26->vibe_state == new_state)
 		return;
 
-	if (new_state == CS40L26_VIBE_STATE_STOPPED && cs40l26->asp_enable) {
-		/* Re-enable audio stream */
-		cs40l26_class_h_set(cs40l26, true);
-		if (!cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
-				CS40L26_DSP_MBOX_CMD_START_I2S,
-				CS40L26_DSP_MBOX_RESET)) {
-			cs40l26->vibe_state = CS40L26_VIBE_STATE_ASP;
-			return;
-		} else if (new_state == CS40L26_VIBE_STATE_HAPTIC &&
-				cs40l26->vibe_state == CS40L26_VIBE_STATE_ASP) {
-			cs40l26_class_h_set(cs40l26, false);
-		}
-	}
+	if (new_state == CS40L26_VIBE_STATE_STOPPED && cs40l26->asp_enable)
+		queue_work(cs40l26->asp_workqueue, &cs40l26->asp_work);
 
 	cs40l26->vibe_state = new_state;
 #if !IS_ENABLED(CONFIG_INPUT_CS40L26_ATTR_UNDER_BUS)
@@ -855,8 +816,7 @@ static int cs40l26_handle_irq1(struct cs40l26_private *cs40l26,
 				CS40L26_WKSRC_STS_SHIFT);
 
 		ret = cl_dsp_get_reg(cs40l26->dsp, "LAST_WAKESRC_CTL",
-				CL_DSP_XM_UNPACKED_TYPE,
-				CS40L26_FW_ID, &reg);
+				CL_DSP_XM_UNPACKED_TYPE, cs40l26->fw.id, &reg);
 		if (ret)
 			goto err;
 
@@ -1120,7 +1080,19 @@ static irqreturn_t cs40l26_irq(int irq, void *data)
 		return IRQ_NONE;
 	}
 
-	pm_runtime_get_sync(dev);
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0) {
+		pm_runtime_set_active(dev);
+
+		dev_err(dev, "PM Runtime Resume failed, interrupts missed\n");
+
+		cs40l26_dsp_write(cs40l26, CS40L26_IRQ1_EINT_1,
+				CS40L26_IRQ_EINT1_ALL_MASK);
+		cs40l26_dsp_write(cs40l26, CS40L26_IRQ1_EINT_2,
+				CS40L26_IRQ_EINT2_ALL_MASK);
+
+		goto err;
+	}
 
 	ret = regmap_read(regmap, CS40L26_IRQ1_EINT_1, &eint);
 	if (ret) {
@@ -1200,173 +1172,50 @@ err:
 	return (irq1_count + irq2_count) ? IRQ_HANDLED : IRQ_NONE;
 }
 
-static bool cs40l26_pseq_v1_addr_exists(struct cs40l26_private *cs40l26,
-							u16 addr, int *index)
-{
-	int i;
-
-	if (cs40l26->pseq_v1_len == 0)
-		return false;
-
-	for (i = 0; i < cs40l26->pseq_v1_len; i++) {
-		if (cs40l26->pseq_v1_table[i].addr == addr) {
-			*index = i;
-			return true;
-		}
-	}
-
-	*index = -1;
-
-	return false;
-}
-
-static int cs40l26_pseq_v1_write(struct cs40l26_private *cs40l26,
-		unsigned int pseq_v1_offset)
-{
-	struct regmap *regmap = cs40l26->regmap;
-	unsigned int len = cs40l26->pseq_v1_len;
-	struct device *dev = cs40l26->dev;
-	u32 val;
-	u16 addr;
-	int ret;
-
-	addr = cs40l26->pseq_v1_table[pseq_v1_offset].addr;
-	val = cs40l26->pseq_v1_table[pseq_v1_offset].val;
-
-	/* the "upper half" first 24-bit word of the sequence pair is written
-	 * to the write sequencer as: [23-16] addr{15-0},
-	 * [15-0] val{31-24} with bits [24-31] acting as a buffer
-	 */
-	ret = regmap_write(regmap, cs40l26->pseq_base +
-			(pseq_v1_offset * CS40L26_PSEQ_V1_STRIDE),
-			(addr << CS40L26_PSEQ_V1_ADDR_SHIFT) |
-			((val & ~CS40L26_PSEQ_V1_VAL_MASK)
-			>> CS40L26_PSEQ_V1_VAL_SHIFT));
-	if (ret) {
-		dev_err(dev, "Failed to write power on seq. (upper half)\n");
-		return ret;
-	}
-
-	/* the "lower half" of the address-value pair is written to the write
-	 * sequencer as: [23-0] data{23-0} with bits [24-31] acting as a buffer
-	 */
-	ret = regmap_write(regmap, cs40l26->pseq_base + CL_DSP_BYTES_PER_WORD
-			+ (pseq_v1_offset * CS40L26_PSEQ_V1_STRIDE),
-			val & CS40L26_PSEQ_V1_VAL_MASK);
-	if (ret) {
-		dev_err(dev, "Failed to write power on seq. (lower half)\n");
-		return ret;
-	}
-
-	/* end of sequence must be marked by list terminator */
-	ret = regmap_write(regmap, cs40l26->pseq_base +
-			(len * CS40L26_PSEQ_V1_STRIDE),
-			CS40L26_PSEQ_V1_LIST_TERM);
-	if (ret)
-		dev_err(dev, "Failed to write power on seq. terminator\n");
-
-	return ret;
-}
-
-static int cs40l26_pseq_v1_add_pair(struct cs40l26_private *cs40l26, u16 addr,
-		u32 val, bool replace)
-{
-	unsigned int len = cs40l26->pseq_v1_len;
-	struct device *dev = cs40l26->dev;
-	unsigned int pseq_v1_offset, prev_val;
-	int ret, index;
-
-	if (len >= CS40L26_PSEQ_V1_MAX_ENTRIES) {
-		dev_err(dev, "Power on seq. exceeded max number of entries\n");
-		return -E2BIG;
-	}
-
-	if (cs40l26_pseq_v1_addr_exists(cs40l26, addr, &index) && replace) {
-		prev_val = cs40l26->pseq_v1_table[index].val;
-		cs40l26->pseq_v1_table[index].val = val;
-		pseq_v1_offset = index;
-	} else {
-		cs40l26->pseq_v1_table[len].addr = addr;
-		cs40l26->pseq_v1_table[len].val = val;
-		cs40l26->pseq_v1_len++;
-		pseq_v1_offset = len;
-	}
-
-	ret = cs40l26_pseq_v1_write(cs40l26, pseq_v1_offset);
-	if (ret) { /* If an error occurs during write, reset the sequence */
-		if (index < 0) { /* No previous value for this address */
-			cs40l26->pseq_v1_table[len].addr = 0;
-			cs40l26->pseq_v1_table[len].val = 0;
-			cs40l26->pseq_v1_len--;
-		} else {
-			cs40l26->pseq_v1_table[index].val = prev_val;
-		}
-	}
-
-	return ret;
-}
-
-int cs40l26_pseq_v1_multi_add_pair(struct cs40l26_private *cs40l26,
-		const struct reg_sequence *reg_seq, int num_regs, bool replace)
-{
-	int ret, i;
-
-	for (i = 0; i < num_regs; i++) {
-		ret = cs40l26_pseq_v1_add_pair(cs40l26, (u16) (reg_seq[i].reg &
-				CS40L26_PSEQ_V1_ADDR_MASK), reg_seq[i].def,
-				replace);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL(cs40l26_pseq_v1_multi_add_pair);
-
-static int cs40l26_pseq_v2_add_op(struct cs40l26_private *cs40l26,
+static int cs40l26_pseq_add_op(struct cs40l26_private *cs40l26,
 		int num_words, u32 *words)
 {
 	struct regmap *regmap = cs40l26->regmap;
 	struct device *dev = cs40l26->dev;
 	u32 offset_for_new_op, *op_words;
 	int ret;
-	struct cs40l26_pseq_v2_op *pseq_v2_op_end, *pseq_v2_op_new, *op;
+	struct cs40l26_pseq_op *pseq_op_end, *pseq_op_new, *op;
 
 	/* get location of the list terminator */
-	list_for_each_entry(pseq_v2_op_end, &cs40l26->pseq_v2_op_head, list) {
-		if (pseq_v2_op_end->operation == CS40L26_PSEQ_V2_OP_END)
+	list_for_each_entry(pseq_op_end, &cs40l26->pseq_op_head, list) {
+		if (pseq_op_end->operation == CS40L26_PSEQ_OP_END)
 			break;
 	}
 
-	if (pseq_v2_op_end->operation != CS40L26_PSEQ_V2_OP_END) {
+	if (pseq_op_end->operation != CS40L26_PSEQ_OP_END) {
 		dev_err(dev, "Failed to find END_OF_SCRIPT\n");
 		return -EINVAL;
 	}
 
-	offset_for_new_op = pseq_v2_op_end->offset;
+	offset_for_new_op = pseq_op_end->offset;
 
 	/* add new op to list */
 	op_words = kzalloc(num_words * CL_DSP_BYTES_PER_WORD, GFP_KERNEL);
 	if (!op_words)
 		return -ENOMEM;
 	memcpy(op_words, words, num_words * CL_DSP_BYTES_PER_WORD);
-	pseq_v2_op_new = devm_kzalloc(dev, sizeof(*pseq_v2_op_new), GFP_KERNEL);
-	if (!pseq_v2_op_new) {
+	pseq_op_new = devm_kzalloc(dev, sizeof(*pseq_op_new), GFP_KERNEL);
+	if (!pseq_op_new) {
 		ret = -ENOMEM;
 		goto err_free;
 	}
 
-	pseq_v2_op_new->size = num_words;
-	pseq_v2_op_new->offset = offset_for_new_op;
-	pseq_v2_op_new->words = op_words;
-	list_add(&pseq_v2_op_new->list, &cs40l26->pseq_v2_op_head);
+	pseq_op_new->size = num_words;
+	pseq_op_new->offset = offset_for_new_op;
+	pseq_op_new->words = op_words;
+	list_add(&pseq_op_new->list, &cs40l26->pseq_op_head);
 
-	cs40l26->pseq_v2_num_ops++;
+	cs40l26->pseq_num_ops++;
 
 	/* bump end of script offset to accomodate new operation */
-	pseq_v2_op_end->offset += num_words * CL_DSP_BYTES_PER_WORD;
+	pseq_op_end->offset += num_words * CL_DSP_BYTES_PER_WORD;
 
-	list_for_each_entry(op, &cs40l26->pseq_v2_op_head, list) {
+	list_for_each_entry(op, &cs40l26->pseq_op_head, list) {
 		if (op->offset >= offset_for_new_op) {
 			ret = regmap_bulk_write(regmap, cs40l26->pseq_base +
 							op->offset,
@@ -1387,22 +1236,22 @@ err_free:
 	return ret;
 }
 
-static int cs40l26_pseq_v2_add_write_reg_full(struct cs40l26_private *cs40l26,
+static int cs40l26_pseq_add_write_reg_full(struct cs40l26_private *cs40l26,
 		u32 addr, u32 data, bool update_if_op_already_in_seq)
 {
 	int ret;
-	struct cs40l26_pseq_v2_op *op;
-	u32 op_words[CS40L26_PSEQ_V2_OP_WRITE_REG_FULL_WORDS];
+	struct cs40l26_pseq_op *op;
+	u32 op_words[CS40L26_PSEQ_OP_WRITE_REG_FULL_WORDS];
 
-	op_words[0] = (CS40L26_PSEQ_V2_OP_WRITE_REG_FULL <<
-						CS40L26_PSEQ_V2_OP_SHIFT);
+	op_words[0] = (CS40L26_PSEQ_OP_WRITE_REG_FULL <<
+						CS40L26_PSEQ_OP_SHIFT);
 	op_words[0] |= addr >> 16;
 	op_words[1] = (addr & 0x0000FFFF) << 8;
 	op_words[1] |= (data & 0xFF000000) >> 24;
 	op_words[2] = (data & 0x00FFFFFF);
 
 	if (update_if_op_already_in_seq) {
-		list_for_each_entry(op, &cs40l26->pseq_v2_op_head, list) {
+		list_for_each_entry(op, &cs40l26->pseq_op_head, list) {
 			/* check if op with same op and addr already exists */
 			if ((op->words[0] == op_words[0]) &&
 				((op->words[1] & 0xFFFFFF00) ==
@@ -1420,21 +1269,21 @@ static int cs40l26_pseq_v2_add_write_reg_full(struct cs40l26_private *cs40l26,
 	}
 
 	/* if no matching op is found or !update, add the op */
-	ret = cs40l26_pseq_v2_add_op(cs40l26,
-				CS40L26_PSEQ_V2_OP_WRITE_REG_FULL_WORDS,
+	ret = cs40l26_pseq_add_op(cs40l26,
+				CS40L26_PSEQ_OP_WRITE_REG_FULL_WORDS,
 				op_words);
 
 	return ret;
 }
 
-int cs40l26_pseq_v2_multi_add_write_reg_full(struct cs40l26_private *cs40l26,
+int cs40l26_pseq_multi_add_write_reg_full(struct cs40l26_private *cs40l26,
 		const struct reg_sequence *reg_seq, int num_regs,
 		bool update_if_op_already_in_seq)
 {
 	int ret, i;
 
 	for (i = 0; i < num_regs; i++) {
-		ret = cs40l26_pseq_v2_add_write_reg_full(cs40l26,
+		ret = cs40l26_pseq_add_write_reg_full(cs40l26,
 						reg_seq[i].reg, reg_seq[i].def,
 						update_if_op_already_in_seq);
 		if (ret)
@@ -1443,94 +1292,77 @@ int cs40l26_pseq_v2_multi_add_write_reg_full(struct cs40l26_private *cs40l26,
 
 	return 0;
 }
-EXPORT_SYMBOL(cs40l26_pseq_v2_multi_add_write_reg_full);
+EXPORT_SYMBOL(cs40l26_pseq_multi_add_write_reg_full);
 
-static int cs40l26_pseq_v1_init(struct cs40l26_private *cs40l26)
+/* 24-bit address, 16-bit data */
+static int cs40l26_pseq_add_write_reg_h16(struct cs40l26_private *cs40l26,
+		u32 addr, u16 data, bool update_if_op_already_in_seq)
 {
+	int ret;
 	struct device *dev = cs40l26->dev;
-	int ret, i, index = 0;
-	u8 upper_val = 0;
-	u16 addr = 0;
-	u32 val, word, algo_id;
+	struct cs40l26_pseq_op *op;
+	u32 op_words[CS40L26_PSEQ_OP_WRITE_REG_H16_WORDS];
 
-	if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-		algo_id = CS40L26_PM_ALGO_ID;
-	else
-		algo_id = CS40L26_PM_ROM_ALGO_ID;
+	if (addr & 0xFF000000) {
+		dev_err(dev, "invalid address for pseq write_reg_h16\n");
+		return -EINVAL;
+	}
 
-	ret = cl_dsp_get_reg(cs40l26->dsp, "POWER_ON_SEQUENCE",
-			CL_DSP_XM_UNPACKED_TYPE, algo_id, &cs40l26->pseq_base);
-	if (ret)
-		return ret;
+	op_words[0] = (CS40L26_PSEQ_OP_WRITE_REG_H16 <<
+						CS40L26_PSEQ_OP_SHIFT);
+	op_words[0] |= (addr & 0x00FFFF00) >> 8;
+	op_words[1] = (addr & 0x000000FF) << 16;
+	op_words[1] |= data;
 
-	for (i = 0; i < CS40L26_PSEQ_V1_MAX_WRITES; i++) {
-		ret = regmap_read(cs40l26->regmap,
-				cs40l26->pseq_base +
-				(i * CL_DSP_BYTES_PER_WORD), &word);
-		if (ret) {
-			dev_err(dev, "Failed to read from power on seq.\n");
-			return ret;
-		}
-
-		if ((word & CS40L26_PSEQ_V1_LIST_TERM_MASK) ==
-				CS40L26_PSEQ_V1_LIST_TERM)
-			break;
-
-		if (i % CS40L26_PSEQ_V1_PAIR_NUM_WORDS) { /* lower half */
-			index = i / CS40L26_PSEQ_V1_PAIR_NUM_WORDS;
-			val = (upper_val << CS40L26_PSEQ_V1_VAL_SHIFT) |
-					(word & CS40L26_PSEQ_V1_VAL_MASK);
-
-			cs40l26->pseq_v1_table[index].addr = addr;
-			cs40l26->pseq_v1_table[index].val = val;
-		} else { /* upper half */
-			addr = (word & CS40L26_PSEQ_V1_ADDR_WORD_MASK) >>
-					CS40L26_PSEQ_V1_ADDR_SHIFT;
-
-			upper_val = word & CS40L26_PSEQ_V1_VAL_WORD_UPPER_MASK;
+	if (update_if_op_already_in_seq) {
+		list_for_each_entry(op, &cs40l26->pseq_op_head, list) {
+			/* check if op with same op and addr already exists */
+			if ((op->words[0] == op_words[0]) &&
+				((op->words[1] & 0x00FF0000) ==
+				(op_words[1] & 0x00FF0000))) {
+				/* update data in the existing op and return */
+				ret = regmap_bulk_write(cs40l26->regmap,
+						cs40l26->pseq_base + op->offset,
+						op_words, op->size);
+				if (ret)
+					dev_err(cs40l26->dev,
+						"Failed to update op\n");
+				return ret;
+			}
 		}
 	}
 
-	if (i >= CS40L26_PSEQ_V1_MAX_WRITES) {
-		dev_err(dev, "Original sequence exceeds max # of entries\n");
-		return -E2BIG;
-	}
+	/* if no matching op is found or !update, add the op */
+	ret = cs40l26_pseq_add_op(cs40l26,
+				CS40L26_PSEQ_OP_WRITE_REG_H16_WORDS,
+				op_words);
 
-	ret = regmap_write(cs40l26->regmap, cs40l26->pseq_base +
-			(i * CL_DSP_BYTES_PER_WORD), CS40L26_PSEQ_V1_LIST_TERM);
-	if (ret)
-		return ret;
-
-	cs40l26->pseq_v1_len = index + 1;
-	return 0;
+	return ret;
 }
 
-static int cs40l26_pseq_v2_init(struct cs40l26_private *cs40l26)
+static int cs40l26_pseq_init(struct cs40l26_private *cs40l26)
 {
 	struct device *dev = cs40l26->dev;
+	u32 words[CS40L26_PSEQ_MAX_WORDS], *op_words;
+	struct cs40l26_pseq_op *pseq_op;
 	int ret, i, j, num_words, read_size;
 	u8 operation;
-	u32 words[CS40L26_PSEQ_V2_MAX_WORDS], algo_id, *op_words;
-	struct cs40l26_pseq_v2_op *pseq_v2_op;
 
-	INIT_LIST_HEAD(&cs40l26->pseq_v2_op_head);
-	cs40l26->pseq_v2_num_ops = 0;
-
-	if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-		algo_id = CS40L26_PM_ALGO_ID;
-	else
-		algo_id = CS40L26_PM_ROM_ALGO_ID;
+	INIT_LIST_HEAD(&cs40l26->pseq_op_head);
+	cs40l26->pseq_num_ops = 0;
 
 	ret = cl_dsp_get_reg(cs40l26->dsp, "POWER_ON_SEQUENCE",
-			CL_DSP_XM_UNPACKED_TYPE, algo_id, &cs40l26->pseq_base);
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_PM_ALGO_ID,
+			&cs40l26->pseq_base);
 	if (ret)
 		return ret;
 
 	/* read pseq memory space */
 	i = 0;
-	while (i < CS40L26_PSEQ_V2_MAX_WORDS) {
+	while (i < CS40L26_PSEQ_MAX_WORDS) {
 		read_size = min(CS40L26_MAX_I2C_READ_SIZE_BYTES,
-			CS40L26_PSEQ_V2_MAX_WORDS - i);
+			CS40L26_PSEQ_MAX_WORDS - i);
+
 		ret = regmap_bulk_read(cs40l26->regmap,
 			cs40l26->pseq_base + i * CL_DSP_BYTES_PER_WORD,
 			words + i,
@@ -1543,20 +1375,20 @@ static int cs40l26_pseq_v2_init(struct cs40l26_private *cs40l26)
 	}
 
 	i = 0;
-	while (i < CS40L26_PSEQ_V2_MAX_WORDS) {
-		operation = (words[i] & CS40L26_PSEQ_V2_OP_MASK) >>
-			CS40L26_PSEQ_V2_OP_SHIFT;
+	while (i < CS40L26_PSEQ_MAX_WORDS) {
+		operation = (words[i] & CS40L26_PSEQ_OP_MASK) >>
+			CS40L26_PSEQ_OP_SHIFT;
 
 		/* get num words for given operation */
-		for (j = 0; j < CS40L26_PSEQ_V2_NUM_OPS; j++) {
-			if (cs40l26_pseq_v2_op_sizes[j][0] == operation) {
-				num_words = cs40l26_pseq_v2_op_sizes[j][1];
+		for (j = 0; j < CS40L26_PSEQ_NUM_OPS; j++) {
+			if (cs40l26_pseq_op_sizes[j][0] == operation) {
+				num_words = cs40l26_pseq_op_sizes[j][1];
 				break;
 			}
 		}
 
-		if (j == CS40L26_PSEQ_V2_NUM_OPS) {
-			dev_err(dev, "Failed to determine pseq_v2 op size\n");
+		if (j == CS40L26_PSEQ_NUM_OPS) {
+			dev_err(dev, "Failed to determine pseq op size\n");
 			return -EINVAL;
 		}
 
@@ -1566,37 +1398,28 @@ static int cs40l26_pseq_v2_init(struct cs40l26_private *cs40l26)
 			return -ENOMEM;
 		memcpy(op_words, &words[i], num_words * CL_DSP_BYTES_PER_WORD);
 
-		pseq_v2_op = devm_kzalloc(dev, sizeof(*pseq_v2_op), GFP_KERNEL);
-		if (!pseq_v2_op) {
+		pseq_op = devm_kzalloc(dev, sizeof(*pseq_op), GFP_KERNEL);
+		if (!pseq_op) {
 			ret = -ENOMEM;
 			goto err_free;
 		}
 
-		pseq_v2_op->size = num_words;
-		pseq_v2_op->offset = i * CL_DSP_BYTES_PER_WORD;
-		pseq_v2_op->operation = operation;
-		pseq_v2_op->words = op_words;
-		list_add(&pseq_v2_op->list, &cs40l26->pseq_v2_op_head);
+		pseq_op->size = num_words;
+		pseq_op->offset = i * CL_DSP_BYTES_PER_WORD;
+		pseq_op->operation = operation;
+		pseq_op->words = op_words;
+		list_add(&pseq_op->list, &cs40l26->pseq_op_head);
 
-		cs40l26->pseq_v2_num_ops++;
+		cs40l26->pseq_num_ops++;
 		i += num_words;
 
-		if (operation == CS40L26_PSEQ_V2_OP_END)
+		if (operation == CS40L26_PSEQ_OP_END)
 			break;
 
 	}
 
-	dev_dbg(dev, "PSEQ_V2 num ops: %d\n", cs40l26->pseq_v2_num_ops);
-	dev_dbg(dev, "offset\tsize\twords\n");
-	list_for_each_entry(pseq_v2_op, &cs40l26->pseq_v2_op_head, list) {
-		dev_dbg(dev, "0x%04X\t%d", pseq_v2_op->offset,
-							pseq_v2_op->size);
-		for (j = 0; j < pseq_v2_op->size; j++)
-			dev_dbg(dev, "0x%08X", *(pseq_v2_op->words + j));
-	}
-
-	if (operation != CS40L26_PSEQ_V2_OP_END) {
-		dev_err(dev, "PSEQ_V2 END_OF_SCRIPT not found\n");
+	if (operation != CS40L26_PSEQ_OP_END) {
+		dev_err(dev, "PSEQ END_OF_SCRIPT not found\n");
 		return -E2BIG;
 	}
 
@@ -1608,80 +1431,154 @@ err_free:
 	return ret;
 }
 
-static int cs40l26_pseq_init(struct cs40l26_private *cs40l26)
+static int cs40l26_update_reg_defaults_via_pseq(struct cs40l26_private *cs40l26)
 {
+	struct device *dev = cs40l26->dev;
 	int ret;
 
-	switch (cs40l26->revid) {
-	case CS40L26_REVID_A0:
-		ret = cs40l26_pseq_v1_init(cs40l26);
-		break;
-	case CS40L26_REVID_A1:
-		ret = cs40l26_pseq_v2_init(cs40l26);
-		break;
-	default:
-		dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-			cs40l26->revid);
+	/* set SPK_DEFAULT_HIZ to 1 */
+	ret = cs40l26_pseq_add_write_reg_h16(cs40l26,
+			CS40L26_TST_DAC_MSM_CONFIG,
+			CS40L26_TST_DAC_MSM_CONFIG_DEFAULT_CHANGE_VALUE_H16,
+			true);
+	if (ret)
+		dev_err(dev, "Failed to sequence register default updates\n");
+
+	return ret;
+}
+
+static int cs40l26_buzzgen_set(struct cs40l26_private *cs40l26, u16 freq,
+		u16 level, u16 duration, u8 offset)
+{
+	int ret;
+	unsigned int base_reg, offset_reg;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "BUZZ_EFFECTS1_BUZZ_FREQ",
+		CL_DSP_XM_UNPACKED_TYPE, CS40L26_BUZZGEN_ALGO_ID, &base_reg);
+	if (ret)
+		return ret;
+
+	offset_reg = base_reg + (offset * 12);
+
+	ret = regmap_write(cs40l26->regmap, offset_reg, freq);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to write BUZZGEN frequency\n");
+		return ret;
+	}
+
+	ret = regmap_write(cs40l26->regmap, offset_reg + 4,
+			CS40L26_BUZZGEN_LEVEL_DEFAULT);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to write BUZZGEN level\n");
+		return ret;
+	}
+
+	ret = regmap_write(cs40l26->regmap, offset_reg + 8, duration / 4);
+	if (ret)
+		dev_err(cs40l26->dev, "Failed to write BUZZGEN duration\n");
+
+	return ret;
+}
+
+static int cs40l26_gpio_index_set(struct cs40l26_private *cs40l26,
+		struct ff_effect *effect)
+{
+	u16 button = effect->trigger.button;
+	u8 bank = (button & CS40L26_BTN_BANK_MASK) >> CS40L26_BTN_BANK_SHIFT;
+	u8 edge = (button & CS40L26_BTN_EDGE_MASK) >> CS40L26_BTN_EDGE_SHIFT;
+	u8 gpio = (button & CS40L26_BTN_NUM_MASK) >> CS40L26_BTN_NUM_SHIFT;
+	u8 index = button & CS40L26_BTN_INDEX_MASK;
+	u8 buzz = button & CS40L26_BTN_BUZZ_MASK;
+	u16 write_val, freq;
+	u8 offset;
+	u32 reg;
+	int ret;
+
+	if (gpio != 1) {
+		dev_err(cs40l26->dev, "GPIO%u not supported on 0x%02X\n", gpio,
+				cs40l26->revid);
 		return -EINVAL;
 	}
 
+	if (edge > 1) {
+		dev_err(cs40l26->dev, "Invalid GPI edge %u\n", edge);
+		return -EINVAL;
+	}
+
+	offset = ((edge ^ 1)) * 4;
+	reg = cs40l26->event_map_base + offset;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	if (buzz) {
+		freq = CS40L26_MS_TO_HZ(effect->u.periodic.period);
+
+		ret = cs40l26_buzzgen_set(cs40l26, freq,
+				CS40L26_BUZZGEN_LEVEL_DEFAULT,
+				effect->replay.length, 0);
+		if (ret)
+			goto pm_err;
+
+		write_val = 1 << CS40L26_BTN_BUZZ_SHIFT;
+	} else {
+		write_val = index | (bank << CS40L26_BTN_BANK_SHIFT);
+	}
+
+	ret = regmap_update_bits(cs40l26->regmap, reg,
+			CS40L26_EVENT_MAP_INDEX_MASK, write_val);
 	if (ret)
-		dev_err(cs40l26->dev, "Failed to init pseq\n");
+		dev_err(cs40l26->dev, "Failed to update event map\n");
+
+pm_err:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
 
 	return ret;
+}
+
+static struct cs40l26_owt *cs40l26_owt_find(struct cs40l26_private *cs40l26,
+		int id)
+{
+	struct cs40l26_owt *owt;
+
+	if (list_empty(&cs40l26->owt_head)) {
+		dev_err(cs40l26->dev, "OWT list is empty\n");
+		return NULL;
+	}
+
+	list_for_each_entry(owt, &cs40l26->owt_head, list) {
+		if (owt->effect_id == id)
+			break;
+	}
+
+	if (owt->effect_id != id) {
+		dev_err(cs40l26->dev, "OWT effect with ID %d not found\n", id);
+		return NULL;
+	}
+
+	return owt;
 }
 
 static void cs40l26_set_gain_worker(struct work_struct *work)
 {
 	struct cs40l26_private *cs40l26 =
 		container_of(work, struct cs40l26_private, set_gain_work);
-	u16 amp_vol_pcm;
-	u32 reg, val;
+	u32 reg;
 	int ret;
 
 	pm_runtime_get_sync(cs40l26->dev);
 	mutex_lock(&cs40l26->lock);
 
-	switch (cs40l26->revid) {
-	case CS40L26_REVID_A0:
-		amp_vol_pcm = CS40L26_AMP_VOL_PCM_MAX & cs40l26->gain_pct;
-
-		ret = regmap_update_bits(cs40l26->regmap, CS40L26_AMP_CTRL,
-				CS40L26_AMP_CTRL_VOL_PCM_MASK, amp_vol_pcm <<
-				CS40L26_AMP_CTRL_VOL_PCM_SHIFT);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to update digtal gain\n");
-			goto err_mutex;
-		}
-
-		ret = regmap_read(cs40l26->regmap, CS40L26_AMP_CTRL, &val);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to read AMP control\n");
-			goto err_mutex;
-		}
-
-		ret = cs40l26_pseq_v1_add_pair(cs40l26,
-						CS40L26_AMP_CTRL, val, true);
-		if (ret)
-			dev_err(cs40l26->dev, "Failed to set gain in pseq\n");
-		break;
-	case CS40L26_REVID_A1:
-		val = cs40l26_attn_q21_2_vals[cs40l26->gain_pct];
-
-		/* Write Q21.2 value to SOURCE_ATTENUATION */
-		ret = cl_dsp_get_reg(cs40l26->dsp, "SOURCE_ATTENUATION",
+	/* Write Q21.2 value to SOURCE_ATTENUATION */
+	ret = cl_dsp_get_reg(cs40l26->dsp, "SOURCE_ATTENUATION",
 			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
-		if (ret)
-			goto err_mutex;
+	if (ret)
+		goto err_mutex;
 
-		ret = regmap_write(cs40l26->regmap, reg, val);
-		if (ret)
-			dev_err(cs40l26->dev, "Failed to set attenuation\n");
-		break;
-	default:
-		dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-			cs40l26->revid);
-	}
+	ret = regmap_write(cs40l26->regmap, reg,
+			cs40l26_attn_q21_2_vals[cs40l26->gain_pct]);
+	if (ret)
+		dev_err(cs40l26->dev, "Failed to set attenuation\n");
 
 err_mutex:
 	mutex_unlock(&cs40l26->lock);
@@ -1694,32 +1591,62 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, vibe_start_work);
 	struct device *dev = cs40l26->dev;
+	u32 index = 0;
 	int ret = 0;
+	struct cs40l26_owt *owt;
 	unsigned int reg, freq;
-	u32 index = 0, buzz_id;
+	bool invert;
 	u16 duration;
 
-	if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM)
-		buzz_id = CS40L26_BUZZGEN_ALGO_ID;
-	else
-		buzz_id = CS40L26_BUZZGEN_ROM_ALGO_ID;
+	dev_dbg(dev, "%s\n", __func__);
 
 	if (cs40l26->effect->u.periodic.waveform == FF_CUSTOM)
 		index = cs40l26->trigger_indices[cs40l26->effect->id];
 
-	if (index >= CS40L26_OWT_INDEX_START && index <= CS40L26_OWT_INDEX_END)
-		duration = CS40L26_SAMPS_TO_MS((cs40l26->owt_wlength &
-				CS40L26_WT_TYPE10_WAVELEN_MAX));
-	else
-		duration = cs40l26->effect->replay.length;
+	if (is_owt(index)) {
+		owt = cs40l26_owt_find(cs40l26, cs40l26->effect->id);
+		if (owt == NULL)
+			return;
+	}
+
+	duration = cs40l26->effect->replay.length;
 
 	pm_runtime_get_sync(dev);
 	mutex_lock(&cs40l26->lock);
 
-	if (duration > 0) /* Effect duration is known */
-		hrtimer_start(&cs40l26->vibe_timer,
-			ktime_set(CS40L26_MS_TO_SECS(duration),
-			CS40L26_MS_TO_NS(duration % 1000)), HRTIMER_MODE_REL);
+	ret = cl_dsp_get_reg(cs40l26->dsp, "TIMEOUT_MS",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
+	if (ret)
+		goto err_mutex;
+
+	ret = regmap_write(cs40l26->regmap, reg, duration);
+	if (ret) {
+		dev_err(dev, "Failed to set TIMEOUT_MS\n");
+		goto err_mutex;
+	}
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "SOURCE_INVERT",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
+	if (ret)
+		goto err_mutex;
+
+	switch (cs40l26->effect->direction) {
+	case 0x0000:
+		invert = false;
+		break;
+	case 0x8000:
+		invert = true;
+		break;
+	default:
+		dev_err(dev, "Invalid ff_effect direction: 0x%X\n",
+			cs40l26->effect->direction);
+		ret = -EINVAL;
+		goto err_mutex;
+	}
+
+	ret = regmap_write(cs40l26->regmap, reg, invert);
+	if (ret)
+		goto err_mutex;
 
 	cs40l26_vibe_state_set(cs40l26, CS40L26_VIBE_STATE_HAPTIC);
 
@@ -1731,26 +1658,10 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 			goto err_mutex;
 		break;
 	case FF_SINE:
-		ret = cl_dsp_get_reg(cs40l26->dsp, "BUZZ_EFFECTS2_BUZZ_FREQ",
-				CL_DSP_XM_UNPACKED_TYPE, buzz_id, &reg);
-		if (ret)
-			goto err_mutex;
-
 		freq = CS40L26_MS_TO_HZ(cs40l26->effect->u.periodic.period);
 
-		ret = regmap_write(cs40l26->regmap, reg, freq);
-		if (ret)
-			goto err_mutex;
-
-		ret = regmap_write(cs40l26->regmap, reg +
-				CS40L26_BUZZGEN_LEVEL_OFFSET,
-				CS40L26_BUZZGEN_LEVEL_DEFAULT);
-		if (ret)
-			goto err_mutex;
-
-		ret = regmap_write(cs40l26->regmap, reg +
-				CS40L26_BUZZGEN_DURATION_OFFSET, duration /
-				CS40L26_BUZZGEN_DURATION_DIV_STEP);
+		ret = cs40l26_buzzgen_set(cs40l26, freq,
+				CS40L26_BUZZGEN_LEVEL_DEFAULT, duration, 1);
 		if (ret)
 			goto err_mutex;
 
@@ -1780,42 +1691,21 @@ static void cs40l26_vibe_stop_worker(struct work_struct *work)
 {
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, vibe_stop_work);
-	unsigned int reg;
-	u32 algo_id;
 	int ret;
+
+	dev_dbg(cs40l26->dev, "%s\n", __func__);
 
 	pm_runtime_get_sync(cs40l26->dev);
 	mutex_lock(&cs40l26->lock);
 
-	if (cs40l26->effect->u.periodic.waveform == FF_SINE) {
-		ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
+	if (cs40l26->vibe_state != CS40L26_VIBE_STATE_HAPTIC)
+		goto mutex_exit;
+
+	ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
 				CS40L26_STOP_PLAYBACK, CS40L26_DSP_MBOX_RESET);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to stop playback\n");
-			goto mutex_exit;
-		}
-	} else {
-		if (cs40l26->fw_mode == CS40L26_FW_MODE_ROM)
-			algo_id = CS40L26_VIBEGEN_ROM_ALGO_ID;
-		else
-			algo_id = CS40L26_VIBEGEN_ALGO_ID;
-
-		ret = cl_dsp_get_reg(cs40l26->dsp, "END_PLAYBACK",
-				CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
-		if (ret)
-			goto mutex_exit;
-
-		ret = regmap_write(cs40l26->regmap, reg, 1);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to end VIBE playback\n");
-			goto mutex_exit;
-		}
-
-		ret = regmap_write(cs40l26->regmap, reg, 0);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to reset END_PLAYBACK\n");
-			goto mutex_exit;
-		}
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to stop playback\n");
+		goto mutex_exit;
 	}
 
 	cs40l26_vibe_state_set(cs40l26, CS40L26_VIBE_STATE_STOPPED);
@@ -1826,19 +1716,14 @@ mutex_exit:
 	pm_runtime_put_autosuspend(cs40l26->dev);
 }
 
-static enum hrtimer_restart cs40l26_vibe_timer(struct hrtimer *timer)
-{
-	struct cs40l26_private *cs40l26 =
-		container_of(timer, struct cs40l26_private, vibe_timer);
-
-	queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_stop_work);
-
-	return HRTIMER_NORESTART;
-}
-
 static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 {
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
+
+	if (gain < 0 || gain >= CS40L26_NUM_PCT_MAP_VALUES) {
+		dev_err(cs40l26->dev, "Gain value %u out of bounds\n", gain);
+		return;
+	}
 
 	cs40l26->gain_pct = gain;
 
@@ -1851,6 +1736,9 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
+	dev_dbg(cs40l26->dev, "%s: effect ID = %d, val = %d\n", __func__,
+			effect_id, val);
+
 	effect = &dev->ff->effects[effect_id];
 	if (!effect) {
 		dev_err(cs40l26->dev, "No such effect to playback\n");
@@ -1859,15 +1747,43 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 
 	cs40l26->effect = effect;
 
-	if (val > 0) {
+	if (val > 0)
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_start_work);
-	} else {
-		hrtimer_cancel(&cs40l26->vibe_timer);
+	else
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_stop_work);
-	}
 
 	return 0;
 }
+
+int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves)
+{
+	int ret;
+	u32 reg, nwaves, nowt;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "NUM_OF_WAVES",
+			CL_DSP_XM_UNPACKED_TYPE,
+			CS40L26_VIBEGEN_ALGO_ID, &reg);
+	if (ret)
+		return ret;
+
+	ret = cs40l26_dsp_read(cs40l26, reg, &nwaves);
+	if (ret)
+		return ret;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "OWT_NUM_OF_WAVES_XM",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
+	if (ret)
+		return ret;
+
+	ret = cs40l26_dsp_read(cs40l26, reg, &nowt);
+	if (ret)
+		return ret;
+
+	*num_waves = nwaves + nowt;
+
+	return 0;
+}
+EXPORT_SYMBOL(cs40l26_get_num_waves);
 
 static int cs40l26_owt_get_wlength(struct cs40l26_private *cs40l26, u8 index)
 {
@@ -1917,8 +1833,10 @@ static void cs40l26_owt_get_section_info(struct cs40l26_private *cs40l26,
 }
 
 static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
-		struct cl_dsp_memchunk *ch)
+		s16 *data, u32 data_size, u32 *owt_wlen)
 {
+	u32 data_size_bytes = data_size * 2;
+	struct cl_dsp_memchunk ch;
 	u32 total_len = 0, section_len = 0, loop_len = 0;
 	bool in_loop = false;
 	struct cs40l26_owt_section *sections;
@@ -1926,9 +1844,11 @@ static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
 	u8 nsections, global_rep;
 	u32 dlen, wlen;
 
-	cl_dsp_memchunk_read(ch, 8); /* Skip padding */
-	nsections = cl_dsp_memchunk_read(ch, 8);
-	global_rep = cl_dsp_memchunk_read(ch, 8);
+	ch = cl_dsp_memchunk_create((void *) data, data_size_bytes);
+
+	cl_dsp_memchunk_read(&ch, 8); /* Skip padding */
+	nsections = cl_dsp_memchunk_read(&ch, 8);
+	global_rep = cl_dsp_memchunk_read(&ch, 8);
 
 	if (nsections < 1) {
 		dev_err(cs40l26->dev, "Not enough sections for composite\n");
@@ -1942,7 +1862,7 @@ static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
 		return -ENOMEM;
 	}
 
-	cs40l26_owt_get_section_info(cs40l26, ch, sections, nsections);
+	cs40l26_owt_get_section_info(cs40l26, &ch, sections, nsections);
 
 	for (i = 0; i < nsections; i++) {
 		wlen_whole = cs40l26_owt_get_wlength(cs40l26,
@@ -1995,7 +1915,7 @@ static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
 		section_len = 0;
 	}
 
-	cs40l26->owt_wlength = (total_len * (global_rep + 1)) |
+	*owt_wlen = (total_len * (global_rep + 1)) |
 			CS40L26_WT_TYPE10_WAVELEN_CALCULATED;
 
 err_free:
@@ -2004,65 +1924,70 @@ err_free:
 	return ret;
 }
 
-static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, s16 *data,
-		u32 data_size)
+static int cs40l26_owt_add(struct cs40l26_private *cs40l26, u32 wlen,
+		int effect_id, u32 index)
 {
-	bool pwle = (data[0] == 0x0000) ? false : true;
-	u32 data_size_bytes = data_size * 2;
-	struct device *dev = cs40l26->dev;
-	struct cl_dsp *dsp = cs40l26->dsp;
-	u32 full_data_size, header_size = CL_DSP_OWT_HEADER_ENTRY_SIZE;
-	unsigned int write_reg, reg, wt_offset, wt_size, wt_base;
-	struct cl_dsp_memchunk header_ch, data_ch;
-	u8 *full_data, *header;
-	int ret = 0;
+	struct cs40l26_owt *owt_new;
 
-	data_ch = cl_dsp_memchunk_create((void *) data, data_size_bytes);
-
-	if (pwle) {
-		header_size += CS40L26_WT_TERM_SIZE;
-
-		cs40l26->owt_wlength = cl_dsp_memchunk_read(&data_ch, 24);
-	} else {
-		header_size += CS40L26_WT_WLEN_TERM_SIZE;
-
-		ret = cs40l26_owt_calculate_wlength(cs40l26, &data_ch);
-		if (ret)
-			return ret;
-	}
-	full_data_size = header_size + data_size_bytes;
-
-	header = kcalloc(header_size, sizeof(u8), GFP_KERNEL);
-	if (!header)
+	owt_new = kzalloc(sizeof(*owt_new), GFP_KERNEL);
+	if (!owt_new)
 		return -ENOMEM;
 
-	header_ch = cl_dsp_memchunk_create((void *) header, header_size);
-	/* Header */
-	cl_dsp_memchunk_write(&header_ch, 16,
-			CS40L26_WT_HEADER_DEFAULT_FLAGS);
+	owt_new->effect_id = effect_id;
+	owt_new->wlength = wlen;
+	owt_new->trigger_index = index;
+	list_add(&owt_new->list, &cs40l26->owt_head);
+
+	cs40l26->num_owt_effects++;
+
+	return 0;
+}
+
+static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, s16 *data,
+		u32 data_size, u32 *wlength)
+{
+	bool pwle = (data[0] == 0x0000) ? false : true;
+	u32 data_size_bytes = (data_size * 2) + (pwle ? 0 : 4);
+	struct device *dev = cs40l26->dev;
+	struct cl_dsp *dsp = cs40l26->dsp;
+	unsigned int write_reg, reg, wt_offset, wt_size_words, wt_base;
+	u32 owt_wlength, full_data_size_bytes = 12 + data_size_bytes;
+	struct cl_dsp_memchunk data_ch;
+	u8 *full_data;
+	int ret = 0;
+
+	full_data = kcalloc(full_data_size_bytes, sizeof(u8), GFP_KERNEL);
+	if (!full_data)
+		return -ENOMEM;
+
+	data_ch = cl_dsp_memchunk_create((void *) full_data,
+			full_data_size_bytes);
+	cl_dsp_memchunk_write(&data_ch, 16, CS40L26_WT_HEADER_DEFAULT_FLAGS);
 
 	if (pwle)
-		cl_dsp_memchunk_write(&header_ch, 8, WT_TYPE_V6_PWLE);
+		cl_dsp_memchunk_write(&data_ch, 8, WT_TYPE_V6_PWLE);
 	else
-		cl_dsp_memchunk_write(&header_ch, 8, WT_TYPE_V6_COMPOSITE);
+		cl_dsp_memchunk_write(&data_ch, 8, WT_TYPE_V6_COMPOSITE);
 
-	cl_dsp_memchunk_write(&header_ch, 24, CS40L26_WT_HEADER_OFFSET);
-	cl_dsp_memchunk_write(&header_ch, 24, full_data_size /
-					CL_DSP_BYTES_PER_WORD);
+	cl_dsp_memchunk_write(&data_ch, 24, CS40L26_WT_HEADER_OFFSET);
+	cl_dsp_memchunk_write(&data_ch, 24, data_size_bytes /
+							CL_DSP_BYTES_PER_WORD);
 
-	cl_dsp_memchunk_write(&header_ch, 24, CS40L26_WT_HEADER_TERM);
+	if (!pwle) { /* Wlength is included in PWLE raw data */
+		ret = cs40l26_owt_calculate_wlength(cs40l26, data, data_size,
+				&owt_wlength);
+		if (ret)
+			goto err_free;
 
-	if (!pwle) /* Wlength is included in PWLE raw data */
-		cl_dsp_memchunk_write(&header_ch, 24, cs40l26->owt_wlength);
-
-	full_data = kcalloc(full_data_size, sizeof(u8), GFP_KERNEL);
-	if (!full_data) {
-		ret = -ENOMEM;
-		goto err_free;
+		cl_dsp_memchunk_write(&data_ch, 24, owt_wlength);
 	}
 
-	memcpy(full_data, header, header_ch.bytes);
-	memcpy(full_data + header_ch.bytes, data, data_size_bytes);
+	memcpy(full_data + data_ch.bytes, data, data_size_bytes);
+
+	if (pwle)
+		owt_wlength = (full_data[data_ch.bytes + 1] << 16) |
+				(full_data[data_ch.bytes + 2] << 8) |
+				full_data[data_ch.bytes + 3];
 
 	pm_runtime_get_sync(dev);
 
@@ -2082,13 +2007,13 @@ static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, s16 *data,
 	if (ret)
 		goto err_pm;
 
-	ret = regmap_read(cs40l26->regmap, reg, &wt_size);
+	ret = regmap_read(cs40l26->regmap, reg, &wt_size_words);
 	if (ret) {
 		dev_err(dev, "Failed to get available WT size\n");
 		goto err_pm;
 	}
 
-	if (wt_size < full_data_size) {
+	if ((wt_size_words * 3) < full_data_size_bytes) {
 		dev_err(dev, "No space for OWT waveform\n");
 		ret = -ENOSPC;
 		goto err_pm;
@@ -2102,7 +2027,7 @@ static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, s16 *data,
 	write_reg = wt_base + (wt_offset * 4);
 
 	ret = cl_dsp_raw_write(cs40l26->dsp, write_reg, full_data,
-			full_data_size, CL_DSP_MAX_WLEN);
+			full_data_size_bytes, CL_DSP_MAX_WLEN);
 	if (ret) {
 		dev_err(dev, "Failed to sync OWT\n");
 		goto err_pm;
@@ -2114,14 +2039,15 @@ static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, s16 *data,
 		goto err_pm;
 
 	dev_dbg(dev, "Successfully wrote waveform (%u bytes) to 0x%08X\n",
-			full_data_size, write_reg);
+			full_data_size_bytes, write_reg);
+
+	*wlength = owt_wlength;
 
 err_pm:
 	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 err_free:
-	kfree(header);
 	kfree(full_data);
 
 	return ret;
@@ -2134,12 +2060,11 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 	struct device *cdev = cs40l26->dev;
 	s16 *raw_custom_data = NULL;
 	int ret = 0;
-	u32 trigger_index, min_index, max_index;
+	u32 trigger_index, min_index, max_index, nwaves, owt_wlen;
 	u16 index, bank;
 
 	if (effect->type != FF_PERIODIC) {
-		dev_err(cdev, "Effect type 0x%X not supported\n",
-				effect->type);
+		dev_err(cdev, "Effect type 0x%X not supported\n", effect->type);
 		return -EINVAL;
 	}
 
@@ -2167,15 +2092,8 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 		}
 
 		if (effect->u.periodic.custom_len > CS40L26_CUSTOM_DATA_SIZE) {
-			ret = cs40l26_ack_write(cs40l26,
-					CS40L26_DSP_VIRTUAL1_MBOX_1,
-					CS40L26_DSP_MBOX_CMD_OWT_RESET,
-					CS40L26_DSP_MBOX_RESET);
-			if (ret)
-				goto out_free;
-
 			ret = cs40l26_owt_upload(cs40l26, raw_custom_data,
-					effect->u.periodic.custom_len);
+				effect->u.periodic.custom_len, &owt_wlen);
 			if (ret)
 				goto out_free;
 
@@ -2217,6 +2135,15 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 			goto out_free;
 		}
 
+		if (is_owt(trigger_index)) {
+			ret = cs40l26_owt_add(cs40l26, owt_wlen, effect->id,
+					trigger_index);
+			if (ret)
+				goto out_free;
+		}
+
+		dev_dbg(cdev, "%s: ID = %u, index = 0x%08X\n",
+				__func__, effect->id, trigger_index);
 		break;
 	case FF_SINE:
 		if (effect->u.periodic.period) {
@@ -2240,6 +2167,19 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 		return -EINVAL;
 	}
 
+	if (effect->trigger.button) {
+		ret = cs40l26_gpio_index_set(cs40l26, effect);
+		if (ret)
+			goto out_free;
+	}
+
+	ret = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (ret)
+		goto out_free;
+
+	dev_dbg(cdev, "Total number of waveforms = %u\n", nwaves);
+
+
 out_free:
 	kfree(raw_custom_data);
 
@@ -2253,6 +2193,50 @@ const struct attribute_group *cs40l26_dev_attr_groups[] = {
 	NULL,
 };
 #endif
+
+static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
+{
+	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
+	u32 index = cs40l26->trigger_indices[effect_id];
+	u32 cmd = CS40L26_DSP_MBOX_CMD_OWT_DELETE_BASE;
+	struct cs40l26_owt *owt, *owt_tmp;
+	int ret;
+
+	if (!is_owt(index))
+		return 0;
+
+	/* Update indices for OWT waveforms uploaded after erased effect */
+	list_for_each_entry(owt_tmp, &cs40l26->owt_head, list) {
+		if (owt_tmp->trigger_index > index) {
+			owt_tmp->trigger_index--;
+			cs40l26->trigger_indices[owt_tmp->effect_id]--;
+		}
+	}
+
+	owt = cs40l26_owt_find(cs40l26, effect_id);
+	if (owt == NULL)
+		return -ENOMEM;
+
+	cmd |= (owt->trigger_index & 0xFF);
+
+	list_del(&owt->list);
+	kfree(owt);
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1, cmd,
+			CS40L26_DSP_MBOX_RESET);
+	if (ret)
+		goto pm_err;
+
+	cs40l26->num_owt_effects--;
+
+pm_err:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
 
 static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 {
@@ -2288,15 +2272,13 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 	cs40l26->input->ff->upload = cs40l26_upload_effect;
 	cs40l26->input->ff->playback = cs40l26_playback_effect;
 	cs40l26->input->ff->set_gain = cs40l26_set_gain;
+	cs40l26->input->ff->erase = cs40l26_erase_effect;
 
 	ret = input_register_device(cs40l26->input);
 	if (ret) {
 		dev_err(dev, "Cannot register input device: %d\n", ret);
 		return ret;
 	}
-
-	hrtimer_init(&cs40l26->vibe_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	cs40l26->vibe_timer.function = cs40l26_vibe_timer;
 
 #if !IS_ENABLED(CONFIG_INPUT_CS40L26_ATTR_UNDER_BUS)
 	ret = sysfs_create_group(&cs40l26->input->dev.kobj,
@@ -2353,12 +2335,9 @@ static int cs40l26_part_num_resolve(struct cs40l26_private *cs40l26)
 	}
 
 	val &= CS40L26_REVID_MASK;
-	switch (val) {
-	case CS40L26_REVID_A0:
-	case CS40L26_REVID_A1:
+	if (val == CS40L26_REVID_A1) {
 		cs40l26->revid = val;
-		break;
-	default:
+	} else {
 		dev_err(dev, "Invalid device revision: 0x%02X\n", val);
 		return -EINVAL;
 	}
@@ -2369,34 +2348,59 @@ static int cs40l26_part_num_resolve(struct cs40l26_private *cs40l26)
 	return 0;
 }
 
-static int cs40l26_cl_dsp_init(struct cs40l26_private *cs40l26)
+static int cs40l26_cl_dsp_init(struct cs40l26_private *cs40l26, u32 id)
 {
-	int ret = 0;
+	int ret = 0, i;
+
+	if (cs40l26->dsp) {
+		ret = cl_dsp_destroy(cs40l26->dsp);
+		if (ret) {
+			dev_err(cs40l26->dev,
+				"Failed to destroy existing DSP structure\n");
+			return ret;
+		}
+		cs40l26->dsp = NULL;
+	}
 
 	cs40l26->dsp = cl_dsp_create(cs40l26->dev, cs40l26->regmap);
-	if (!cs40l26->dsp)
+	if (!cs40l26->dsp) {
+		dev_err(cs40l26->dev, "Failed to allocate space for DSP\n");
 		return -ENOMEM;
+	}
 
 	if (cs40l26->fw_mode == CS40L26_FW_MODE_ROM) {
+		cs40l26->fw.id = CS40L26_FW_ID;
 		cs40l26->fw.min_rev = CS40L26_FW_ROM_MIN_REV;
 		cs40l26->fw.num_coeff_files = 0;
-		cs40l26->fw.coeff_files = NULL;
 	} else {
-		if (cs40l26->revid == CS40L26_REVID_A1)
-			cs40l26->fw.min_rev = CS40L26_FW_A1_RAM_MIN_REV;
-		else
-			cs40l26->fw.min_rev = CS40L26_FW_A0_RAM_MIN_REV;
+		cs40l26->fw.id = id;
 
-		cs40l26->fw.num_coeff_files =
-				ARRAY_SIZE(cs40l26_ram_coeff_files);
-		cs40l26->fw.coeff_files = cs40l26_ram_coeff_files;
+		if (id == CS40L26_FW_ID)
+			cs40l26->fw.min_rev = CS40L26_FW_A1_RAM_MIN_REV;
+		if (id == CS40L26_FW_CALIB_ID)
+			cs40l26->fw.min_rev = CS40L26_FW_CALIB_MIN_REV;
+
+		cs40l26->fw.num_coeff_files = CS40L26_TUNING_FILES_MAX;
+		cs40l26->fw.coeff_files = devm_kcalloc(cs40l26->dev,
+			CS40L26_TUNING_FILES_MAX, sizeof(char *), GFP_KERNEL);
+
+		for (i = 0; i < CS40L26_TUNING_FILES_MAX; i++)
+			cs40l26->fw.coeff_files[i] = devm_kzalloc(cs40l26->dev,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN, GFP_KERNEL);
+
+		strncpy(cs40l26->fw.coeff_files[0], CS40L26_WT_FILE_NAME,
+				CS40L26_WT_FILE_NAME_LEN);
+		strncpy(cs40l26->fw.coeff_files[1],
+				CS40L26_A2H_TUNING_FILE_NAME,
+				CS40L26_A2H_TUNING_FILE_NAME_LEN);
+		strncpy(cs40l26->fw.coeff_files[2],
+				CS40L26_SVC_TUNING_FILE_NAME,
+				CS40L26_SVC_TUNING_FILE_NAME_LEN);
 
 		ret = cl_dsp_wavetable_create(cs40l26->dsp,
 				CS40L26_VIBEGEN_ALGO_ID, CS40L26_WT_NAME_XM,
-				CS40L26_WT_NAME_YM, "cs40l26.bin");
+				CS40L26_WT_NAME_YM, CS40L26_WT_FILE_NAME);
 	}
-
-	cs40l26->num_owt_effects = 0;
 
 	return ret;
 }
@@ -2434,6 +2438,13 @@ static int cs40l26_wksrc_config(struct cs40l26_private *cs40l26)
 static int cs40l26_gpio_config(struct cs40l26_private *cs40l26)
 {
 	u32 unmask_bits;
+	int ret;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "ENT_MAP_TABLE_EVENT_DATA_PACKED",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EVENT_HANDLER_ALGO_ID,
+			&cs40l26->event_map_base);
+	if (ret)
+		return ret;
 
 	unmask_bits = BIT(CS40L26_IRQ1_GPIO1_RISE)
 			| BIT(CS40L26_IRQ1_GPIO1_FALL);
@@ -2474,21 +2485,8 @@ static int cs40l26_brownout_prevention_init(struct cs40l26_private *cs40l26)
 		return ret;
 	}
 
-	switch (cs40l26->revid) {
-	case CS40L26_REVID_A0:
-		ret = cs40l26_pseq_v1_add_pair(cs40l26,
-			CS40L26_BLOCK_ENABLES2, val, CS40L26_PSEQ_V1_REPLACE);
-		break;
-	case CS40L26_REVID_A1:
-		ret = cs40l26_pseq_v2_add_write_reg_full(cs40l26,
-			CS40L26_BLOCK_ENABLES2, val, true);
-		break;
-	default:
-		dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-			cs40l26->revid);
-		return -EINVAL;
-	}
-
+	ret = cs40l26_pseq_add_write_reg_full(cs40l26, CS40L26_BLOCK_ENABLES2,
+			val, true);
 	if (ret) {
 		dev_err(dev, "Failed to sequence brownout prevention\n");
 		return ret;
@@ -2592,22 +2590,8 @@ static int cs40l26_brownout_prevention_init(struct cs40l26_private *cs40l26)
 			return ret;
 		}
 
-		switch (cs40l26->revid) {
-		case CS40L26_REVID_A0:
-			ret = cs40l26_pseq_v1_add_pair(cs40l26,
-				CS40L26_VBBR_CONFIG, val,
-				CS40L26_PSEQ_V1_REPLACE);
-			break;
-		case CS40L26_REVID_A1:
-			ret = cs40l26_pseq_v2_add_write_reg_full(cs40l26,
-				CS40L26_VBBR_CONFIG, val,
-				true);
-			break;
-		default:
-			dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-				cs40l26->revid);
-			return -EINVAL;
-		}
+		ret = cs40l26_pseq_add_write_reg_full(cs40l26,
+				CS40L26_VBBR_CONFIG, val, true);
 		if (ret)
 			return ret;
 	}
@@ -2713,42 +2697,13 @@ static int cs40l26_brownout_prevention_init(struct cs40l26_private *cs40l26)
 			return ret;
 		}
 
-		switch (cs40l26->revid) {
-		case CS40L26_REVID_A0:
-			ret = cs40l26_pseq_v1_add_pair(cs40l26,
-				CS40L26_VPBR_CONFIG, val,
-				CS40L26_PSEQ_V1_REPLACE);
-			break;
-		case CS40L26_REVID_A1:
-			ret = cs40l26_pseq_v2_add_write_reg_full(cs40l26,
-				CS40L26_VPBR_CONFIG, val,
-				true);
-			break;
-		default:
-			dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-				cs40l26->revid);
-			return -EINVAL;
-		}
+		ret = cs40l26_pseq_add_write_reg_full(cs40l26,
+				CS40L26_VPBR_CONFIG, val, true);
 		if (ret)
 			return ret;
 	}
 
 	return 0;
-}
-
-static int cs40l26_get_num_waves(struct cs40l26_private *cs40l26,
-		u32 *num_waves)
-{
-	int ret;
-	u32 reg;
-
-	ret = cl_dsp_get_reg(cs40l26->dsp, "NUM_OF_WAVES",
-			CL_DSP_XM_UNPACKED_TYPE,
-			CS40L26_VIBEGEN_ALGO_ID, &reg);
-	if (ret)
-		return ret;
-
-	return regmap_read(cs40l26->regmap, reg, num_waves);
 }
 
 static int cs40l26_verify_fw(struct cs40l26_private *cs40l26)
@@ -2761,7 +2716,7 @@ static int cs40l26_verify_fw(struct cs40l26_private *cs40l26)
 	if (ret)
 		return ret;
 
-	if (val != CS40L26_FW_ID) {
+	if (val != cs40l26->fw.id) {
 		dev_err(cs40l26->dev, "Invalid firmware ID: 0x%X\n", val);
 		return -EINVAL;
 	}
@@ -2808,22 +2763,8 @@ static int cs40l26_asp_config(struct cs40l26_private *cs40l26)
 		goto err_free;
 	}
 
-	switch (cs40l26->revid) {
-	case CS40L26_REVID_A0:
-		ret = cs40l26_pseq_v1_multi_add_pair(cs40l26, dsp1rx_config, 2,
-				CS40L26_PSEQ_V1_REPLACE);
-		break;
-	case CS40L26_REVID_A1:
-		ret = cs40l26_pseq_v2_multi_add_write_reg_full(cs40l26,
-				dsp1rx_config, 2, true);
-		break;
-	default:
-		dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-			cs40l26->revid);
-		ret = -EINVAL;
-		goto err_free;
-	}
-
+	ret = cs40l26_pseq_multi_add_write_reg_full(cs40l26, dsp1rx_config, 2,
+			true);
 	if (ret)
 		dev_err(cs40l26->dev, "Failed to add ASP config to pseq\n");
 
@@ -2854,21 +2795,63 @@ static int cs40l26_bst_dcm_config(struct cs40l26_private *cs40l26)
 			return ret;
 		}
 
-		switch (cs40l26->revid) {
-		case CS40L26_REVID_A0:
-			ret = cs40l26_pseq_v1_add_pair(cs40l26,
-						CS40L26_BST_DCM_CTL, val, true);
-			break;
-		case CS40L26_REVID_A1:
-			ret = cs40l26_pseq_v2_add_write_reg_full(cs40l26,
-						CS40L26_BST_DCM_CTL, val, true);
-			break;
-		default:
-			dev_err(cs40l26->dev, "Revid ID not supported: %02X\n",
-				cs40l26->revid);
-			ret = -EINVAL;
-		}
+		ret = cs40l26_pseq_add_write_reg_full(cs40l26,
+				CS40L26_BST_DCM_CTL, val, true);
 	}
+
+	return ret;
+}
+
+static int cs40l26_bst_ipk_config(struct cs40l26_private *cs40l26)
+{
+	u32 val, bst_ipk_ma = cs40l26->pdata.bst_ipk / 1000;
+	int ret;
+
+	if (bst_ipk_ma < CS40L26_BST_IPK_MILLIAMP_MIN ||
+			bst_ipk_ma > CS40L26_BST_IPK_MILLIAMP_MAX) {
+		val = CS40L26_BST_IPK_DEFAULT;
+		dev_dbg(cs40l26->dev, "Using default BST_IPK\n");
+	} else {
+		val = (bst_ipk_ma / 50) - 16;
+	}
+
+	ret = regmap_write(cs40l26->regmap, CS40L26_BST_IPK_CTL, val);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to update BST peak current\n");
+		return ret;
+	}
+
+	return cs40l26_pseq_add_write_reg_full(cs40l26, CS40L26_BST_IPK_CTL,
+			val, true);
+}
+
+static int cs40l26_owt_setup(struct cs40l26_private *cs40l26)
+{
+	u32 reg, offset, base;
+	int ret;
+
+	INIT_LIST_HEAD(&cs40l26->owt_head);
+	cs40l26->num_owt_effects = 0;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, CS40L26_WT_NAME_XM,
+		CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &base);
+	if (ret)
+		return ret;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "OWT_NEXT_XM",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
+	if (ret)
+		return ret;
+
+	ret = regmap_read(cs40l26->regmap, reg, &offset);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get wavetable offset\n");
+		return ret;
+	}
+
+	ret = regmap_write(cs40l26->regmap, reg, 0xFFFFFF);
+	if (ret)
+		dev_err(cs40l26->dev, "Failed to write OWT terminator\n");
 
 	return ret;
 }
@@ -2883,84 +2866,89 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 
 	ret = cs40l26_verify_fw(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = regmap_update_bits(regmap, CS40L26_PWRMGT_CTL,
-			CS40L26_MEM_RDY_MASK,
-			CS40L26_ENABLE << CS40L26_MEM_RDY_SHIFT);
+			CS40L26_MEM_RDY_MASK, 1 << CS40L26_MEM_RDY_SHIFT);
 	if (ret) {
 		dev_err(dev, "Failed to set MEM_RDY to initialize RAM\n");
-		goto err_out;
+		return ret;
 	}
 
 	if (cs40l26->fw_mode == CS40L26_FW_MODE_RAM) {
 		ret = cl_dsp_get_reg(cs40l26->dsp, "CALL_RAM_INIT",
-				CL_DSP_XM_UNPACKED_TYPE,
-				CS40L26_FW_ID, &reg);
+				CL_DSP_XM_UNPACKED_TYPE, cs40l26->fw.id, &reg);
 		if (ret)
-			goto err_out;
+			return ret;
 
-		ret = cs40l26_dsp_write(cs40l26, reg, CS40L26_ENABLE);
+		ret = cs40l26_dsp_write(cs40l26, reg, 1);
 		if (ret)
-			goto err_out;
+			return ret;
 	}
 
 	cs40l26->fw_loaded = true;
 
 	ret = cs40l26_dsp_start(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = cs40l26_pseq_init(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
+
+	ret = cs40l26_update_reg_defaults_via_pseq(cs40l26);
+	if (ret)
+		return ret;
 
 	ret = cs40l26_iseq_init(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = cs40l26_irq_update_mask(cs40l26, CS40L26_IRQ1_MASK_1,
 			BIT(CS40L26_IRQ1_VIRTUAL2_MBOX_WR), CS40L26_IRQ_UNMASK);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = cs40l26_wksrc_config(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = cs40l26_gpio_config(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = cs40l26_bst_dcm_config(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
+
+	ret = cs40l26_bst_ipk_config(cs40l26);
+	if (ret)
+		return ret;
 
 	ret = cs40l26_brownout_prevention_init(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	/* ensure firmware running */
 	ret = cl_dsp_get_reg(cs40l26->dsp, "HALO_STATE",
-			CL_DSP_XM_UNPACKED_TYPE, CS40L26_FW_ID,
-			&reg);
+			CL_DSP_XM_UNPACKED_TYPE, cs40l26->fw.id, &reg);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = regmap_read(regmap, reg, &val);
 	if (ret) {
 		dev_err(dev, "Failed to read HALO_STATE\n");
-		goto err_out;
+		return ret;
 	}
 
 	if (val != CS40L26_DSP_HALO_STATE_RUN) {
 		dev_err(dev, "Firmware in unexpected state: 0x%X\n", val);
-		goto err_out;
+		return ret;
 	}
 
 	ret = cs40l26_pm_runtime_setup(cs40l26);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	pm_runtime_get_sync(dev);
 
@@ -2980,54 +2968,253 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 		goto pm_err;
 
 	ret = cs40l26_get_num_waves(cs40l26, &cs40l26->num_waves);
-	if (!ret)
-		dev_info(dev, "%s loaded with %u RAM waveforms\n",
-				CS40L26_DEV_NAME, cs40l26->num_waves);
+	if (ret)
+		goto pm_err;
+
+	dev_info(dev, "%s loaded with %u RAM waveforms\n", CS40L26_DEV_NAME,
+			cs40l26->num_waves);
+
+	ret = cs40l26_owt_setup(cs40l26);
+	if (ret)
+		goto pm_err;
 
 pm_err:
 	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
-err_out:
-	enable_irq(cs40l26->irq);
+
 	return ret;
 }
 
-static void cs40l26_firmware_load(const struct firmware *fw, void *context)
+static int cs40l26_tuning_select_from_svc_le(struct cs40l26_private *cs40l26)
 {
-	struct cs40l26_private *cs40l26 = (struct cs40l26_private *)context;
-	struct device *dev = cs40l26->dev;
-	const struct firmware *coeff_fw;
-	int ret, i;
+	unsigned int reg, le = 0;
+	char svc_bin_file[CS40L26_TUNING_FILE_NAME_MAX_LEN];
+	char wt_bin_file[CS40L26_TUNING_FILE_NAME_MAX_LEN];
+	char n_str[2];
+	int ret, i, j;
 
-	if (!fw) {
-		dev_err(dev, "Failed to request firmware file\n");
-		return;
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
+			CS40L26_DSP_MBOX_CMD_LE_EST, CS40L26_DSP_MBOX_RESET);
+	if (ret)
+		goto pm_err;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "LE_EST_STATUS",
+			CL_DSP_YM_UNPACKED_TYPE, CS40l26_SVC_ALGO_ID, &reg);
+	if (ret)
+		goto pm_err;
+
+	for (i = 0; i < CS40L26_SVC_LE_MAX_ATTEMPTS; i++) {
+		usleep_range(5000, 5100);
+		ret = regmap_read(cs40l26->regmap, reg, &le);
+		if (ret) {
+			dev_err(cs40l26->dev, "Failed to get LE_EST_STATUS\n");
+			goto pm_err;
+		}
+
+		for (j = 0; j < cs40l26->num_svc_le_vals; j++) {
+			if (le >= cs40l26->svc_le_vals[j]->min &&
+					le <= cs40l26->svc_le_vals[j]->max) {
+				strncpy(svc_bin_file,
+					CS40L26_SVC_TUNING_FILE_PREFIX,
+					CS40L26_SVC_TUNING_FILE_PREFIX_LEN);
+
+				strncpy(wt_bin_file, CS40L26_WT_FILE_PREFIX,
+					CS40L26_WT_FILE_PREFIX_LEN);
+
+				snprintf(n_str, 2, "%d",
+						cs40l26->svc_le_vals[j]->n);
+
+				strncat(svc_bin_file, n_str, 2);
+				strncat(wt_bin_file, n_str, 2);
+
+				break;
+			}
+		}
+		if (j < cs40l26->num_svc_le_vals)
+			break;
 	}
 
-	cs40l26->pm_ready = false;
+	if (i == 2) {
+		dev_warn(cs40l26->dev, "Using default tunings\n");
+	} else {
+		strncat(svc_bin_file, CS40L26_TUNING_FILE_SUFFIX,
+				CS40L26_TUNING_FILE_SUFFIX_LEN);
+		strncat(wt_bin_file, CS40L26_TUNING_FILE_SUFFIX,
+				CS40L26_TUNING_FILE_SUFFIX_LEN);
 
-	ret = cl_dsp_firmware_parse(cs40l26->dsp, fw,
-			cs40l26->fw_mode == CS40L26_FW_MODE_RAM);
-	release_firmware(fw);
-	if (ret)
-		return;
+		strncpy(cs40l26->fw.coeff_files[0], wt_bin_file,
+				CS40L26_WT_FILE_CONCAT_NAME_LEN);
+		strncpy(cs40l26->fw.coeff_files[2], svc_bin_file,
+				CS40L26_SVC_TUNING_FILE_NAME_LEN);
+	}
+
+pm_err:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	kfree(cs40l26->svc_le_vals);
+
+	return ret;
+}
+
+static void cs40l26_coeff_load(struct cs40l26_private *cs40l26)
+{
+	struct device *dev = cs40l26->dev;
+	const struct firmware *coeff;
+	int i;
 
 	for (i = 0; i < cs40l26->fw.num_coeff_files; i++) {
-		request_firmware(&coeff_fw, cs40l26->fw.coeff_files[i],
-				dev);
-		if (!coeff_fw) {
+		request_firmware(&coeff, cs40l26->fw.coeff_files[i], dev);
+		if (!coeff) {
 			dev_warn(dev, "Continuing...\n");
 			continue;
 		}
 
-		if (cl_dsp_coeff_file_parse(cs40l26->dsp, coeff_fw))
+		if (cl_dsp_coeff_file_parse(cs40l26->dsp, coeff))
 			dev_warn(dev, "Continuing...\n");
 		else
-			dev_dbg(dev, "%s Loaded Successfully\n",
-				cs40l26->fw.coeff_files[i]);
+			dev_info(dev, "%s Loaded Successfully\n",
+					cs40l26->fw.coeff_files[i]);
+	}
+}
+
+static int cs40l26_firmware_load(struct cs40l26_private *cs40l26, u32 id)
+{
+	struct device *dev = cs40l26->dev;
+	const struct firmware *fw;
+	int ret;
+
+	if (cs40l26->fw.id == CS40L26_FW_ID)
+		ret = request_firmware(&fw, CS40L26_FW_FILE_NAME, dev);
+	else
+		ret = request_firmware(&fw, CS40L26_FW_CALIB_NAME, dev);
+
+	if (ret)
+		return ret;
+
+	ret = cl_dsp_firmware_parse(cs40l26->dsp, fw, true);
+	release_firmware(fw);
+
+	return ret;
+}
+
+int cs40l26_fw_swap(struct cs40l26_private *cs40l26, u32 id)
+{
+	struct device *dev = cs40l26->dev;
+	int ret;
+
+	if (id == cs40l26->fw.id) {
+		dev_warn(dev, "Cannot swap to same ID as running firmware\n");
+		return 0;
 	}
 
-	cs40l26_dsp_config(cs40l26);
+	cs40l26_pm_runtime_teardown(cs40l26);
+
+	cs40l26->fw_loaded = false;
+
+	disable_irq(cs40l26->irq);
+
+	ret = cs40l26_cl_dsp_init(cs40l26, id);
+	if (ret)
+		goto irq_exit;
+
+	ret = cs40l26_dsp_pre_config(cs40l26);
+	if (ret)
+		goto irq_exit;
+
+	ret = cs40l26_firmware_load(cs40l26, id);
+	if (ret)
+		goto irq_exit;
+
+	cs40l26_coeff_load(cs40l26);
+
+	ret = cs40l26_dsp_config(cs40l26);
+
+irq_exit:
+	enable_irq(cs40l26->irq);
+
+	return ret;
+}
+EXPORT_SYMBOL(cs40l26_fw_swap);
+
+static int cs40l26_update_reg_defaults(struct cs40l26_private *cs40l26)
+{
+	int ret;
+
+	ret = regmap_update_bits(cs40l26->regmap, CS40L26_TST_DAC_MSM_CONFIG,
+			CS40L26_SPK_DEFAULT_HIZ_MASK, 1 <<
+			CS40L26_SPK_DEFAULT_HIZ_SHIFT);
+
+	return ret;
+}
+
+static int cs40l26_handle_svc_le_nodes(struct cs40l26_private *cs40l26)
+{
+	struct device *dev = cs40l26->dev;
+	int i, init_count, node_count = 0;
+	struct fwnode_handle *child;
+	unsigned int min, max, index;
+	const char *node_name;
+
+	init_count = device_get_child_node_count(dev);
+	if (!init_count)
+		return 0;
+
+	cs40l26->svc_le_vals = kcalloc(init_count,
+			sizeof(struct cs40l26_svc_le *), GFP_KERNEL);
+
+	device_for_each_child_node(dev, child) {
+		node_name = fwnode_get_name(child);
+
+		if (strncmp(node_name, CS40L26_SVC_DT_PREFIX, 6))
+			continue;
+
+		if (fwnode_property_read_u32(child, "cirrus,min", &min)) {
+			dev_err(dev, "No minimum value for SVC LE node\n");
+			continue;
+		}
+
+		if (fwnode_property_read_u32(child, "cirrus,max", &max)) {
+			dev_err(dev, "No maximum value for SVC LE node\n");
+			continue;
+		}
+
+		if (max <= min) {
+			dev_err(dev, "Max <= Min, SVC LE node malformed\n");
+			continue;
+		}
+
+		if (fwnode_property_read_u32(child, "cirrus,index", &index)) {
+			dev_err(dev, "No index specified for SVC LE node\n");
+			continue;
+		}
+
+		for (i = 0; i < node_count; i++) {
+			if (index == cs40l26->svc_le_vals[i]->n)
+				break;
+		}
+
+		if (i < node_count) {
+			dev_err(dev, "SVC LE nodes must have unique index\n");
+			return -EINVAL;
+		}
+
+		cs40l26->svc_le_vals[node_count] =
+			kzalloc(sizeof(struct cs40l26_svc_le), GFP_KERNEL);
+
+		cs40l26->svc_le_vals[node_count]->min = min;
+		cs40l26->svc_le_vals[node_count]->max = max;
+		cs40l26->svc_le_vals[node_count]->n = index;
+		node_count++;
+	}
+
+	if (node_count != init_count)
+		dev_warn(dev, "%d platform nodes unused for SVC LE\n",
+				init_count - node_count);
+
+	return node_count;
 }
 
 static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
@@ -3035,6 +3222,7 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	struct device *dev = cs40l26->dev;
 	struct device_node *np = dev->of_node;
 	const char *str = NULL;
+	int ret;
 	u32 val;
 
 	if (!np) {
@@ -3113,6 +3301,17 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	else
 		cs40l26->pdata.bst_dcm_en = CS40L26_BST_DCM_EN_DEFAULT;
 
+	if (!of_property_read_u32(np, "cirrus,bst-ipk-microamp", &val))
+		cs40l26->pdata.bst_ipk = val;
+	else
+		cs40l26->pdata.bst_ipk = 0;
+
+	ret = cs40l26_handle_svc_le_nodes(cs40l26);
+	if (ret < 0)
+		cs40l26->num_svc_le_vals = 0;
+	else
+		cs40l26->num_svc_le_vals = ret;
+
 	return 0;
 }
 
@@ -3135,6 +3334,15 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	INIT_WORK(&cs40l26->vibe_start_work, cs40l26_vibe_start_worker);
 	INIT_WORK(&cs40l26->vibe_stop_work, cs40l26_vibe_stop_worker);
 	INIT_WORK(&cs40l26->set_gain_work, cs40l26_set_gain_worker);
+
+	cs40l26->asp_workqueue = alloc_ordered_workqueue("asp_workqueue",
+			WQ_HIGHPRI);
+	if (!cs40l26->asp_workqueue) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	INIT_WORK(&cs40l26->asp_work, cs40l26_asp_worker);
 
 	ret = devm_regulator_bulk_get(dev, CS40L26_NUM_SUPPLIES,
 			cs40l26_supplies);
@@ -3177,7 +3385,7 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	usleep_range(CS40L26_MIN_RESET_PULSE_WIDTH,
 			CS40L26_MIN_RESET_PULSE_WIDTH + 100);
 
-	gpiod_set_value_cansleep(cs40l26->reset_gpio, CS40L26_ENABLE);
+	gpiod_set_value_cansleep(cs40l26->reset_gpio, 1);
 
 	usleep_range(CS40L26_CONTROL_PORT_READY_DELAY,
 			CS40L26_CONTROL_PORT_READY_DELAY + 100);
@@ -3186,6 +3394,12 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	if (ret)
 		goto err;
 
+	ret = cs40l26_update_reg_defaults(cs40l26);
+	if (ret) {
+		dev_err(dev, "Failed to update reg defaults\n");
+		goto err;
+	}
+
 	ret = devm_request_threaded_irq(dev, cs40l26->irq, NULL, cs40l26_irq,
 			IRQF_ONESHOT | IRQF_SHARED | IRQF_TRIGGER_LOW,
 			"cs40l26", cs40l26);
@@ -3193,23 +3407,54 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 		dev_err(dev, "Failed to request threaded IRQ\n");
 		goto err;
 	}
+
 	/* the /ALERT pin may be asserted prior to firmware initialization.
 	 * Disable the interrupt handler until firmware has downloaded
 	 * so erroneous interrupt requests are ignored
 	 */
 	disable_irq(cs40l26->irq);
 
-	ret = cs40l26_cl_dsp_init(cs40l26);
+	cs40l26->pm_ready = false;
+	cs40l26->fw_loaded = false;
+
+	ret = cs40l26_cl_dsp_init(cs40l26, CS40L26_FW_ID);
 	if (ret)
-		goto err;
+		goto irq_err;
 
 	ret = cs40l26_dsp_pre_config(cs40l26);
 	if (ret)
-		goto err;
+		goto irq_err;
 
-	request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
-			CS40L26_FW_FILE_NAME, dev, GFP_KERNEL, cs40l26,
-			cs40l26_firmware_load);
+	ret = cs40l26_firmware_load(cs40l26, cs40l26->fw.id);
+	if (ret)
+		goto irq_err;
+
+	if (cs40l26->num_svc_le_vals) {
+		ret = cs40l26_dsp_config(cs40l26);
+		if (ret)
+			goto irq_err;
+
+		enable_irq(cs40l26->irq);
+
+		ret = cs40l26_tuning_select_from_svc_le(cs40l26);
+		if (ret)
+			goto err;
+
+		disable_irq(cs40l26->irq);
+		cs40l26_pm_runtime_teardown(cs40l26);
+
+		ret = cs40l26_dsp_pre_config(cs40l26);
+		if (ret)
+			goto err;
+	}
+
+	cs40l26_coeff_load(cs40l26);
+
+	ret = cs40l26_dsp_config(cs40l26);
+	if (ret)
+		goto irq_err;
+
+	enable_irq(cs40l26->irq);
 
 	ret = cs40l26_input_init(cs40l26);
 	if (ret)
@@ -3224,6 +3469,8 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 
 	return 0;
 
+irq_err:
+	enable_irq(cs40l26->irq);
 err:
 	cs40l26_remove(cs40l26);
 
@@ -3246,10 +3493,15 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 		cs40l26_pm_runtime_teardown(cs40l26);
 
 	if (cs40l26->vibe_workqueue) {
-		destroy_workqueue(cs40l26->vibe_workqueue);
 		cancel_work_sync(&cs40l26->vibe_start_work);
 		cancel_work_sync(&cs40l26->vibe_stop_work);
 		cancel_work_sync(&cs40l26->set_gain_work);
+		destroy_workqueue(cs40l26->vibe_workqueue);
+	}
+
+	if (cs40l26->asp_workqueue) {
+		cancel_work_sync(&cs40l26->asp_work);
+		destroy_workqueue(cs40l26->asp_workqueue);
 	}
 
 	if (vp_consumer)
@@ -3258,10 +3510,7 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 	if (va_consumer)
 		regulator_disable(va_consumer);
 
-	gpiod_set_value_cansleep(cs40l26->reset_gpio, CS40L26_DISABLE);
-
-	if (cs40l26->vibe_timer.function)
-		hrtimer_cancel(&cs40l26->vibe_timer);
+	gpiod_set_value_cansleep(cs40l26->reset_gpio, 0);
 
 	if (cs40l26->vibe_init_success) {
 #if !IS_ENABLED(CONFIG_INPUT_CS40L26_ATTR_UNDER_BUS)

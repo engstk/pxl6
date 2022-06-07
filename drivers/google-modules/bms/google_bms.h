@@ -29,6 +29,7 @@ struct device_node;
 #define GBMS_CHG_TEMP_NB_LIMITS_MAX 10
 #define GBMS_CHG_VOLT_NB_LIMITS_MAX 5
 #define GBMS_CHG_ALG_BUF 500
+#define GBMS_CHG_TOPOFF_NB_LIMITS_MAX 6
 #define GBMS_AACR_DATA_MAX 10
 
 struct gbms_chg_profile {
@@ -38,6 +39,8 @@ struct gbms_chg_profile {
 	s32 temp_limits[GBMS_CHG_TEMP_NB_LIMITS_MAX];
 	int volt_nb_limits;
 	s32 volt_limits[GBMS_CHG_VOLT_NB_LIMITS_MAX];
+	int topoff_nb_limits;
+	s32 topoff_limits[GBMS_CHG_TOPOFF_NB_LIMITS_MAX];
 	/* Array of constant current limits */
 	s32 *cccm_limits;
 	/* used to fill table  */
@@ -247,6 +250,7 @@ enum chg_health_state {
 
 /* tier index used to log the session */
 enum gbms_stats_tier_idx_t {
+	GBMS_STATS_AC_TI_DISABLE_DIALOG = -6,
 	GBMS_STATS_AC_TI_DEFENDER = -5,
 	GBMS_STATS_AC_TI_DISABLE_SETTING_STOP = -4,
 	GBMS_STATS_AC_TI_DISABLE_MISC = -3,

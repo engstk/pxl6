@@ -13,6 +13,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_connector.h>
 #include <drm/samsung_drm.h>
+#include <drm/drm_dsc.h>
 
 #define MIN_WIN_BLOCK_WIDTH	8
 #define MIN_WIN_BLOCK_HEIGHT	1
@@ -51,6 +52,8 @@ struct exynos_display_dsc {
 	unsigned int dsc_count;
 	unsigned int slice_count;
 	unsigned int slice_height;
+
+	const struct drm_dsc_config *cfg;
 };
 
 struct exynos_display_partial {

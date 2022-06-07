@@ -5958,12 +5958,12 @@ static int wl_cfgscan_acs_parse_parameter_save(int *pLen, uint32 *pList, chanspe
 	return ret;
 }
 
-static int wl_cfgscan_acs_parse_parameter(int *pLen, uint32 *pList, unsigned int chanspec,
+static int wl_cfgscan_acs_parse_parameter(struct bcm_cfg80211 *cfg,
+		int *pLen, uint32 *pList, unsigned int chanspec,
 		drv_acs_params_t *pParameter)
 {
-	unsigned int chspec_ctl_ch = 0x0;
-	unsigned int chspec_band, chspec_bw, chspec_sb;
-	uint32 qty = 0, i = 0, channel = 0;
+	unsigned int chspec = 0, chspec_ctl_ch = 0, chspec_band = 0, chspec_bw = 0, chspec_sb = 0;
+	uint32 qty = 0, channel = 0, bw = 0;
 	s32 ret = 0;
 
 	do {
@@ -5975,6 +5975,11 @@ static int wl_cfgscan_acs_parse_parameter(int *pLen, uint32 *pList, unsigned int
 
 		chspec_band = CHSPEC_BAND((chanspec_t)chanspec);
 		channel = wf_chspec_ctlchan((chanspec_t)chanspec);
+		if (channel != 165) {
+			bw = pParameter->ch_width;
+		} else {
+			bw = 20;	/* ch165 supports bw20 only */
+		}
 		qty = *pLen;
 
 		/* Handle 20MHz case for 2G and 6G (PSC) */
@@ -5984,138 +5989,86 @@ static int wl_cfgscan_acs_parse_parameter(int *pLen, uint32 *pList, unsigned int
 			chspec_bw = WL_CHANSPEC_BW_20;
 			chspec_ctl_ch = channel;
 			chspec_sb = WL_CHANSPEC_CTL_SB_NONE;
-			chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
+			chspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
 					chspec_bw | chspec_sb);
-			wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
+			wl_cfgscan_acs_parse_parameter_save(&qty, pList, chspec);
 			*pLen = qty;
 			return 0;
 		}
 
-		/* HT20 */
-		chspec_bw = WL_CHANSPEC_BW_20;
-		if (((pParameter->ht_enabled) || (pParameter->ht40_enabled) ||
-				(pParameter->vht_enabled) || (pParameter->he_enabled)) &&
-				(20 == pParameter->ch_width)) {
-			chspec_ctl_ch = channel;
-			chspec_sb = WL_CHANSPEC_CTL_SB_NONE;
-			chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-					chspec_bw | chspec_sb);
-			WL_TRACE(("%s: checking HT20  [%d] = 0x%X\n", __FUNCTION__, qty, chanspec));
-			wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-		}
-
-		/* HT40 */
-		chspec_bw = WL_CHANSPEC_BW_40;
-		if (((pParameter->ht40_enabled) || (pParameter->vht_enabled) ||
-				(pParameter->he_enabled)) && (pParameter->ch_width == 40) &&
-				(channel != 165)) {
-			for (i = 0; i <= CH_20MHZ_APART * 2; i++) {
-				chspec_ctl_ch = channel + (i - CH_20MHZ_APART);
-				/* L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LOWER;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("%s: checking HT40 U  [%d] = 0x%X\n",
-						__FUNCTION__, qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* R-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_UPPER;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("%s: checking HT40 L  [%d] = 0x%X\n",
-						__FUNCTION__, qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
+		/* bw160 */
+		if ((bw == 160) && (pParameter->he_enabled)) {
+			chspec = wf_create_chspec_from_primary(channel,
+				WL_CHANSPEC_BW_160, chspec_band);
+#ifdef WL_CELLULAR_CHAN_AVOID
+			if (!wl_cellavoid_is_safe(cfg->cellavoid_info, chspec)) {
+				chspec = INVCHANSPEC;
+			}
+#endif /* WL_CELLULAR_CHAN_AVOID */
+			if (chspec != INVCHANSPEC) {
+				WL_INFORM_MEM(("added %d/160 (0x%x)\n", channel, chspec));
+				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chspec);
+			} else {
+				WL_INFORM_MEM(("failed %d/160 (0x%x)\n", channel, chspec));
+				bw = 80;	/* downgrade if not found proper chanspec */
 			}
 		}
 
-		/* HT80 */
-		chspec_bw = WL_CHANSPEC_BW_80;
-		if ((pParameter->vht_enabled || pParameter->he_enabled) &&
-				(80 == pParameter->ch_width) &&
-				(channel != 165)) {
-			for (i = 0; i <= CH_40MHZ_APART * 2; i++) {
-				chspec_ctl_ch = channel + (i - CH_40MHZ_APART);
-				/* L-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT80 LL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* L-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT80 LU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_UL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT80 UL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_UU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT80 UU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
+		/* bw80 */
+		if ((bw == 80) &&
+				(pParameter->vht_enabled || pParameter->he_enabled)) {
+			chspec = wf_create_chspec_from_primary(channel,
+				WL_CHANSPEC_BW_80, chspec_band);
+#ifdef WL_CELLULAR_CHAN_AVOID
+			if (!wl_cellavoid_is_safe(cfg->cellavoid_info, chspec)) {
+				chspec = INVCHANSPEC;
+			}
+#endif /* WL_CELLULAR_CHAN_AVOID */
+			if (chspec != INVCHANSPEC) {
+				WL_INFORM_MEM(("added %d/80 (0x%x)\n", channel, chspec));
+				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chspec);
+			} else {
+				WL_INFORM_MEM(("failed %d/80 (0x%x)\n", channel, chspec));
+				bw = 40;	/* downgrade if not found proper chanspec */
 			}
 		}
 
-		/* HT160 */
-		chspec_bw = WL_CHANSPEC_BW_160;
-		if (pParameter->he_enabled && (160 == pParameter->ch_width) &&
-				(channel != 165)) {
-			for (i = 0; i <= CH_80MHZ_APART * 2; i++) {
-				chspec_ctl_ch = channel + (i - CH_80MHZ_APART);
-				/* L-L-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LLL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 LLL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* L-L-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LLU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 LLU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* L-U-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LUL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 LUL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* L-U-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_LUU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 LUU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-L-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_ULL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 ULL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-L-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_ULU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 ULU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-U-L-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_UUL;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 UUL  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
-				/* U-U-U-sideband */
-				chspec_sb = WL_CHANSPEC_CTL_SB_UUU;
-				chanspec = (chanspec_t)(chspec_ctl_ch | chspec_band |
-						chspec_bw | chspec_sb);
-				WL_TRACE(("checking HT160 UUU  [%d] = 0x%X\n", qty, chanspec));
-				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chanspec);
+		/* bw40 */
+		if ((bw == 40) &&
+				((pParameter->ht40_enabled) || (pParameter->vht_enabled) ||
+				(pParameter->he_enabled))) {
+			chspec = wf_create_chspec_from_primary(channel,
+				WL_CHANSPEC_BW_40, chspec_band);
+#ifdef WL_CELLULAR_CHAN_AVOID
+			if (!wl_cellavoid_is_safe(cfg->cellavoid_info, chspec)) {
+				chspec = INVCHANSPEC;
+			}
+#endif /* WL_CELLULAR_CHAN_AVOID */
+			if (chspec != INVCHANSPEC) {
+				WL_INFORM_MEM(("added %d/40 (0x%x)\n", channel, chspec));
+				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chspec);
+			} else {
+				WL_INFORM_MEM(("failed %d/40 (0x%x)\n", channel, chspec));
+				bw = 20;	/* downgrade if not found proper chanspec */
+			}
+		}
+
+		/* bw20 */
+		if ((bw == 20) &&
+				((pParameter->ht_enabled) || (pParameter->ht40_enabled) ||
+				(pParameter->vht_enabled) || (pParameter->he_enabled))) {
+			chspec = wf_create_chspec_from_primary(channel,
+				WL_CHANSPEC_BW_20, chspec_band);
+#ifdef WL_CELLULAR_CHAN_AVOID
+			if (!wl_cellavoid_is_safe(cfg->cellavoid_info, chspec)) {
+				chspec = INVCHANSPEC;
+			}
+#endif /* WL_CELLULAR_CHAN_AVOID */
+			if (chspec != INVCHANSPEC) {
+				WL_INFORM_MEM(("added %d/20 (0x%x)\n", channel, chspec));
+				wl_cfgscan_acs_parse_parameter_save(&qty, pList, chspec);
+			} else {
+				WL_INFORM_MEM(("failed %d/20 (0x%x)\n", channel, chspec));
 			}
 		}
 
@@ -6693,7 +6646,7 @@ wl_convert_freqlist_to_chspeclist(struct bcm_cfg80211 *cfg,
 		for (i = 0; i < freq_list_len; i++) {
 			if (CHSPEC_CHANNEL(chspeclist[i]) == APCS_DEFAULT_5G_CH) {
 				WL_INFORM_MEM(("Def ACS chanspec:0x%x\n", chspeclist[i]));
-				wl_cfgscan_acs_parse_parameter(req_len, pList,
+				wl_cfgscan_acs_parse_parameter(cfg, req_len, pList,
 					chspeclist[i], parameter);
 				goto exit;
 			}
@@ -6765,7 +6718,7 @@ success:
 		}
 
 		WL_INFORM_MEM(("ACS chanspec:0x%x\n", p_chspec_list[i]));
-		wl_cfgscan_acs_parse_parameter(req_len, pList,
+		wl_cfgscan_acs_parse_parameter(cfg, req_len, pList,
 			p_chspec_list[i], parameter);
 	}
 
@@ -6934,7 +6887,7 @@ wl_cfgscan_acs(struct wiphy *wiphy,
 			for (i = 0; i < chan_list_len; i++) {
 				/* TODO chanspec needs to be created */
 				chanspec = pElem_chan[i];
-				wl_cfgscan_acs_parse_parameter(&req_len, pList,
+				wl_cfgscan_acs_parse_parameter(cfg, &req_len, pList,
 					chanspec, parameter);
 			}
 		}

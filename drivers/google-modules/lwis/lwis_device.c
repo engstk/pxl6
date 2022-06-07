@@ -1119,6 +1119,19 @@ bool lwis_i2c_dev_is_in_use(struct lwis_device *lwis_dev)
 	return false;
 }
 
+void lwis_device_info_dump(const char *name, void (*func)(struct lwis_device *))
+{
+	struct lwis_device *lwis_dev_it;
+
+	pr_info("LWIS Device Info Dump: %s\n\n", name);
+
+	mutex_lock(&core.lock);
+	list_for_each_entry (lwis_dev_it, &core.lwis_dev_list, dev_list) {
+		func(lwis_dev_it);
+	}
+	mutex_unlock(&core.lock);
+}
+
 /*
  *  lwis_base_probe: Create a device instance for each of the LWIS device.
  */
@@ -1234,6 +1247,7 @@ void lwis_base_unprobe(struct lwis_device *unprobe_lwis_dev)
 			}
 			/* Release device regulator list */
 			if (lwis_dev->regulators) {
+				lwis_regulator_put_all(lwis_dev->regulators);
 				lwis_regulator_list_free(lwis_dev->regulators);
 				lwis_dev->regulators = NULL;
 			}
@@ -1473,8 +1487,10 @@ static void __exit lwis_driver_exit(void)
 		if (lwis_dev->irqs)
 			lwis_interrupt_list_free(lwis_dev->irqs);
 		/* Release device regulator list */
-		if (lwis_dev->regulators)
+		if (lwis_dev->regulators) {
+			lwis_regulator_put_all(lwis_dev->regulators);
 			lwis_regulator_list_free(lwis_dev->regulators);
+		}
 		/* Release device phy list */
 		if (lwis_dev->phys)
 			lwis_phy_list_free(lwis_dev->phys);

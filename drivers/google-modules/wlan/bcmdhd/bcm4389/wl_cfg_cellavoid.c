@@ -1578,6 +1578,62 @@ wl_cellavoid_save_input_params(struct bcm_cfg80211 *cfg, wl_cellavoid_param_t *p
 	return BCME_OK;
 }
 
+static chanspec_bw_t
+wl_cellavoid_next_bw(chanspec_bw_t bw)
+{
+	/* cell avoidance supports upto bw80 */
+	switch (bw) {
+	case WL_CHANSPEC_BW_20:
+		bw = WL_CHANSPEC_BW_40;
+		break;
+	case WL_CHANSPEC_BW_40:
+		bw = WL_CHANSPEC_BW_80;
+		break;
+	default:
+		bw = INVCHANSPEC;
+		break;
+	}
+	return bw;
+}
+
+static void
+wl_cellavoid_update_cell_channels(wl_cellavoid_info_t *cellavoid_info,
+	chanspec_band_t band, int ch, chanspec_bw_t start_bw, int8 pwr_cap)
+{
+	chanspec_bw_t bw;
+	chanspec_t chspec_upper;
+	wl_cellavoid_chan_info_t *chan_info;
+
+	if (band == WL_CHANSPEC_BAND_5G && ch != 165) {
+		for (bw = start_bw; bw != INVCHANSPEC; bw = wl_cellavoid_next_bw(bw)) {
+			chspec_upper = wf_create_chspec_from_primary(ch, bw, band);
+			if (!wf_chspec_valid(chspec_upper)) {
+				continue;
+			}
+			if (wl_cellavoid_get_chan_info(cellavoid_info, chspec_upper)
+					== CELLAVOID_STATE_CH_SAFE) {
+				/* get chan_info for moving to cell list from avail list */
+				chan_info =
+					wl_cellavoid_get_chan_info_from_avail_chan_list(
+					cellavoid_info, chspec_upper);
+				if (chan_info == NULL) {
+					/* create new one if the chan_info doesn't exist */
+					chan_info =
+						wl_cellavoid_alloc_chan_info(
+						cellavoid_info, chspec_upper);
+				}
+				if (chan_info != NULL) {
+					chan_info->pwr_cap = pwr_cap;
+					wl_cellavoid_move_chan_info_to_cell_chan_list(
+						cellavoid_info, chan_info);
+					WL_INFORM_MEM(("added chanspec 0x%x to cell list\n",
+						chspec_upper));
+				}
+			}
+		}
+	}
+}
+
 static int
 wl_cellavoid_set_cell_channels(struct bcm_cfg80211 *cfg, wl_cellavoid_param_t *param)
 {
@@ -1644,6 +1700,10 @@ wl_cellavoid_set_cell_channels(struct bcm_cfg80211 *cfg, wl_cellavoid_param_t *p
 
 			/* Move this chan info to the unsafe channel list(cellular channel list */
 			wl_cellavoid_move_chan_info_to_cell_chan_list(cellavoid_info, chan_info);
+
+			/* update all possible channels if there is missing channel from host */
+			wl_cellavoid_update_cell_channels(cellavoid_info,
+				param_band, param_ch, param_bw, param->chan_param[i].pwr_cap);
 		}
 	}
 

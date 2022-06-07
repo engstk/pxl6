@@ -8676,6 +8676,10 @@ wl_apply_per_sta_conn_suspend_settings(struct bcm_cfg80211 *cfg,
 #ifdef ENABLE_IPMCAST_FILTER
 	{
 		int l2_filter = suspend ? TRUE : FALSE;
+		if (dhd->op_mode & DHD_FLAG_HOSTAP_MODE) {
+			/* If AP operates, ipmcast_l2filter is not allowed. */
+			l2_filter = FALSE;
+		}
 		err = wldev_iovar_setint_no_wl(dev, "ipmcast_l2filter", l2_filter);
 		if (err < 0) {
 			WL_ERR(("failed to set ipmcast_l2filter (%d)\n", err));

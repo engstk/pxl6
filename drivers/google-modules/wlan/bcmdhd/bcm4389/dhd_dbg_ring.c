@@ -237,6 +237,7 @@ dhd_dbg_ring_push(dhd_dbg_ring_t *ring, dhd_dbg_ring_entry_t *hdr, void *data)
 	uint32 w_len;
 	uint32 avail_size;
 	dhd_dbg_ring_entry_t *w_entry, *r_entry;
+	int ret;
 
 	if (!ring || !hdr || !data) {
 		return BCME_BADARG;
@@ -354,10 +355,22 @@ dhd_dbg_ring_push(dhd_dbg_ring_t *ring, dhd_dbg_ring_entry_t *hdr, void *data)
 
 	w_entry = (dhd_dbg_ring_entry_t *)((uint8 *)ring->ring_buf + ring->wp);
 	/* header */
-	memcpy(w_entry, hdr, DBG_RING_ENTRY_SIZE);
+	ret = memcpy_s(w_entry, avail_size, hdr, DBG_RING_ENTRY_SIZE);
+	if (unlikely(ret)) {
+		DHD_ERROR((" memcpy_s() error : %d, destsz: %d, n: %d\n",
+			ret, avail_size, (int)DBG_RING_ENTRY_SIZE));
+		return BCME_ERROR;
+	}
 	w_entry->len = hdr->len;
 	/* payload */
-	memcpy((char *)w_entry + DBG_RING_ENTRY_SIZE, data, w_entry->len);
+	avail_size -= DBG_RING_ENTRY_SIZE;
+	ret = memcpy_s((char *)w_entry + DBG_RING_ENTRY_SIZE,
+		avail_size, data, w_entry->len);
+	if (unlikely(ret)) {
+		DHD_ERROR((" memcpy_s() error : %d, destsz: %d, n: %d\n",
+			ret, avail_size, w_entry->len));
+		return BCME_ERROR;
+	}
 	/* update write pointer */
 	ring->wp += w_len;
 

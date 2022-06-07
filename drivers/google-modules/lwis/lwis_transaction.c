@@ -370,7 +370,14 @@ int lwis_transaction_init(struct lwis_client *client)
 	INIT_LIST_HEAD(&client->transaction_process_queue_tasklet);
 	tasklet_init(&client->transaction_tasklet, transaction_tasklet_func, (unsigned long)client);
 	INIT_LIST_HEAD(&client->transaction_process_queue);
-	client->transaction_wq = create_workqueue("lwistran");
+	if (client->lwis_dev->adjust_thread_priority != 0) {
+		/* Since I2C transactions can only be executed in workqueues, putting them in high
+		 * priority to avoid scheduling delays. */
+		client->transaction_wq = alloc_ordered_workqueue(
+			"lwistran-i2c", __WQ_LEGACY | WQ_MEM_RECLAIM | WQ_HIGHPRI);
+	} else {
+		client->transaction_wq = create_workqueue("lwistran");
+	}
 	INIT_WORK(&client->transaction_work, transaction_work_func);
 	client->transaction_counter = 0;
 	hash_init(client->transaction_list);

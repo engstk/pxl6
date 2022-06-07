@@ -3348,10 +3348,9 @@ static int concate_revision_bcm4359(dhd_bus_t *bus, char *fw_path, char *nv_path
 }
 
 #define NVRAM_FEM_MURATA	"_murata"
-#if defined(SUPPORT_MIXED_MODULES) && defined(USE_CID_CHECK) && defined(DHD_COREDUMP) \
-	&& defined(SUPPORT_MULTIPLE_REVISION_MAP)
+#if defined(DHD_FW_COREDUMP) && defined(DHD_COREDUMP)
 extern char map_path[PATH_MAX];
-#endif /* SUPPORT_MIXED_MODULES && USE_CID_CHECK && DHD_COREDUMP && SUPPORT_MULTIPLE_REVISION_MAP */
+#endif /* DHD_FW_COREDUMP && DHD_COREDUMP */
 
 static int
 concate_revision_from_cisinfo(dhd_bus_t *bus, char *fw_path, char *nv_path)
@@ -3386,6 +3385,9 @@ concate_revision_from_cisinfo(dhd_bus_t *bus, char *fw_path, char *nv_path)
 		}
 #endif /* BCM4361_CHIP */
 		strncat(nv_path, info->nvram_ext, strlen(info->nvram_ext));
+#if defined(SUPPORT_MULTIPLE_NVRAM) || defined(SUPPORT_MULTIPLE_CLMBLOB)
+		dhd_set_platform_ext_name_for_chip_version(info->nvram_ext);
+#endif /* SUPPORT_MULTIPLE_NVRAM || SUPPORT_MULTIPLE_CLMBLOB */
 		strncat(fw_path, info->fw_ext, strlen(info->fw_ext));
 #if defined(DHD_COREDUMP) && defined(SUPPORT_MULTIPLE_REVISION_MAP)
 		if (!bcmstrnstr(map_path, PATH_MAX, info->fw_ext, strlen(info->fw_ext)))
@@ -3448,7 +3450,7 @@ vendor_concat_revision(dhd_bus_t *bus, char *fw_path, char *nv_path)
 	if (!bcmstrnstr(map_path, PATH_MAX, tag, strlen(tag))) {
 		strlcat(map_path, tag, PATH_MAX);
 	}
-#endif /* DHD_COREDUMP  && SUPPORT_MULTIPLE_REVISION_MAP */
+#endif /* DHD_COREDUMP && SUPPORT_MULTIPLE_REVISION_MAP */
 	return ret;
 }
 #endif /* CONCAT_DEF_REV_FOR_NOMATCH_VID */

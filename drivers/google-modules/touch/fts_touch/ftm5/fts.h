@@ -315,6 +315,7 @@ struct fts_hw_platform_data {
 	int udfps_y;
 	bool auto_fw_update;
 	bool separate_save_golden_ms_raw_cmd;
+	bool skip_fpi_for_unset_mpflag;
 	bool sensor_inverted_x;
 	bool sensor_inverted_y;
 	bool tx_rx_dir_swap; /* Set as TRUE if Tx direction is same as x-axis. */
@@ -833,8 +834,11 @@ struct fts_ts_info {
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_OFFLOAD)
 	struct touch_offload_context offload;
 	struct delayed_work offload_resume_work;
+	int touch_offload_active_coords;
 #endif
 
+	bool enable_palm_data_dump;
+	struct delayed_work palm_data_dump_work;
 	struct delayed_work fwu_work;	/* Work for fw update */
 	struct workqueue_struct *fwu_workqueue;	/* Fw update work queue */
 	event_dispatch_handler_t *event_dispatch_table;	/* Dispatch table */

@@ -33,6 +33,12 @@ enum dsim_state {
 	DSIM_STATE_BYPASS,	/* bypass mode, dsim shouldn't be used */
 };
 
+enum dsim_dual_dsi {
+	DSIM_DUAL_DSI_NONE,
+	DSIM_DUAL_DSI_MAIN,
+	DSIM_DUAL_DSI_SEC,
+};
+
 struct dsim_pll_features {
 	u64 finput;
 	u64 foptimum;
@@ -107,6 +113,8 @@ struct dsim_device {
 	int idle_ip_index;
 	u8 total_pend_ph;
 	u16 total_pend_pl;
+
+	enum dsim_dual_dsi dual_dsi;
 };
 
 extern struct dsim_device *dsim_drvdata[MAX_DSI_CNT];
@@ -118,10 +126,31 @@ extern struct dsim_device *dsim_drvdata[MAX_DSI_CNT];
 
 struct decon_device;
 
+static inline struct dsim_device *
+exynos_get_dual_dsi(enum dsim_dual_dsi dual_dsi)
+{
+	int i;
+	struct dsim_device *dsim = NULL;
+
+	for (i = 0; i < MAX_DSI_CNT; i++) {
+		dsim = dsim_drvdata[i];
+		if (dsim->dual_dsi == dual_dsi)
+			return dsim;
+	}
+
+	return NULL;
+}
+
 static inline const struct decon_device *
 dsim_get_decon(const struct dsim_device *dsim)
 {
 	const struct drm_crtc *crtc = dsim->encoder.crtc;
+	struct dsim_device *main_dsi;
+
+	if (dsim->dual_dsi == DSIM_DUAL_DSI_SEC) {
+		main_dsi = exynos_get_dual_dsi(DSIM_DUAL_DSI_MAIN);
+		crtc = main_dsi->encoder.crtc;
+	}
 
 	if (!crtc)
 		return NULL;

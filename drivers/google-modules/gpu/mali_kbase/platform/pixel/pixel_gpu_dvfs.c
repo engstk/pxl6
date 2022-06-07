@@ -625,7 +625,9 @@ int gpu_dvfs_init(struct kbase_device *kbdev)
 	}
 
 	/* Get the ASV table */
+	mutex_lock(&pc->dvfs.lock);
 	pc->dvfs.table_size = gpu_dvfs_update_asv_table(kbdev);
+	mutex_unlock(&pc->dvfs.lock);
 	if (pc->dvfs.table_size < 0) {
 		ret = -EINVAL;
 		goto done;

@@ -53,6 +53,35 @@ enrollment_list_find_or_create(struct lwis_client *client, dma_addr_t dma_vaddr)
 	return (list == NULL) ? enrollment_list_create(client, dma_vaddr) : list;
 }
 
+static void dump_total_enrolled_buffer_size(struct lwis_device *lwis_dev)
+{
+	struct lwis_client *client;
+	unsigned long flags;
+	int i;
+	struct lwis_buffer_enrollment_list *enrollment_list;
+	struct lwis_enrolled_buffer *buffer;
+	size_t total_enrolled_size = 0;
+	int num_enrolled_buffers = 0;
+
+	spin_lock_irqsave(&lwis_dev->lock, flags);
+	list_for_each_entry (client, &lwis_dev->clients, node) {
+		if (hash_empty(client->enrolled_buffers)) {
+			continue;
+		}
+		hash_for_each (client->enrolled_buffers, i, enrollment_list, node) {
+			buffer = list_first_entry(&enrollment_list->list,
+						  struct lwis_enrolled_buffer, list_node);
+			total_enrolled_size += buffer->dma_buf->size;
+			num_enrolled_buffers++;
+		}
+	}
+	spin_unlock_irqrestore(&lwis_dev->lock, flags);
+	if (total_enrolled_size > 0) {
+		pr_info("%-16s: %16d %16lu kB\n", lwis_dev->name, num_enrolled_buffers,
+			total_enrolled_size / 1024);
+	}
+}
+
 int lwis_buffer_alloc(struct lwis_client *lwis_client, struct lwis_alloc_buffer_info *alloc_info,
 		      struct lwis_allocated_buffer *buffer)
 {
@@ -191,6 +220,10 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 		dev_err(lwis_client->lwis_dev->dev,
 			"Could not map dma attachment for fd: %d (errno: %ld)", buffer->info.fd,
 			PTR_ERR(buffer->sg_table));
+		if (PTR_ERR(buffer->sg_table) == -ENOMEM) {
+			lwis_device_info_dump("Enroll buffer sizes",
+					      dump_total_enrolled_buffer_size);
+		}
 		dma_buf_detach(buffer->dma_buf, buffer->dma_buf_attachment);
 		dma_buf_put(buffer->dma_buf);
 		return PTR_ERR(buffer->sg_table);

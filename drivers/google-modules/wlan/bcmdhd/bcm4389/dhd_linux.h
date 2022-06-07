@@ -547,5 +547,8 @@ int dhd_dbus_txdata(dhd_pub_t *dhdp, void *pktbuf);
 void dhd_event_logtrace_enqueue(dhd_pub_t *dhdp, int ifidx, void *pktbuf);
 #if defined(SUPPORT_MULTIPLE_NVRAM) || defined(SUPPORT_MULTIPLE_CLMBLOB)
 int dhd_get_platform_naming_for_nvram_clmblob_file(download_type_t component, char* file_name);
+#ifdef USE_CID_CHECK
+void dhd_set_platform_ext_name_for_chip_version(char* chip_version);
+#endif /* USE_CID_CHECK */
 #endif /* SUPPORT_MULTIPLE_NVRAM || SUPPORT_MULTIPLE_CLMBLOB */
 #endif /* __DHD_LINUX_H__ */

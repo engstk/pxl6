@@ -21,7 +21,6 @@
 #include <linux/delay.h>
 #include <linux/alarmtimer.h>
 #include <misc/logbuffer.h>
-#include "gbms_power_supply.h"
 #include "p9221_charger.h"
 #include "p9221-dt-bindings.h"
 #include "google_dc_pps.h"
@@ -361,9 +360,20 @@ no_fod:
 		 charger->pdata->fod_hpp_num, retries);
 }
 
+#define CC_DATA_LOCK_MS		250
+
 static int p9221_send_data(struct p9221_charger_data *charger)
 {
 	int ret;
+	ktime_t now = get_boot_msec();
+
+	if (charger->cc_data_lock.cc_use &&
+	    charger->cc_data_lock.cc_rcv_at != 0 &&
+	    (now - charger->cc_data_lock.cc_rcv_at > CC_DATA_LOCK_MS))
+		charger->cc_data_lock.cc_use = false;
+
+	if (charger->cc_data_lock.cc_use)
+		return -EBUSY;
 
 	if (charger->tx_busy)
 		return -EBUSY;
@@ -467,6 +477,21 @@ static int p9221_ready_to_read(struct p9221_charger_data *charger)
 	return 0;
 }
 
+static int set_renego_state(struct p9221_charger_data *charger, enum p9xxx_renego_state state)
+{
+	mutex_lock(&charger->renego_lock);
+	if (state == P9XXX_AVAILABLE ||
+	    charger->renego_state == P9XXX_AVAILABLE) {
+		charger->renego_state = state;
+		mutex_unlock(&charger->renego_lock);
+		return 0;
+	}
+	mutex_unlock(&charger->renego_lock);
+
+	dev_warn(&charger->client->dev, "Not allowed due to renego_state=%d\n", charger->renego_state);
+	return -EAGAIN;
+}
+
 static void p9221_abort_transfers(struct p9221_charger_data *charger)
 {
 	/* Abort all transfers */
@@ -475,6 +500,7 @@ static void p9221_abort_transfers(struct p9221_charger_data *charger)
 	charger->tx_done = true;
 	charger->rx_done = true;
 	charger->rx_len = 0;
+	set_renego_state(charger, P9XXX_AVAILABLE);
 	sysfs_notify(&charger->dev->kobj, NULL, "txbusy");
 	sysfs_notify(&charger->dev->kobj, NULL, "txdone");
 	sysfs_notify(&charger->dev->kobj, NULL, "rxdone");
@@ -764,6 +790,7 @@ static void p9221_set_offline(struct p9221_charger_data *charger)
 	charger->chg_on_rtx = false;
 	p9221_reset_wlc_dc(charger);
 	charger->prop_mode_en = false;
+	set_renego_state(charger, P9XXX_AVAILABLE);
 
 	/* Reset PP buf so we can get a new serial number next time around */
 	charger->pp_buf_valid = false;
@@ -807,6 +834,7 @@ static void p9221_tx_work(struct work_struct *work)
 
 	dev_info(&charger->client->dev, "timeout waiting for tx complete\n");
 
+	set_renego_state(charger, P9XXX_AVAILABLE);
 	charger->tx_busy = false;
 	charger->tx_done = true;
 	sysfs_notify(&charger->dev->kobj, NULL, "txbusy");
@@ -1002,7 +1030,7 @@ static void p9221_init_align(struct p9221_charger_data *charger)
 	charger->current_sample_cnt = 0;
 	charger->mfg_check_count = 0;
 	/* Disable misaligned message in high power mode, b/159066422 */
-	if (charger->prop_mode_en == true) {
+	if (!charger->online || charger->prop_mode_en == true) {
 		charger->align = WLC_ALIGN_CENTERED;
 		return;
 	}
@@ -1130,6 +1158,7 @@ static void p9221_align_work(struct work_struct *work)
 	/* b/159066422 Disable misaligned message in high power mode */
 	if (!charger->online || charger->prop_mode_en == true) {
 		charger->align = WLC_ALIGN_CENTERED;
+		schedule_work(&charger->uevent_work);
 		return;
 	}
 
@@ -2045,18 +2074,26 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 		 * mode isn't enabled (i.e. with p9412_prop_mode_enable())
 		 */
 		if (!(charger->prop_mode_en && p9xxx_is_capdiv_en(charger))) {
+			ret = set_renego_state(charger, P9XXX_ENABLE_PROPMODE);
+			if (ret == -EAGAIN)
+				return ret;
 			ret = charger->chip_prop_mode_en(charger, HPP_MODE_PWR_REQUIRE);
 			if (ret == -EAGAIN) {
 				dev_warn(&charger->client->dev, "PROP Mode retry\n");
 				return ret;
 			}
+			set_renego_state(charger, P9XXX_AVAILABLE);
 		}
 
-		/* FIXME: shouldn't we disable the cap divider here? */
 		if (!(charger->prop_mode_en && p9xxx_is_capdiv_en(charger))) {
+			ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
+			if (ret < 0)
+				dev_warn(&charger->client->dev,
+					 "Cannot change to bypass mode (%d)\n", ret);
 			ret = p9221_set_hpp_dc_icl(charger, false);
 			if (ret < 0)
-				dev_warn(&charger->client->dev, "Cannot disable HPP_ICL (%d)\n", ret);
+				dev_warn(&charger->client->dev,
+					 "Cannot disable HPP_ICL (%d)\n", ret);
 
 			pr_debug("%s: HPP not supported\n", __func__);
 			return -EOPNOTSUPP;
@@ -2664,6 +2701,8 @@ static void p9221_set_online(struct p9221_charger_data *charger)
 	charger->tx_busy = false;
 	charger->tx_done = true;
 	charger->rx_done = false;
+	charger->cc_data_lock.cc_use = false;
+	charger->cc_data_lock.cc_rcv_at = 0;
 	charger->last_capacity = -1;
 	charger->online_at = get_boot_sec();
 
@@ -2672,7 +2711,8 @@ static void p9221_set_online(struct p9221_charger_data *charger)
 	p9221_charge_stats_init(&charger->chg_data);
 	mutex_unlock(&charger->stats_lock);
 
-	if (charger->chip_id == P9222_CHIP_ID) {
+	if (charger->chip_id == P9222_CHIP_ID &&
+	    !p9221_is_epp(charger)) {
 		dev_err(&charger->client->dev, "P9222 change VOUT to 5V\n");
 		ret = p9221_set_bpp_vout(charger);
 		if (ret)
@@ -3520,6 +3560,10 @@ static ssize_t p9221_store_txlen(struct device *dev,
 	cancel_delayed_work_sync(&charger->tx_work);
 
 	charger->tx_len = len;
+
+	ret = set_renego_state(charger, P9XXX_SEND_DATA);
+	if (ret != 0)
+		return -EBUSY;
 	charger->tx_done = false;
 	ret = p9221_send_data(charger);
 	if (ret) {
@@ -5110,6 +5154,8 @@ static void p9221_irq_handler(struct p9221_charger_data *charger, u16 irq_src)
 
 			charger->rx_len = rxlen;
 			charger->rx_done = true;
+			charger->cc_data_lock.cc_rcv_at = get_boot_msec();
+			set_renego_state(charger, P9XXX_AVAILABLE);
 			sysfs_notify(&charger->dev->kobj, NULL, "rxdone");
 		}
 	}
@@ -5118,6 +5164,8 @@ static void p9221_irq_handler(struct p9221_charger_data *charger, u16 irq_src)
 	if (irq_src & charger->ints.cc_send_busy_bit) {
 		charger->tx_busy = false;
 		charger->tx_done = true;
+		charger->cc_data_lock.cc_use = true;
+		charger->cc_data_lock.cc_rcv_at = 0;
 		if (charger->cc_reset_pending) {
 			charger->cc_reset_pending = false;
 			wake_up_all(&charger->ccreset_wq);
@@ -5147,11 +5195,18 @@ static void p9221_irq_handler(struct p9221_charger_data *charger, u16 irq_src)
 	}
 }
 
+#define IRQ_DEBOUNCE_TIME_MS		4
 static irqreturn_t p9221_irq_thread(int irq, void *irq_data)
 {
 	struct p9221_charger_data *charger = irq_data;
 	int ret;
 	u16 irq_src = 0;
+	ktime_t now = get_boot_msec();
+
+	if ((now - charger->irq_at) < IRQ_DEBOUNCE_TIME_MS)
+		return IRQ_HANDLED;
+
+	charger->irq_at = now;
 
 	pm_runtime_get_sync(charger->dev);
 	if (!charger->resume_complete) {
@@ -5889,12 +5944,14 @@ static int p9221_charger_probe(struct i2c_client *client,
 	charger->chip_id = charger->pdata->chip_id;
 	charger->rtx_wakelock = false;
 	charger->last_disable = -1;
+	charger->irq_at = 0;
 	mutex_init(&charger->io_lock);
 	mutex_init(&charger->cmd_lock);
 	mutex_init(&charger->stats_lock);
 	mutex_init(&charger->chg_features.feat_lock);
 	mutex_init(&charger->rtx_lock);
 	mutex_init(&charger->auth_lock);
+	mutex_init(&charger->renego_lock);
 	timer_setup(&charger->vrect_timer, p9221_vrect_timer_handler, 0);
 	timer_setup(&charger->align_timer, p9221_align_timer_handler, 0);
 	INIT_DELAYED_WORK(&charger->dcin_work, p9221_dcin_work);
@@ -6211,6 +6268,7 @@ static int p9221_charger_remove(struct i2c_client *client)
 	mutex_destroy(&charger->chg_features.feat_lock);
 	mutex_destroy(&charger->rtx_lock);
 	mutex_destroy(&charger->auth_lock);
+	mutex_destroy(&charger->renego_lock);
 	if (charger->log)
 		logbuffer_unregister(charger->log);
 	if (charger->rtx_log)

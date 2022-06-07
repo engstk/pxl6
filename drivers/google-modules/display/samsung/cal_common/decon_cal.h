@@ -219,6 +219,7 @@ struct decon_config {
 	unsigned int		out_bpc;
 	unsigned int		in_bpc;
 	unsigned int		vblank_usec;
+	int			main_dsim_id;
 };
 
 struct decon_regs {
@@ -248,6 +249,7 @@ struct decon_window_regs {
 };
 
 struct decon_dsc {
+	const struct drm_dsc_config *cfg;
 	unsigned int comp_cfg;
 	unsigned int bit_per_pixel;
 	unsigned int pic_height;

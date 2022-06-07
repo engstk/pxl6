@@ -19,7 +19,6 @@
 #include <misc/logbuffer.h>
 #include "p9221_charger.h"
 
-static int p9412_capdiv_en(struct p9221_charger_data *chgr, u8 mode);
 /* Simple Chip Specific Accessors */
 /*
  * chip_get_rx_ilim
@@ -1192,6 +1191,14 @@ static int p9412_capdiv_en(struct p9221_charger_data *chgr, u8 mode)
 
 	/* TODO: it probably needs a lock around this */
 
+	ret = chgr->reg_read_8(chgr, P9412_CDMODE_STS_REG, &cdmode);
+	if (ret < 0)
+		return ret;
+
+	/* If the results are as expected, no changes needed */
+	if ((cdmode & mask) == mask)
+		return ret;
+
 	ret = chgr->reg_write_8(chgr, P9412_CDMODE_REQ_REG, mask);
 	if (ret < 0)
 		return -EIO;
@@ -1222,6 +1229,47 @@ static int p9412_capdiv_en(struct p9221_charger_data *chgr, u8 mode)
 static int p9221_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 {
 	return -ENOTSUPP;
+}
+
+/* b/202795383 remove load current before enable P9412 CD mode */
+static int p9412_prop_mode_capdiv_enable(struct p9221_charger_data *chgr)
+{
+	union power_supply_propval dc_icl = { .intval = 0 };
+	int ret, rc;
+
+	if (chgr->dc_psy) {
+		rc = power_supply_get_property(chgr->dc_psy,
+					       POWER_SUPPLY_PROP_CURRENT_MAX,
+					       &dc_icl);
+		if (rc == 0 && dc_icl.intval) {
+			union power_supply_propval prop = { .intval = 0 };
+
+			rc = power_supply_set_property(chgr->dc_psy,
+						       POWER_SUPPLY_PROP_CURRENT_MAX,
+						       &prop);
+			if (rc != 0) {
+				dev_err(&chgr->client->dev,
+					"CAP_DIV: cannot reduce load %d->0 (%d)\n",
+					dc_icl.intval, rc);
+			}
+		}
+
+	}
+
+	ret = p9412_capdiv_en(chgr, CDMODE_CAP_DIV_MODE);
+
+	if (chgr->dc_psy && dc_icl.intval) {
+		rc = power_supply_set_property(chgr->dc_psy,
+					       POWER_SUPPLY_PROP_CURRENT_MAX,
+					       &dc_icl);
+		if (rc != 0) {
+			dev_err(&chgr->client->dev,
+				"CAP_DIV: cannot restore load 0->%d (%d)\n",
+				dc_icl.intval, rc);
+		}
+	}
+
+	return ret;
 }
 
 static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
@@ -1326,10 +1374,9 @@ enable_capdiv:
 	 * Step 5: enable Cap Divider configuration:
 	 * write 0x02 to 0x101 then write 0x40 to 0x4E
 	 */
-	ret = p9412_capdiv_en(chgr, CDMODE_CAP_DIV_MODE);
+	ret = p9412_prop_mode_capdiv_enable(chgr);
 	if (ret) {
-		dev_err(&chgr->client->dev,
-			"PROP_MODE: fail to enable Cap Div mode\n");
+		dev_err(&chgr->client->dev, "PROP_MODE: fail to enable Cap Div mode\n");
 		chgr->prop_mode_en = false;
 		goto err_exit;
 	} else
@@ -1446,7 +1493,7 @@ void p9221_chip_init_interrupt_bits(struct p9221_charger_data *chgr, u16 chip_id
 		chgr->ints.over_uv_bit = 0;
 		chgr->ints.cc_send_busy_bit = P9221R5_STAT_CCSENDBUSY;
 		chgr->ints.cc_data_rcvd_bit = P9221R5_STAT_CCDATARCVD;
-		chgr->ints.pp_rcvd_bit = P9222_STAT_PPRCVD;
+		chgr->ints.pp_rcvd_bit = 0; /* TODO: b/200114045 */
 		chgr->ints.cc_error_bit = P9222_STAT_CCERROR;
 		chgr->ints.cc_reset_bit = 0;
 		chgr->ints.propmode_stat_bit = 0;

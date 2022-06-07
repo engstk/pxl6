@@ -299,7 +299,7 @@ static int copy_io_entries(struct lwis_device *lwis_dev, struct lwis_io_entries 
 	buf_size = sizeof(struct lwis_io_entry) * k_msg->num_io_entries;
 	if (buf_size / sizeof(struct lwis_io_entry) != k_msg->num_io_entries) {
 		dev_err(lwis_dev->dev, "Failed to copy io_entries due to integer overflow.\n");
-		return -EINVAL;
+		return -EOVERFLOW;
 	}
 	io_entries = kvmalloc(buf_size, GFP_KERNEL);
 	if (!io_entries) {
@@ -759,6 +759,10 @@ static int ioctl_event_control_set(struct lwis_client *lwis_client,
 
 	/*  Copy event controls from user buffer. */
 	buf_size = sizeof(struct lwis_event_control) * k_msg.num_event_controls;
+	if (buf_size / sizeof(struct lwis_event_control) != k_msg.num_event_controls) {
+		dev_err(lwis_dev->dev, "Failed to copy event controls due to integer overflow.\n");
+		return -EOVERFLOW;
+	}
 	k_event_controls = kmalloc(buf_size, GFP_KERNEL);
 	if (!k_event_controls) {
 		dev_err(lwis_dev->dev, "Failed to allocate event controls\n");
@@ -1256,6 +1260,10 @@ static int ioctl_dpm_clk_update(struct lwis_device *lwis_dev,
 	}
 
 	buf_size = sizeof(struct lwis_clk_setting) * k_msg.num_settings;
+	if (buf_size / sizeof(struct lwis_clk_setting) != k_msg.num_settings) {
+		dev_err(lwis_dev->dev, "Failed to copy clk settings due to integer overflow.\n");
+		return -EOVERFLOW;
+	}
 	clk_settings = kmalloc(buf_size, GFP_KERNEL);
 	if (!clk_settings) {
 		dev_err(lwis_dev->dev, "Failed to allocate clock settings\n");
@@ -1293,6 +1301,10 @@ static int ioctl_dpm_qos_update(struct lwis_device *lwis_dev,
 
 	// Copy qos settings from user buffer.
 	buf_size = sizeof(struct lwis_qos_setting) * k_msg.num_settings;
+	if (buf_size / sizeof(struct lwis_qos_setting) != k_msg.num_settings) {
+		dev_err(lwis_dev->dev, "Failed to copy qos settings due to integer overflow.\n");
+		return -EOVERFLOW;
+	}
 	k_qos_settings = kmalloc(buf_size, GFP_KERNEL);
 	if (!k_qos_settings) {
 		dev_err(lwis_dev->dev, "Failed to allocate qos settings\n");

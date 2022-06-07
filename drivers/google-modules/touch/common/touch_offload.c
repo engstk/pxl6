@@ -619,8 +619,11 @@ int touch_offload_init(struct touch_offload_context *context)
 	init_completion(&context->reserve_returned);
 	complete_all(&context->reserve_returned);
 
+	if (!context->multiple_panels)
+		scnprintf(context->device_name, 32, "%s", DEVICE_NAME);
+
 	/* Initialize char device */
-	context->major_num = register_chrdev(0, DEVICE_NAME,
+	context->major_num = register_chrdev(0, context->device_name,
 					     &touch_offload_fops);
 	if (context->major_num < 0) {
 		pr_err("%s: register_chrdev failed with error = %u\n",
@@ -628,22 +631,22 @@ int touch_offload_init(struct touch_offload_context *context)
 		return context->major_num;
 	}
 
-	context->cls = class_create(THIS_MODULE, CLASS_NAME);
+	context->cls = class_create(THIS_MODULE, context->device_name);
 	if (IS_ERR(context->cls)) {
 		pr_err("%s: class_create failed with error = %ld.\n",
 		       __func__, PTR_ERR(context->cls));
-		unregister_chrdev(context->major_num, DEVICE_NAME);
+		unregister_chrdev(context->major_num, context->device_name);
 		return PTR_ERR(context->cls);
 	}
 
 	context->device = device_create(context->cls, NULL,
 					MKDEV(context->major_num, 0), NULL,
-					DEVICE_NAME);
+					context->device_name);
 	if (IS_ERR(context->device)) {
 		pr_err("%s: device_create failed with error = %ld.\n",
 		       __func__, PTR_ERR(context->device));
 		class_destroy(context->cls);
-		unregister_chrdev(context->major_num, DEVICE_NAME);
+		unregister_chrdev(context->major_num, context->device_name);
 		return PTR_ERR(context->device);
 	}
 
@@ -664,7 +667,7 @@ int touch_offload_cleanup(struct touch_offload_context *context)
 
 	class_destroy(context->cls);
 
-	unregister_chrdev(context->major_num, DEVICE_NAME);
+	unregister_chrdev(context->major_num, context->device_name);
 
 	touch_offload_free_buffers(context);
 

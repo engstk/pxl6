@@ -86,7 +86,7 @@ int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage
 	}
 
 	list->reg[index].reg = reg;
-	list->reg[index].name = name;
+	strlcpy(list->reg[index].name, name, LWIS_MAX_NAME_STRING_LEN);
 	list->reg[index].voltage = voltage;
 
 	return index;
@@ -130,6 +130,22 @@ int lwis_regulator_put_by_name(struct lwis_regulator_list *list, char *name)
 
 	pr_err("Regulator %s not found\n", name);
 	return -EINVAL;
+}
+
+int lwis_regulator_put_all(struct lwis_regulator_list *list)
+{
+	int i;
+	int ret;
+
+	if (!list) {
+		return -EINVAL;
+	}
+
+	for (i = 0; i < list->count; ++i) {
+		ret = lwis_regulator_put_by_idx(list, i);
+	}
+
+	return ret;
 }
 
 int lwis_regulator_enable_by_idx(struct lwis_regulator_list *list, int index)

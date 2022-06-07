@@ -44,6 +44,12 @@ config GOOGLE_CPM
 	  Say Y here to enable the Charging Policy Manager.
 	  The driver manages multiple chargers (eg primary, secondary).
 
+config GOOGLE_DOCK
+        tristate "Google Dock"
+        help
+          Say Y here to choose the Google Dock.
+          The driver handles dock driver and called by google charger.
+
 config USB_OVERHEAT_MITIGATION
 	tristate "Google USB Overheat Mitigation"
 	help

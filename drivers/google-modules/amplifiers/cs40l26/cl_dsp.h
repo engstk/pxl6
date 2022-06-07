@@ -137,10 +137,8 @@
 #define CL_DSP_ALGO_ENTRY_SIZE			24
 
 /* open wavetable */
-#define CL_DSP_OWT_HEADER_MAX_LEN		128
+#define CL_DSP_OWT_HEADER_MAX_LEN		254
 #define CL_DSP_OWT_HEADER_ENTRY_SIZE		12
-
-#define CL_DSP_MAX_BIN_SIZE			9584
 
 /* macros */
 #define CL_DSP_WORD_ALIGN(n)	(CL_DSP_BYTES_PER_WORD +\
@@ -268,7 +266,7 @@ struct cl_dsp_owt_desc {
 	struct cl_dsp_owt_header waves[CL_DSP_OWT_HEADER_MAX_LEN];
 	int nwaves;
 	u32 bytes;
-	u8 raw_data[CL_DSP_MAX_BIN_SIZE];
+	u8 *raw_data;
 };
 
 struct cl_dsp_wt_desc {

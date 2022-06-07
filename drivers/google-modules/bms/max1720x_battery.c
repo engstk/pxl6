@@ -94,7 +94,7 @@ struct gbatt_capacity_estimation {
 	int start_vfsoc;
 };
 
-#define DEFAULT_BATTERY_ID		-1
+#define DEFAULT_BATTERY_ID		0
 #define DEFAULT_BATTERY_ID_RETRIES	5
 
 #define DEFAULT_CAP_SETTLE_INTERVAL	3
@@ -1430,7 +1430,7 @@ static u16 max1720x_save_battery_cycle(const struct max1720x_chip *chip,
 	if (chip->gauge_type != MAX_M5_GAUGE_TYPE)
 		return eeprom_cycle;
 
-	if (chip->por)
+	if (chip->por || reg_cycle == 0)
 		return eeprom_cycle;
 
 	/* save half value to record over 655 cycles case */
@@ -2007,6 +2007,7 @@ static int max1720x_get_property(struct power_supply *psy,
 		} else if (chip->fake_battery != -1) {
 			val->intval = chip->fake_battery;
 		} else {
+
 			err = REGMAP_READ(map, MAX1720X_STATUS, &data);
 			if (err < 0)
 				break;
@@ -2421,7 +2422,6 @@ static irqreturn_t max1720x_fg_irq_thread_fn(int irq, void *obj)
 	bool storm = false;
 	int err = 0;
 
-
 	if (!chip || (irq != -1 && irq != chip->primary->irq)) {
 		WARN_ON_ONCE(1);
 		return IRQ_NONE;
@@ -2492,7 +2492,7 @@ static irqreturn_t max1720x_fg_irq_thread_fn(int irq, void *obj)
 	fg_status_clr = fg_status;
 
 	if (fg_status & MAX1720X_STATUS_POR) {
-		pr_debug("POR is set\n");
+		dev_warn(chip->dev, "POR is set\n");
 
 		/* trigger model load */
 		mutex_lock(&chip->model_lock);
@@ -3752,6 +3752,10 @@ static int max1720x_set_next_update(struct max1720x_chip *chip)
 {
 	int rc;
 	u16 reg_cycle;
+
+	/* do not save data when battery ID not clearly */
+	if (chip->batt_id == DEFAULT_BATTERY_ID)
+		return 0;
 
 	rc = REGMAP_READ(&chip->regmap, MAX1720X_CYCLES, &reg_cycle);
 	if (rc < 0)

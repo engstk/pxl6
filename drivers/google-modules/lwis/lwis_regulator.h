@@ -12,10 +12,11 @@
 #define LWIS_REGULATOR_H_
 
 #include <linux/regulator/consumer.h>
+#include "lwis_commands.h"
 
 struct lwis_regulator {
 	struct regulator *reg;
-	char *name;
+	char name[LWIS_MAX_NAME_STRING_LEN];
 	int voltage;
 };
 
@@ -51,10 +52,16 @@ int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage
 int lwis_regulator_put_by_idx(struct lwis_regulator_list *list, int index);
 
 /*
- *  lwis_regulator_put_by_name: Unregister the regulator by index.
+ *  lwis_regulator_put_by_name: Unregister the regulator by name.
  *  Returns: 0 if success, -ve if error
  */
 int lwis_regulator_put_by_name(struct lwis_regulator_list *list, char *name);
+
+/*
+ *  lwis_regulator_put_all: Unregister the all the regulators in the list
+ *  Returns: 0 if success, -ve if error
+ */
+int lwis_regulator_put_all(struct lwis_regulator_list *list);
 
 /*
  *  lwis_regulator_enable_by_idx: Turn on/enable the regulator by index.

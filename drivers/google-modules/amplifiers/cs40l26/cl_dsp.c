@@ -211,7 +211,12 @@ static int cl_dsp_owt_init(struct cl_dsp *dsp, const struct firmware *bin)
 		return -EPERM;
 	}
 
-	memcpy(&dsp->wt_desc->owt.raw_data, &bin->data[0], bin->size);
+	dsp->wt_desc->owt.raw_data = devm_kzalloc(dsp->dev, bin->size,
+			GFP_KERNEL);
+	if (!dsp->wt_desc->owt.raw_data)
+		return -ENOMEM;
+
+	memcpy(dsp->wt_desc->owt.raw_data, &bin->data[0], bin->size);
 
 	return 0;
 }
@@ -219,7 +224,7 @@ static int cl_dsp_owt_init(struct cl_dsp *dsp, const struct firmware *bin)
 static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 {
 	struct cl_dsp_owt_header *entry = dsp->wt_desc->owt.waves;
-	void *buf = (void *)&dsp->wt_desc->owt.raw_data[pos];
+	void *buf = (void *)(dsp->wt_desc->owt.raw_data + pos);
 	struct cl_dsp_memchunk ch = cl_dsp_memchunk_create(buf, size);
 	u32 *wbuf = buf, *max = buf;
 	int i;
@@ -248,6 +253,7 @@ static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 		}
 	}
 
+	dev_err(dsp->dev, "Maximum number of wavetable entries exceeded\n");
 	return -E2BIG;
 }
 
@@ -266,13 +272,7 @@ static int cl_dsp_coeff_header_parse(struct cl_dsp *dsp,
 		return -EINVAL;
 	}
 
-	if (CL_DSP_GET_MAJOR(header.fw_revision)
-			!= CL_DSP_GET_MAJOR(dsp->algo_info[0].rev)) {
-		dev_err(dev,
-			"Coeff. revision 0x%06X incompatible with 0x%06X\n",
-			header.fw_revision, dsp->algo_info[0].rev);
-		return -EINVAL;
-	} else if (header.fw_revision != dsp->algo_info[0].rev) {
+	if (header.fw_revision != dsp->algo_info[0].rev) {
 		dev_warn(dev,
 			"Coeff. rev. 0x%06X mistmatches 0x%06X, continuing..\n",
 			header.fw_revision, dsp->algo_info[0].rev);
@@ -327,6 +327,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 	union cl_dsp_wmdr_header wmdr_header;
 	char wt_date[CL_DSP_WMDR_DATE_LEN];
 	unsigned int reg, wt_reg, algo_rev;
+	u16 algo_id, parent_id;
 	int i;
 
 	if  (!dsp)
@@ -358,11 +359,13 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		memcpy(data_block.payload, &fw->data[pos],
 				data_block.header.data_len);
 
+		algo_id = data_block.header.algo_id & 0xFFFF;
+
 		if (data_block.header.block_type != CL_DSP_WMDR_NAME_TYPE &&
 			data_block.header.block_type != CL_DSP_WMDR_INFO_TYPE) {
 			for (i = 0; i < dsp->num_algos; i++) {
-				if (data_block.header.algo_id
-						== dsp->algo_info[i].id)
+				parent_id = dsp->algo_info[i].id & 0xFFFF;
+				if (algo_id == parent_id)
 					break;
 			}
 
@@ -388,8 +391,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 				goto err_free;
 			}
 
-			wt_found = ((data_block.header.algo_id & 0xFFFF) ==
-					(dsp->wt_desc->id & 0xFFFF));
+			wt_found = (algo_id == (dsp->wt_desc->id & 0xFFFF));
 		}
 
 		switch (data_block.header.block_type) {
@@ -884,7 +886,6 @@ static void cl_dsp_coeff_free(struct cl_dsp *dsp)
 		coeff_desc = list_first_entry(&dsp->coeff_desc_head,
 				struct cl_dsp_coeff_desc, list);
 		list_del(&coeff_desc->list);
-		kfree(coeff_desc->parent_name);
 		devm_kfree(dsp->dev, coeff_desc);
 	}
 }

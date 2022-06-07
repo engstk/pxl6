@@ -58,10 +58,10 @@ enum max77729_pmic_register {
 #define MAX77759_GPIO5_DIR(x) ((x) << 2)
 #define MAX77759_GPIO5_VAL_MASK (1 << 3)
 #define MAX77759_GPIO5_VAL(x) ((x) << 3)
-#define MAX77759_GPIO6_DIR_MASK (1 << 4)
-#define MAX77759_GPIO6_DIR(x) ((x) << 4)
-#define MAX77759_GPIO6_VAL_MASK (1 << 5)
-#define MAX77759_GPIO6_VAL(x) ((x) << 5)
+#define MAX77759_GPIO6_DIR_MASK (1 << 5)
+#define MAX77759_GPIO6_DIR(x) ((x) << 5)
+#define MAX77759_GPIO6_VAL_MASK (1 << 6)
+#define MAX77759_GPIO6_VAL(x) ((x) << 6)
 
 #define MAX77759_GPIO5_OFF 4
 #define MAX77759_GPIO6_OFF 5

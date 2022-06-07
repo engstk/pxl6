@@ -247,6 +247,8 @@ struct lwis_device {
 	int pm_hibernation;
 	/* Is device read only */
 	bool is_read_only;
+	/* Adjust thread priority */
+	int adjust_thread_priority;
 };
 
 /*
@@ -362,5 +364,11 @@ void lwis_dev_power_seq_list_free(struct lwis_device_power_sequence_list *list);
  *  Print lwis_device_power_sequence_list content
  */
 void lwis_dev_power_seq_list_print(struct lwis_device_power_sequence_list *list);
+
+/*
+ * lwis_device_info_dump:
+ * Use the customized function handle to print information from each device registered in LWIS.
+ */
+void lwis_device_info_dump(const char *name, void (*func)(struct lwis_device *));
 
 #endif /* LWIS_DEVICE_H_ */

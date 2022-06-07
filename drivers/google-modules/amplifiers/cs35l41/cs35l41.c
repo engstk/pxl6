@@ -2854,13 +2854,33 @@ static int cs35l41_set_pdata(struct cs35l41_private *cs35l41)
 	return 0;
 }
 
+static const char * const dapm_names[] = { "SPK", "VP", "VBST", "ISENSE",
+	"VSENSE", "TEMP", "AMP Playback", "AMP Capture" };
+
+static void cs35l41_component_ignore_suspend(struct snd_soc_component *component)
+{
+	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	char dapm_name[64];
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dapm_names); i++) {
+		if (component->name_prefix)
+			snprintf(dapm_name, sizeof(dapm_name), "%s %s",
+					component->name_prefix, dapm_names[i]);
+		else
+			snprintf(dapm_name, sizeof(dapm_name), "%s", dapm_names[i]);
+
+		pr_debug("snd_soc_dapm_ignore_suspend dapm name[%s]", dapm_name);
+		snd_soc_dapm_ignore_suspend(dapm, dapm_name);
+	}
+	snd_soc_dapm_sync(dapm);
+}
+
 static int cs35l41_component_probe(struct snd_soc_component *component)
 {
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	struct snd_kcontrol_new *kcontrol;
-	struct snd_soc_dapm_context *dapm =
-			snd_soc_component_get_dapm(component);
 	int ret = 0;
 
 	component->regmap = cs35l41->regmap;
@@ -2892,26 +2912,8 @@ static int cs35l41_component_probe(struct snd_soc_component *component)
 			       "snd_soc_add_codec_controls failed (%d)\n", ret);
 		kfree(kcontrol);
 	}
-	if (component->name_prefix && !strcmp(component->name_prefix, "R")) {
-		snd_soc_dapm_ignore_suspend(dapm, "R SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "R VP");
-		snd_soc_dapm_ignore_suspend(dapm, "R VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "R ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Capture");
-	} else {
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "VP");
-		snd_soc_dapm_ignore_suspend(dapm, "ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Capture");
-	}
-	snd_soc_dapm_sync(dapm);
+
+	cs35l41_component_ignore_suspend(component);
 exit:
 	return ret;
 }

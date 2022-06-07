@@ -62,7 +62,7 @@ static ssize_t cs40l26_halo_heartbeat_show(struct device *dev,
 	pm_runtime_get_sync(cs40l26->dev);
 
 	ret = cl_dsp_get_reg(cs40l26->dsp, "HALO_HEARTBEAT",
-			CL_DSP_XM_UNPACKED_TYPE, CS40L26_FW_ID, &reg);
+			CL_DSP_XM_UNPACKED_TYPE, cs40l26->fw.id, &reg);
 	if (ret)
 		return ret;
 
@@ -179,12 +179,282 @@ static ssize_t cs40l26_vibe_state_show(struct device *dev,
 }
 static DEVICE_ATTR(vibe_state, 0660, cs40l26_vibe_state_show, NULL);
 
+static ssize_t cs40l26_pseq_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	struct list_head *op_head = &cs40l26->pseq_op_head;
+	u32 base = cs40l26->pseq_base;
+	int i, count = 0;
+	struct cs40l26_pseq_op *pseq_op;
+
+	mutex_lock(&cs40l26->lock);
+
+	list_for_each_entry_reverse(pseq_op, op_head, list) {
+		dev_info(cs40l26->dev, "%d: Address: 0x%08X, Size: %d words\n",
+			count + 1, base + pseq_op->offset, pseq_op->size);
+
+		for (i = 0; i < pseq_op->size; i++)
+			dev_info(cs40l26->dev, "0x%08X\n",
+					*(pseq_op->words + i));
+
+		count++;
+	}
+
+	mutex_unlock(&cs40l26->lock);
+
+	if (count != cs40l26->pseq_num_ops) {
+		dev_err(cs40l26->dev, "Malformed Power on seq.\n");
+		return -EINVAL;
+	}
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->pseq_num_ops);
+}
+static DEVICE_ATTR(power_on_seq, 0440, cs40l26_pseq_show, NULL);
+
+static ssize_t cs40l26_owt_free_space_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	u32 reg, words;
+	int ret;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "OWT_SIZE_XM",
+		CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
+	if (ret)
+		goto err_pm;
+
+	ret = regmap_read(cs40l26->regmap, reg, &words);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get remaining OWT space\n");
+		goto err_pm;
+	}
+
+	ret = snprintf(buf, PAGE_SIZE, "%d\n", words * 3);
+
+err_pm:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+static DEVICE_ATTR(owt_free_space, 0440, cs40l26_owt_free_space_show, NULL);
+
+static ssize_t cs40l26_die_temp_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	struct regmap *regmap = cs40l26->regmap;
+	u16 die_temp;
+	int ret;
+	u32 val;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = regmap_read(regmap, CS40L26_GLOBAL_ENABLES, &val);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to read GLOBAL_EN status\n");
+		goto err_pm;
+	}
+
+	if (!(val & CS40L26_GLOBAL_EN_MASK)) {
+		dev_err(cs40l26->dev,
+			"Global enable must be set to get die temp.\n");
+		ret = -EPERM;
+		goto err_pm;
+	}
+
+	ret = regmap_read(regmap, CS40L26_ENABLES_AND_CODES_DIG, &val);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get die temperature\n");
+		goto err_pm;
+	}
+
+	die_temp = (val & CS40L26_TEMP_RESULT_FILT_MASK) >>
+			CS40L26_TEMP_RESULT_FILT_SHIFT;
+
+	ret = snprintf(buf, PAGE_SIZE, "0x%03X\n", die_temp);
+
+err_pm:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+static DEVICE_ATTR(die_temp, 0440, cs40l26_die_temp_show, NULL);
+
+static ssize_t cs40l26_num_waves_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	u32 nwaves;
+	int ret;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (ret)
+		goto err_pm;
+
+	ret = snprintf(buf, PAGE_SIZE, "%u\n", nwaves);
+
+err_pm:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+static DEVICE_ATTR(num_waves, 0440, cs40l26_num_waves_show, NULL);
+
+/* boost_disable_delay is in units of 125us, e.g. 8 ->  1ms */
+static ssize_t cs40l26_boost_disable_delay_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	u32 reg, boost_disable_delay;
+	int ret;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "BOOST_DISABLE_DELAY",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
+	if (ret)
+		goto err_pm;
+
+	ret = regmap_read(cs40l26->regmap, reg, &boost_disable_delay);
+	if (ret)
+		goto err_pm;
+
+	ret = snprintf(buf, PAGE_SIZE, "%d\n", boost_disable_delay);
+
+err_pm:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+
+static ssize_t cs40l26_boost_disable_delay_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	u32 reg, boost_disable_delay;
+	int ret;
+
+	dev_dbg(cs40l26->dev, "%s: %s", __func__, buf);
+
+	ret = kstrtou32(buf, 10, &boost_disable_delay);
+
+	if (ret ||
+		boost_disable_delay < CS40L26_BOOST_DISABLE_DELAY_MIN ||
+		boost_disable_delay > CS40L26_BOOST_DISABLE_DELAY_MAX)
+		return -EINVAL;
+
+	pm_runtime_get_sync(cs40l26->dev);
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "BOOST_DISABLE_DELAY",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
+	if (ret)
+		goto err_pm;
+
+	ret = regmap_write(cs40l26->regmap, reg, boost_disable_delay);
+
+err_pm:
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	if (ret)
+		return ret;
+	else
+		return count;
+}
+static DEVICE_ATTR(boost_disable_delay, 0660, cs40l26_boost_disable_delay_show,
+		cs40l26_boost_disable_delay_store);
+
+static ssize_t cs40l26_f0_offset_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	unsigned int reg, val;
+	int ret;
+
+	pm_runtime_get_sync(cs40l26->dev);
+	mutex_lock(&cs40l26->lock);
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "F0_OFFSET",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID,
+			&reg);
+	if (ret)
+		goto err_mutex;
+
+
+	ret = regmap_read(cs40l26->regmap, reg, &val);
+	if (ret)
+		goto err_mutex;
+
+	ret = snprintf(buf, PAGE_SIZE, "%d\n", val);
+
+err_mutex:
+	mutex_unlock(&cs40l26->lock);
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+
+static ssize_t cs40l26_f0_offset_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	unsigned int reg, val;
+	int ret;
+
+	ret = kstrtou32(buf, 10, &val);
+	if (ret)
+		return -EINVAL;
+
+	if (val > CS40L26_F0_OFFSET_MAX && val < CS40L26_F0_OFFSET_MIN)
+		return -EINVAL;
+
+	pm_runtime_get_sync(cs40l26->dev);
+	mutex_lock(&cs40l26->lock);
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "F0_OFFSET",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID,
+			&reg);
+	if (ret)
+		goto err_mutex;
+
+	ret = regmap_write(cs40l26->regmap, reg, val);
+	if (ret)
+		goto err_mutex;
+
+	ret = count;
+
+err_mutex:
+	mutex_unlock(&cs40l26->lock);
+	pm_runtime_mark_last_busy(cs40l26->dev);
+	pm_runtime_put_autosuspend(cs40l26->dev);
+
+	return ret;
+}
+static DEVICE_ATTR(f0_offset, 0660, cs40l26_f0_offset_show,
+		cs40l26_f0_offset_store);
+
 static struct attribute *cs40l26_dev_attrs[] = {
+	&dev_attr_num_waves.attr,
+	&dev_attr_die_temp.attr,
+	&dev_attr_owt_free_space.attr,
+	&dev_attr_power_on_seq.attr,
 	&dev_attr_dsp_state.attr,
 	&dev_attr_halo_heartbeat.attr,
 	&dev_attr_fw_mode.attr,
 	&dev_attr_pm_timeout_ms.attr,
 	&dev_attr_vibe_state.attr,
+	&dev_attr_boost_disable_delay.attr,
+	&dev_attr_f0_offset.attr,
 	NULL,
 };
 
@@ -660,7 +930,7 @@ static ssize_t cs40l26_redc_cal_time_ms_show(struct device *dev,
 
 	ret = cl_dsp_get_reg(cs40l26->dsp, "REDC_PLAYTIME_MS",
 			CL_DSP_XM_UNPACKED_TYPE,
-			CS40L26_FW_ID, &reg);
+			cs40l26->fw.id, &reg);
 	if (ret)
 		goto err_mutex;
 
@@ -867,6 +1137,49 @@ err_mutex:
 	return snprintf(buf, PAGE_SIZE, "0x%06X\n", max_vbst);
 }
 
+static ssize_t cs40l26_calib_fw_load_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&cs40l26->lock);
+
+	if (cs40l26->fw.id == CS40L26_FW_ID)
+		ret = snprintf(buf, PAGE_SIZE, "%u\n", 0);
+	else if (cs40l26->fw.id == CS40L26_FW_CALIB_ID)
+		ret = snprintf(buf, PAGE_SIZE, "%u\n", 1);
+	else
+		ret = -EINVAL;
+
+	mutex_unlock(&cs40l26->lock);
+
+	return ret;
+}
+
+static ssize_t cs40l26_calib_fw_load_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	int ret;
+	unsigned int variant;
+
+	ret = kstrtou32(buf, 10, &variant);
+	if (ret)
+		return ret;
+
+	if (variant == 0)
+		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_ID);
+	else if (variant == 1)
+		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_CALIB_ID);
+	else
+		ret = -EINVAL;
+
+	return ret ? ret : count;
+}
+
+static DEVICE_ATTR(calib_fw_load, 0660, cs40l26_calib_fw_load_show,
+		cs40l26_calib_fw_load_store);
 static DEVICE_ATTR(max_vbst, 0440, cs40l26_max_vbst_show, NULL);
 static DEVICE_ATTR(max_bemf, 0440, cs40l26_max_bemf_show, NULL);
 static DEVICE_ATTR(logging_max_reset,
@@ -895,6 +1208,7 @@ static DEVICE_ATTR(redc_cal_time_ms,
 		0440, cs40l26_redc_cal_time_ms_show, NULL);
 
 static struct attribute *cs40l26_dev_attrs_cal[] = {
+	&dev_attr_calib_fw_load.attr,
 	&dev_attr_max_vbst.attr,
 	&dev_attr_max_bemf.attr,
 	&dev_attr_logging_max_reset.attr,

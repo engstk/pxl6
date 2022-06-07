@@ -525,7 +525,8 @@ enum {
  * a full panel initialization which pass all the tests.
  * @{
  */
-
+#define MP_FLAG_UNSET		0x00	/* /< Original value when a panel module
+					 * just got built. */
 #define MP_FLAG_FACTORY		0xA5	/* /< Full Panel Init done in factory */
 #define MP_FLAG_BOOT		0x5A	/* /< Full Panel Init done at boot */
 #define MP_FLAG_OTHERS		0xFF	/* /< Full Panel Init done somewhere else */

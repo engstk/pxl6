@@ -338,6 +338,12 @@ exynos_dither_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 		dqe_reg_set_disp_dither(&dither_config);
 		dqe->state.disp_dither_config = NULL;
 	} else if (dqe->state.disp_dither_config != state->disp_dither_config) {
+		if (decon->config.in_bpc == decon->config.out_bpc &&
+			state->disp_dither_config->en == DITHER_EN(1)) {
+			pr_warn("try to enable disp_dither while in_bpc "
+				"== out_bpc, correct it to \"disable\"\n");
+			state->disp_dither_config->en = DITHER_EN(0);
+		}
 		dqe_reg_set_disp_dither(state->disp_dither_config);
 		dqe->state.disp_dither_config = state->disp_dither_config;
 	}
