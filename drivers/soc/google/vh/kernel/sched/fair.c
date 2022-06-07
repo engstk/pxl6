@@ -1263,15 +1263,6 @@ uclamp_tg_restrict_pixel_mod(struct task_struct *p, enum uclamp_id clamp_id)
 	struct uclamp_se uc_max;
 	struct uclamp_se uc_vnd;
 
-	/*
-	 * Tasks in autogroups or root task group will be
-	 * restricted by system defaults.
-	 */
-	if (task_group_is_autogroup(task_group(p)))
-		return uc_req;
-	if (task_group(p) == &root_task_group)
-		return uc_req;
-
 	// Task group restriction
 	uc_max = task_group(p)->uclamp[clamp_id];
 	// Vendor group restriction
@@ -1500,6 +1491,8 @@ void rvh_cpu_cgroup_online_pixel_mod(void *data, struct cgroup_subsys_state *css
 		vtg->group = VG_NNAPI_HAL;
 	} else if (strcmp(name, "rt") == 0) {
 		vtg->group = VG_RT;
+	} else if (strcmp(name, "dex2oat") == 0) {
+		vtg->group = VG_DEX2OAT;
 	} else {
 		vtg->group = VG_SYSTEM;
 	}

@@ -68,6 +68,14 @@ enum sjtag_driver_error_code {
 	SJTAG_DRV_ERROR_WRONG_STATE,
 };
 
+enum sjtag_cmd_kernel_status {
+	SJTAG_CMD_KSTATUS_OK = 0,
+	SJTAG_CMD_KSTATUS_BEGIN_AUTH_NOT_NEEDED,
+	SJTAG_CMD_KSTATUS_BEGIN_NO_CONSENT,
+	SJTAG_CMD_KSTATUS_AUTH_SERVER_REJECT,
+	SJTAG_CMD_KSTATUS_AUTH_INVALID_SIG
+};
+
 enum sjtag_ipc_cmd_code {
 	SJTAG_GET_PRODUCT_ID = 0,
 	SJTAG_GET_PKHASH,
@@ -182,7 +190,13 @@ struct sjtag_dev_state {
 	u32 ms_per_tick;
 	u32 ipc_timeout_ms;
 	char *cfg_params[SJTAG_CFG_PARAM_NUM];
+	enum sjtag_cmd_kernel_status cmd_kstatus;
 };
+
+static int safe_read_buff(char *ptr, const char *oob_ptr)
+{
+	return (ptr >= oob_ptr ? -1 : (unsigned char)*ptr);
+}
 
 static void reverse_bytes(char *startptr, size_t length)
 {
@@ -420,19 +434,26 @@ static ssize_t begin_store(struct device *dev, struct device_attribute *dev_attr
 	if (dss_header_base == 0)
 		return -ENODEV;
 
+	scnprintf(file_op, SJTAG_FILEOP_STR_SIZE, "\"%s\" write", dev_attr->attr.name);
+	exchange_buff = (char *)dss_header_base + DSS_HDR_DBGC_EXCHG_BUFF_OFFS;
+
 	/*
 	 * Don't start auth 1) if SJTAG not enforced or already auth'd (not necessary) OTHERWISE
 	 *                  2) if consent not granted (not allowed)
 	 */
 	if (strncmp(buf, SJTAG_BEGIN_FORCE_STR, strlen(SJTAG_BEGIN_FORCE_STR))) {
-		if (sjtag_auth_cache[st->hw_id] >= SJTAG_AUTH_AUTHD)
+		if (sjtag_auth_cache[st->hw_id] >= SJTAG_AUTH_AUTHD) {
+			st->cmd_kstatus = SJTAG_CMD_KSTATUS_BEGIN_AUTH_NOT_NEEDED;
+			dev_err(dev, "%s: Auth not needed\n", file_op);
 			return -EEXIST;
-		if (sjtag_consent <= SJTAG_CONSENT_UNGRANTED)
+		}
+		if (sjtag_consent <= SJTAG_CONSENT_UNGRANTED) {
+			st->cmd_kstatus = SJTAG_CMD_KSTATUS_BEGIN_NO_CONSENT;
+			dev_err(dev, "%s: User consent not granted\n", file_op);
 			return -EINVAL;
+		}
 	}
-
-	scnprintf(file_op, SJTAG_FILEOP_STR_SIZE, "\"%s\" write", dev_attr->attr.name);
-	exchange_buff = (char *)dss_header_base + DSS_HDR_DBGC_EXCHG_BUFF_OFFS;
+	st->cmd_kstatus = SJTAG_CMD_KSTATUS_OK;
 
 	memcpy(exchange_buff, st->cfg_params[sjtag_cfg_param_id_pubkey], SJTAG_PUBKEY_SIZE);
 
@@ -501,22 +522,33 @@ static ssize_t preauth_show(struct device *dev, struct device_attribute *dev_att
 }
 static DEVICE_ATTR_RO(preauth);
 
-static u32 parse_asn1_length(char **pptr)
+static int parse_asn1_length(char **pptr, const char *oob_ptr)
 {
-	u32 short_len;
-	u32 long_len = 0;
+	int buff_byte;
+	u32 len_cnt, block_len;
 
-	short_len = *(*pptr)++;
-	if (!(short_len & 0x80))
-		return short_len;
+	buff_byte = safe_read_buff((*pptr)++, oob_ptr);
+	if (buff_byte < 0)
+		return -1;
 
-	short_len &= 0x7f;
-	while (short_len--) {
-		long_len <<= 8;
-		long_len |= *(*pptr)++;
+	if (!(buff_byte & 0x80)) {
+		block_len = buff_byte;		/* Actual block length */
+	} else {
+		len_cnt = buff_byte & 0x7f;	/* Length of the block length value */
+		block_len = 0;
+		while (len_cnt--) {
+			buff_byte = safe_read_buff((*pptr)++, oob_ptr);
+			if (buff_byte < 0)
+				return -1;
+			block_len <<= 8;
+			block_len |= buff_byte;
+		}
 	}
 
-	return long_len;
+	if (*pptr + block_len > oob_ptr)
+		return -1;
+
+	return block_len;
 }
 
 static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
@@ -530,11 +562,11 @@ static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
 	char *exchange_buff;
 	struct sig_auth_tok_t *sig_auth_tok;
 	int ipc_rc;
-	int len;
+	int len, block_len;
 	char *sigptr;
 	char *destptr;
 	int section, byte;
-	u32 block_len;
+	const char *oob_ptr;
 
 	if (dss_header_base == 0)
 		return -ENODEV;
@@ -548,7 +580,14 @@ static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
 	 * processing.)
 	 */
 
-	sig_auth_tok = (struct sig_auth_tok_t *)exchange_buff;
+	if (count <= 1) {	/* 1: Newline character */
+		st->cmd_kstatus = SJTAG_CMD_KSTATUS_AUTH_SERVER_REJECT;
+		dev_err(dev, "%s: Server rejected signing request\n", file_op);
+		return -EINVAL;
+	}
+
+	st->cmd_kstatus = SJTAG_CMD_KSTATUS_AUTH_INVALID_SIG;
+
 	if (count > 2 * SJTAG_MAX_SIGFILE_SIZE + 1)	/* +1: Newline character */
 		dev_warn(dev, "%s: Larger-than-expected sig payload size\n", file_op);
 	len = min((int)count / 2, SJTAG_MAX_SIGFILE_SIZE);
@@ -558,8 +597,10 @@ static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
 		dev_err(dev, "%s: Invalid sig payload\n", file_op);
 		return -EINVAL;
 	}
+	oob_ptr = wbuff + len;
 
 	/* Start building the payload with the access parameters */
+	sig_auth_tok = (struct sig_auth_tok_t *)exchange_buff;
 	memcpy(sig_auth_tok->dbg_domain, st->cfg_params[sjtag_cfg_param_id_dbg_domain],
 			SJTAG_DBG_DOMAIN_SIZE);
 	memcpy(sig_auth_tok->access_lvl, st->cfg_params[sjtag_cfg_param_id_access_lvl],
@@ -571,29 +612,25 @@ static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
 	sigptr = wbuff;
 	destptr = sig_auth_tok->sig;
 
-	if (*sigptr++ != SJTAG_SIG_ASN1_TAG_SEQUENCE) {
-		dev_err(dev, "%s: Invalid sig payload type tag\n", file_op);
+	if (safe_read_buff(sigptr++, oob_ptr) != SJTAG_SIG_ASN1_TAG_SEQUENCE) {
+		dev_err(dev, "%s: Incorrect sig payload type tag\n", file_op);
 		return -EINVAL;
 	}
-	block_len = parse_asn1_length(&sigptr);
-	if (block_len > len - (sigptr - wbuff)) {
-		dev_err(dev, "%s: Inconsistent sig payload size\n", file_op);
+	block_len = parse_asn1_length(&sigptr, oob_ptr);
+	if (block_len < 0) {
+		dev_err(dev, "%s: Incorrect sig payload size\n", file_op);
 		return -EINVAL;
 	}
 
 	for (section = 0; section < 2; section++) {
 		/* Parse the section header */
-		if (*sigptr++ != SJTAG_SIG_ASN1_TAG_INTEGER) {
-			dev_err(dev, "%s: Invalid sig section type tag\n", file_op);
+		if (safe_read_buff(sigptr++, oob_ptr) != SJTAG_SIG_ASN1_TAG_INTEGER) {
+			dev_err(dev, "%s: Incorrect sig section type tag\n", file_op);
 			return -EINVAL;
 		}
-		block_len = parse_asn1_length(&sigptr);
-		if (block_len > SJTAG_SIG_MAX_SECTION_SIZE) {
-			dev_err(dev, "%s: Invalid sig section size\n", file_op);
-			return -EINVAL;
-		}
-		if (block_len > len - (sigptr - wbuff)) {
-			dev_err(dev, "%s: Inconsistent sig section size\n", file_op);
+		block_len = parse_asn1_length(&sigptr, oob_ptr);
+		if (block_len < 0 || block_len > SJTAG_SIG_MAX_SECTION_SIZE) {
+			dev_err(dev, "%s: Incorrect sig section size\n", file_op);
 			return -EINVAL;
 		}
 
@@ -604,6 +641,8 @@ static ssize_t auth_store(struct device *dev, struct device_attribute *dev_attr,
 			*destptr++ = 0;
 		sigptr += block_len;
 	}
+
+	st->cmd_kstatus = SJTAG_CMD_KSTATUS_OK;
 
 	ipc_rc = send_ipc_cmd(st, SJTAG_RUN_AUTH, exchange_buff, sizeof(*sig_auth_tok), file_op);
 	if (ipc_rc < 0)
@@ -624,6 +663,8 @@ static ssize_t end_store(struct device *dev, struct device_attribute *dev_attr,
 	int ipc_rc;
 
 	scnprintf(file_op, SJTAG_FILEOP_STR_SIZE, "\"%s\" write", dev_attr->attr.name);
+
+	st->cmd_kstatus = SJTAG_CMD_KSTATUS_OK;
 
 	ipc_rc = send_ipc_cmd(st, SJTAG_END, NULL, 0, file_op);
 	if (ipc_rc < 0)
@@ -647,6 +688,67 @@ static ssize_t consent_show(struct device *dev, struct device_attribute *dev_att
 	return scnprintf(buf, PAGE_SIZE, "%d", sjtag_consent);
 }
 static DEVICE_ATTR_RO(consent);
+
+static ssize_t consent_h_show(struct device *dev, struct device_attribute *dev_attr, char *buf)
+{
+	const char *ret_str;
+
+	switch (sjtag_consent) {
+	case SJTAG_CONSENT_UNKNOWN:
+		ret_str = "Unknown";
+		break;
+	case SJTAG_CONSENT_UNGRANTED:
+		ret_str = "No";
+		break;
+	case SJTAG_CONSENT_GRANTED:
+		ret_str = "Yes";
+		break;
+	default:
+		ret_str = "<undef'd>";
+		break;
+	}
+	return scnprintf(buf, PAGE_SIZE, "%s\n", ret_str);
+}
+static DEVICE_ATTR_RO(consent_h);
+
+static ssize_t kstatus_show(struct device *dev, struct device_attribute *dev_attr, char *buf)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct sjtag_dev_state *st = platform_get_drvdata(pdev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d", st->cmd_kstatus);
+}
+static DEVICE_ATTR_RO(kstatus);
+
+static ssize_t kstatus_h_show(struct device *dev, struct device_attribute *dev_attr, char *buf)
+{
+	const char *ret_str;
+	struct platform_device *pdev = to_platform_device(dev);
+	struct sjtag_dev_state *st = platform_get_drvdata(pdev);
+
+	switch (st->cmd_kstatus) {
+	case SJTAG_CMD_KSTATUS_OK:
+		ret_str = "OK";
+		break;
+	case SJTAG_CMD_KSTATUS_BEGIN_AUTH_NOT_NEEDED:
+		ret_str = "Auth not needed";
+		break;
+	case SJTAG_CMD_KSTATUS_BEGIN_NO_CONSENT:
+		ret_str = "No user consent";
+		break;
+	case SJTAG_CMD_KSTATUS_AUTH_SERVER_REJECT:
+		ret_str = "Server reject";
+		break;
+	case SJTAG_CMD_KSTATUS_AUTH_INVALID_SIG:
+		ret_str = "Invalid sig";
+		break;
+	default:
+		ret_str = "<undef'd>";
+		break;
+	}
+	return scnprintf(buf, PAGE_SIZE, "%s\n", ret_str);
+}
+static DEVICE_ATTR_RO(kstatus_h);
 
 /* Auth debug */
 
@@ -739,6 +841,9 @@ static struct attribute *sjtag_attrs[] = {
 	&dev_attr_dbg_time.attr,
 	&dev_attr_dbg_time_s.attr,
 	&dev_attr_consent.attr,
+	&dev_attr_consent_h.attr,
+	&dev_attr_kstatus.attr,
+	&dev_attr_kstatus_h.attr,
 	&dev_attr_hw_pubkey.attr,
 	&dev_attr_pubkey.attr,
 	&dev_attr_dbg_domain.attr,
@@ -844,6 +949,8 @@ static int sjtag_probe(struct platform_device *pdev)
 	rc = sjtag_find_gsa_device(pdev);
 	if (rc)
 		return rc;
+
+	st->cmd_kstatus = SJTAG_CMD_KSTATUS_OK;
 
 	send_ipc_cmd(st, SJTAG_GET_STATUS, NULL, SJTAG_STATUS_SIZE, "[probe sts read]");
 

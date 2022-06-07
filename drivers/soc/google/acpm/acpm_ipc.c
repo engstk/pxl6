@@ -42,7 +42,6 @@ static struct acpm_ipc_info *acpm_ipc;
 static struct workqueue_struct *update_log_wq;
 static struct acpm_debug_info *acpm_debug;
 static bool is_acpm_stop_log;
-static bool acpm_stop_log_req;
 
 static struct acpm_framework *acpm_initdata;
 static void __iomem *acpm_srambase;
@@ -90,20 +89,33 @@ u64 get_frc_time(void)
 }
 EXPORT_SYMBOL_GPL(get_frc_time);
 
-#define IPC_AP_FVP_CAL	0
-bool is_acpm_ipc_busy(void)
+#define IPC_AP_FVP_CAL    0
+#define IPC_BUSY_CHK_CNT  500
+
+bool is_acpm_ipc_flushed(void)
 {
 	struct acpm_ipc_ch *channel;
 	unsigned int channel_id = IPC_AP_FVP_CAL;
-	unsigned int tx_front, rx_front;
+	volatile unsigned int tx_front, rx_front;
+	unsigned int wait_cnt = 0;
+	bool ret = false;
 
 	channel = &acpm_ipc->channel[channel_id];
-	tx_front = __raw_readl(channel->tx_ch.front);
-	rx_front = __raw_readl(channel->rx_ch.front);
 
-	return (tx_front != rx_front);
+	while (wait_cnt++ <= IPC_BUSY_CHK_CNT) {
+		tx_front = __raw_readl(channel->tx_ch.front);
+		rx_front = __raw_readl(channel->rx_ch.front);
+
+		if (tx_front == rx_front) {
+			/*mbox req has been flushed*/
+			ret = true;
+			break;
+		} else
+			udelay(10);
+	}
+	return ret;
 }
-EXPORT_SYMBOL_GPL(is_acpm_ipc_busy);
+EXPORT_SYMBOL_GPL(is_acpm_ipc_flushed);
 
 static int plugins_init(struct device_node *node)
 {
@@ -259,11 +271,6 @@ void acpm_log_print_buff(struct acpm_log_buff *buffer)
 		buffer->rear_index = rear;
 		front = __raw_readl(buffer->log_buff_front);
 	}
-
-	if (acpm_stop_log_req) {
-		is_acpm_stop_log = true;
-		acpm_ramdump();
-	}
 }
 
 static void acpm_log_print(void)
@@ -277,8 +284,8 @@ static void acpm_log_print(void)
 
 void acpm_stop_log_and_dumpram(void)
 {
-	acpm_stop_log_req = true;
-	acpm_log_print();
+	is_acpm_stop_log = true;
+	acpm_ramdump();
 }
 EXPORT_SYMBOL_GPL(acpm_stop_log_and_dumpram);
 
