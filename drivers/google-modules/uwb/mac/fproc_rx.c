@@ -29,7 +29,7 @@ static void
 mcps802154_fproc_rx_wait_tx_done_tx_done(struct mcps802154_local *local)
 {
 	/* End current access and ask for next one. */
-	mcps802154_fproc_access_done(local, 0);
+	mcps802154_fproc_access_done(local, false);
 	mcps802154_fproc_access_now(local);
 }
 
@@ -66,7 +66,7 @@ static void mcps802154_fproc_rx_rx_frame(struct mcps802154_local *local)
 			return;
 		}
 	}
-	mcps802154_fproc_access_done(local, r);
+	mcps802154_fproc_access_done(local, !!r);
 
 	if (r && r != -EBUSY)
 		mcps802154_fproc_broken_handle(local);
@@ -78,7 +78,7 @@ static void mcps802154_fproc_rx_rx_frame(struct mcps802154_local *local)
 static void mcps802154_fproc_rx_rx_error(struct mcps802154_local *local,
 					 enum mcps802154_rx_error_type error)
 {
-	mcps802154_fproc_access_done(local, -EINVAL);
+	mcps802154_fproc_access_done(local, true);
 
 	/* Next access. */
 	mcps802154_fproc_access_now(local);
@@ -94,7 +94,7 @@ static void mcps802154_fproc_rx_schedule_change(struct mcps802154_local *local)
 		/* Wait for RX result. */
 		return;
 
-	mcps802154_fproc_access_done(local, r);
+	mcps802154_fproc_access_done(local, !!r);
 	if (r)
 		mcps802154_fproc_broken_handle(local);
 	else

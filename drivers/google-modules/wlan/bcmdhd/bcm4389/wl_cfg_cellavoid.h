@@ -1,7 +1,7 @@
 /*
  * Cellular channel avoidance implementation
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -50,6 +50,9 @@ extern chanspec_t wl_cellavoid_find_widechspec_fromchspec(void *cai, chanspec_t 
 extern void wl_cellavoid_set_csa_done(void *cai);
 extern bool wl_cellavoid_mandatory_isset(void *cai, enum nl80211_iftype type);
 extern bool wl_cellavoid_is_safe(void *cai, chanspec_t chanspec);
+extern bool wl_cellavoid_is_safe_overlap(void *cai, chanspec_t chanspec);
 extern wifi_interface_mode wl_cellavoid_mandatory_to_usable_channel_filter(void *cai);
-
+#ifdef WL_CELLULAR_CHAN_AVOID_DUMP
+extern void wl_cellavoid_sanity_check_chan_info_list(void *cai);
+#endif /* WL_CELLULAR_CHAN_AVOID_DUMP */
 #endif /* _wl_cfg_cellavoid_h_ */

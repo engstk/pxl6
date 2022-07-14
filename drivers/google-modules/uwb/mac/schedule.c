@@ -82,7 +82,7 @@ int mcps802154_schedule_update(struct mcps802154_local *local,
 
 	trace_schedule_update_done(local, sched);
 
-	return 0;
+	return 1;
 }
 
 int mcps802154_schedule_set_start(
@@ -216,3 +216,14 @@ void mcps802154_schedule_invalidate(struct mcps802154_llhw *llhw)
 		mcps802154_ca_invalidate_schedule(local);
 }
 EXPORT_SYMBOL(mcps802154_schedule_invalidate);
+
+int mcps802154_schedule_get_regions(struct mcps802154_llhw *llhw,
+				    struct list_head **regions)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	*regions = &local->ca.regions;
+
+	return local->ca.n_regions;
+}
+EXPORT_SYMBOL(mcps802154_schedule_get_regions);

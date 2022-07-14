@@ -16,7 +16,6 @@
 #include <linux/thermal.h>
 #include <linux/pm_runtime.h>
 #include <linux/kernel.h>
-#include <misc/logbuffer.h>
 
 /* Google integration */
 #include "gbms_power_supply.h"
@@ -41,6 +40,11 @@ struct pca9468_platform_data {
 	/* irdrop */
 	unsigned int	irdrop_limits[3];
 	int		irdrop_limit_cnt;
+
+	/* Spread Spectrum settings */
+	unsigned int	sc_clk_dither_rate;
+	unsigned int	sc_clk_dither_limit;
+	bool		sc_clk_dither_en;
 
 #ifdef CONFIG_THERMAL
 	const char *usb_tz_name;
@@ -346,8 +350,8 @@ int pca9468_get_charge_type(struct pca9468_charger *pca9468);
 extern int debug_printk_prlog;
 extern int debug_no_logbuffer;
 
-__printf(3,4)
-void logbuffer_prlog(const struct pca9468_charger *pca9468, int level, const char *f, ...);
+#define logbuffer_prlog(p, level, fmt, ...)	\
+	gbms_logbuffer_prlog(p->log, level, debug_no_logbuffer, debug_printk_prlog, fmt, ##__VA_ARGS__)
 
 /* charge stats */
 void p9468_chg_stats_init(struct p9468_chg_stats *chg_data);

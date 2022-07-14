@@ -24,7 +24,7 @@
 #ifndef NET_VENDOR_CMD_H
 #define NET_VENDOR_CMD_H
 
-#include <linux/kernel.h>
+#include <linux/types.h>
 
 /**
  * enum dw3000_vendor_cmd - Vendor command identifiers.
@@ -34,11 +34,14 @@
  *     NFCC Coex: get access information.
  * @DW3000_VENDOR_CMD_NFCC_COEX_STOP:
  *     NFCC Coex: stop.
+ * @DW3000_VENDOR_CMD_PCTT_SETUP_HW:
+ *     PCTT: Setup hardware access.
  */
 enum dw3000_vendor_cmd {
 	DW3000_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS,
 	DW3000_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION,
 	DW3000_VENDOR_CMD_NFCC_COEX_STOP,
+	DW3000_VENDOR_CMD_PCTT_SETUP_HW,
 };
 
 /**
@@ -96,6 +99,38 @@ struct dw3000_vendor_cmd_nfcc_coex_get_access_info {
 	 * @next_duration_dtu: Next access duration, or 0 if unknown.
 	 */
 	int next_duration_dtu;
+};
+
+/**
+ * struct dw3000_vendor_cmd_pctt_setup_hw - PCTT: direct HW access
+ * vendor command.
+ */
+struct dw3000_vendor_cmd_pctt_setup_hw {
+	/**
+	 * @chan: Channel number, 5 or 9.
+	 */
+	int chan;
+	/**
+	 * @rframe_config: STS packet configuration for ranging frame.
+	 */
+	u8 rframe_config;
+	/**
+	 * @preamble_code_index: Specifies code index according to Table 16-7 in
+	 * IEEE Std 802.15.4-2020 and Table 42 in IEEE Std 802.15.4z-2020
+	 */
+	u8 preamble_code_index;
+	/**
+	 * @sfd_id: Start of frame delimiter.
+	 */
+	u8 sfd_id;
+	/**
+	 * @psdu_data_rate: PSDU data rate.
+	 */
+	u8 psdu_data_rate;
+	/**
+	 * @preamble_duration: Preamble duration.
+	 */
+	u8 preamble_duration;
 };
 
 #endif /* NET_VENDOR_CMD_H */

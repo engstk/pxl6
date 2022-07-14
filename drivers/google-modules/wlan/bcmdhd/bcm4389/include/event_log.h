@@ -1,7 +1,7 @@
 /*
  * EVENT_LOG system definitions
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -39,8 +39,8 @@
 /* We make sure that the block size will fit in a single packet
  *  (allowing for a bit of overhead on each packet
  */
-#if defined(BCMPCIEDEV)
-#define EVENT_LOG_MAX_BLOCK_SIZE	1648
+#if (defined(BCMPCIEDEV) && defined(BCMPCIEDEV_ENABLED)) || defined(BCMPCIE)
+#define EVENT_LOG_MAX_BLOCK_SIZE	1832
 #else
 #define EVENT_LOG_MAX_BLOCK_SIZE	1400
 #endif
@@ -48,6 +48,7 @@
 #define EVENT_LOG_BLOCK_SIZE_1K		0x400u
 #define EVENT_LOG_BLOCK_SIZE_512B	0x200u
 #define EVENT_LOG_BLOCK_SIZE_256B	0x100u
+#define EVENT_LOG_BLOCK_SIZE_1648B	0x670u
 #define EVENT_LOG_WL_BLOCK_SIZE		0x200
 #define EVENT_LOG_PSM_BLOCK_SIZE	0x200
 #define EVENT_LOG_MEM_API_BLOCK_SIZE	0x200
@@ -62,20 +63,47 @@
 #define EVENT_LOG_TOF_INLINE_BLOCK_SIZE	1300u
 #define EVENT_LOG_TOF_INLINE_BUF_SIZE (EVENT_LOG_TOF_INLINE_BLOCK_SIZE * 3u)
 
-#define EVENT_LOG_PRSRV_BUF_SIZE	(EVENT_LOG_MAX_BLOCK_SIZE * 2)
+#define EVENT_LOG_PRSRV_BUF_SIZE	(EVENT_LOG_BLOCK_SIZE_1648B * 2)
 #define EVENT_LOG_BUS_PRSRV_BUF_SIZE	(EVENT_LOG_BUS_BLOCK_SIZE * 2)
 #define EVENT_LOG_WBUS_PRSRV_BUF_SIZE	(EVENT_LOG_WBUS_BLOCK_SIZE * 2)
 
-#define EVENT_LOG_BLOCK_SIZE_PRSRV_CHATTY	(EVENT_LOG_MAX_BLOCK_SIZE * 1)
-#define EVENT_LOG_BLOCK_SIZE_BUS_PRSRV_CHATTY	(EVENT_LOG_MAX_BLOCK_SIZE * 1)
+#define EVENT_LOG_BLOCK_SIZE_PRSRV_CHATTY	(EVENT_LOG_BLOCK_SIZE_1648B * 1)
+#define EVENT_LOG_BLOCK_SIZE_BUS_PRSRV_CHATTY	(EVENT_LOG_BLOCK_SIZE_1648B * 1)
 
 /* Maximum event log record payload size = 1016 bytes or 254 words. */
 #define EVENT_LOG_MAX_RECORD_PAYLOAD_SIZE	254
 
+/* A format number entry in event header is shifted left by 2.
+ * To get the lower bits of actual format number used, shift the format number field in the
+ * event log header right by 2.
+ * When extended headers are not present, the actual format number is 14 bits long.
+ * Actual format number is used to index into the string table as mentioned in logstrs.bin
+ */
+#define EVENT_LOG_ACTUAL_FMT_NUM_LS_SHIFT		(2u)
+/* When extended headers are present, the actual format number is 18 bits long.
+ * The extended format number represents top 4 bits of the actual format number
+ * Actual format number = (hdr->fmt_num >> EVENT_LOG_ACTUAL_FMT_NUM_LS_SHIFT) |
+ * ((ext_hdr->extended_fmt_num & EVENT_LOG_EXT_HDR_FMT_NUM_MASK) <<
+ * EVENT_LOG_ACTUAL_FMT_NUM_MS_SHIFT)
+ */
+#define EVENT_LOG_ACTUAL_FMT_NUM_MS_SHIFT		(14u)
+/* Only 4 bits of extended format number are valid */
+#define EVENT_LOG_EXT_HDR_FMT_NUM_MASK			(0xFu)
+
+/* Extended and binary data indication bits in the format number field in event log header */
 #define EVENT_LOG_EXT_HDR_IND		(0x01)
 #define EVENT_LOG_EXT_HDR_BIN_DATA_IND	(0x01 << 1)
+
+/* Actual format number for binary records with regular header */
+#define EVENT_LOG_ACTUAL_REG_BIN_FMT_NUM	(0x3FFFu)
+/* Actual format number for binary records with extended header */
+#define EVENT_LOG_ACTUAL_EXT_BIN_FMT_NUM	(0x3FFEu)
+
 /* Format number to send binary data with extended event log header */
-#define EVENT_LOG_EXT_HDR_BIN_FMT_NUM	(0x3FFE << 2)
+#define EVENT_LOG_EXT_HDR_BIN_FMT_NUM	(EVENT_LOG_ACTUAL_EXT_BIN_FMT_NUM << 2)
+
+/* Format number to send binary data with regular event log header */
+#define EVENT_LOG_REG_HDR_BIN_FMT_NUM	(EVENT_LOG_ACTUAL_REG_BIN_FMT_NUM << 2)
 
 #define EVENT_LOGSET_ID_MASK	0x3F
 /* For event_log_get iovar, set values from 240 to 255 mean special commands for a group of sets */
@@ -219,11 +247,12 @@ typedef struct event_log_set {
 } event_log_set_t;
 
 /* Definition of flags in set */
-#define EVENT_LOG_SET_SHRINK_ACTIVE	(1 << 0)
-#define EVENT_LOG_SET_CONFIG_PARTIAL_BLK_SEND	(0x1 << 1)
-#define EVENT_LOG_SET_CHECK_LOG_RATE	(1 << 2)
-#define EVENT_LOG_SET_PERIODIC			(1 << 3)
-#define EVENT_LOG_SET_D3PRSV			(1 << 4)
+#define EVENT_LOG_SET_SHRINK_ACTIVE		BCM_BIT(0)
+#define EVENT_LOG_SET_CONFIG_PARTIAL_BLK_SEND	BCM_BIT(1)
+#define EVENT_LOG_SET_CHECK_LOG_RATE		BCM_BIT(2)
+#define EVENT_LOG_SET_PERIODIC			BCM_BIT(3)
+#define EVENT_LOG_SET_D3PRSV			BCM_BIT(4)
+#define EVENT_LOG_SET_SHADOW			BCM_BIT(5)
 
 /* Top data structure for access to everything else */
 typedef struct event_log_top {
@@ -368,6 +397,15 @@ extern bool prsv_periodic_enab;
 #define EVENT_LOG_FORCE_FLUSH_ALL()
 #define EVENT_LOG_FORCE_FLUSH_PRSRV_LOG_ALL()
 
+#define event_log_tag_start(tag, set_num, flags)
+#define event_log_tag_stop(tag)
+
+#define event_log_num_blocks_get(set, num_blocks)	BCME_OK
+#define event_log_block_get(set, buf, len)		BCME_OK
+
+#define event_log_enable_hostmem_access(hostmem_access_enabled)
+#define event_log_enable_event_trace(event_trace_enabled)
+
 #else  /* EVENT_LOG_COMPILE */
 
 /* The first few _EVENT_LOGX() macros are special because they can be done more
@@ -388,6 +426,21 @@ extern bool prsv_periodic_enab;
 #define _EVENT_LOG4(tag, fmt_num, fmt, t1, t2, t3, t4)	\
 	event_log4(tag, fmt_num, t1, t2, t3, t4)
 
+#ifdef EVENT_LOG_FIXED_ARGS_ONLY
+/* Only 4 or less argumenents are supported */
+#define _EVENT_LOG_VA_ARGS_ERR()            STATIC_ASSERT(0)
+#define _EVENT_LOG5(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOG6(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOG7(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOG8(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOG9(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGA(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGB(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGC(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGD(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGE(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#define _EVENT_LOGF(tag, fmt_num, fmt, ...) _EVENT_LOG_VA_ARGS_ERR()
+#else
 /* The rest call the generic routine that takes a count */
 #define _EVENT_LOG5(tag, fmt_num, fmt, ...) event_logn(5, tag, fmt_num, __VA_ARGS__)
 #define _EVENT_LOG6(tag, fmt_num, fmt, ...) event_logn(6, tag, fmt_num, __VA_ARGS__)
@@ -400,6 +453,7 @@ extern bool prsv_periodic_enab;
 #define _EVENT_LOGD(tag, fmt_num, fmt, ...) event_logn(13, tag, fmt_num, __VA_ARGS__)
 #define _EVENT_LOGE(tag, fmt_num, fmt, ...) event_logn(14, tag, fmt_num, __VA_ARGS__)
 #define _EVENT_LOGF(tag, fmt_num, fmt, ...) event_logn(15, tag, fmt_num, __VA_ARGS__)
+#endif /* EVENT_LOG_FIXED_ARGS_ONLY */
 
 /* Casting  low level macros */
 #define _EVENT_LOG_CAST0(tag, fmt_num, fmt)		\
@@ -574,15 +628,18 @@ extern uint8 *event_log_tag_sets;
 int event_log_init_context(event_log_top_t *top, uint8 *tag_sets, uint16 tag_sets_len,
 		uint8 *tag_sets_ext, uint16 tag_sets_ext_len);
 /* Initialize event log set context on a given buffer */
-void event_log_set_init_context(event_log_set_t *ts, int size);
+int event_log_set_init_context(event_log_set_t *ts, int size, int set_num);
 /* Add a newly allocated block to a specific set */
 void event_log_set_add_block(event_log_set_t *ts, event_log_block_t *tb);
 /* Rest a set after adding new blocks */
 void event_log_set_reset(event_log_set_t *ts);
-extern int event_log_init(osl_t *osh);
-extern int event_log_set_init(osl_t *osh, int set_num, int size);
-extern int event_log_set_expand(osl_t *osh, int set_num, int size);
-extern int event_log_set_shrink(osl_t *osh, int set_num, int size);
+int event_log_set_reset_by_num(int set_num);
+int event_log_init(osl_t *osh);
+void event_log_timestamp_init(osl_t *osh);
+int event_log_set_init(osl_t *osh, int set_num, int size);
+int event_log_set_expand(osl_t *osh, int set_num, int size);
+int event_log_set_expand_align(osl_t *osh, int set_num, int size, uint align_bits);
+int event_log_set_shrink(osl_t *osh, int set_num, int size);
 
 /**
  * @brief Event log host access state change notification callback function type
@@ -621,10 +678,6 @@ extern void event_log2(int tag, int fmtNum, uint32 t1, uint32 t2);
 extern void event_log3(int tag, int fmtNum, uint32 t1, uint32 t2, uint32 t3);
 extern void event_log4(int tag, int fmtNum, uint32 t1, uint32 t2, uint32 t3, uint32 t4);
 extern void event_logn(int num_args, int tag, int fmtNum, ...);
-#ifdef ROM_COMPAT_MSCH_PROFILER
-/* For compatibility with ROM, for old msch event log function to pass parameters in stack */
-extern void event_logv(uint num_args, int tag, int fmtNum, va_list ap);
-#endif /* ROM_COMPAT_MSCH_PROFILER */
 
 /* Use PTM based timestamping of event log records if PTM is available. */
 #if defined(GTIMER_PTM) && !defined(GTIMER_PTM_DISABLED)
@@ -686,6 +739,12 @@ extern int event_log_num_blocks_get(int set, uint32 *num_blocks);
 /* Get a log buffer of a desired set */
 extern int event_log_block_get(int set, uint32 **buf, uint16 *len);
 extern uint32 event_log_get_maxsets(void);
+
+/* Get cur_block of a specific set */
+event_log_block_t * event_log_block_get_cur(int set);
+
+/* API to notify event log framework that cur_block of the specific set is filled */
+void event_log_shadow_set_post(int set);
 
 /* For all other non-logtrace consumers */
 extern int event_log_set_is_valid(int set);

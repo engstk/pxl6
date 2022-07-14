@@ -43,6 +43,7 @@ struct sk_buff *mcps802154_frame_alloc(struct mcps802154_llhw *llhw,
 		return NULL;
 
 	skb_reserve(skb, hlen);
+	skb_tailroom_reserve(skb, size, tlen);
 
 	return skb;
 }

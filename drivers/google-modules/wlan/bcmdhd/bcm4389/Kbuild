@@ -1,6 +1,6 @@
 # bcmdhd
 #
-# Copyright (C) 2021, Broadcom.
+# Copyright (C) 2022, Broadcom.
 #
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you
@@ -133,6 +133,11 @@ DHDCFLAGS += -DDHD_SBN
 
 # Enable inband device wake feature
 DHDCFLAGS += -DPCIE_INB_DW
+# Enable DS ack extended wait
+DHDCFLAGS += -DPCIE_INB_DSACK_EXT_WAIT
+
+# Prioritize ARP
+DHDCFLAGS += -DPRIORITIZE_ARP
 
 # Debug check for PCIe read latency
 #DHDCFLAGS += -DDBG_DW_CHK_PCIE_READ_LATENCY
@@ -238,8 +243,9 @@ ifneq ($(CONFIG_SOC_GOOGLE),)
 	DHDCFLAGS += -DAFFINITY_UPDATE_MIN_PERIOD_SEC=6
 	DHDCFLAGS += -DRESCHED_STREAK_MAX_HIGH=10
 	DHDCFLAGS += -DRESCHED_STREAK_MAX_LOW=2
-	DHDCFLAGS += -DIRQ_AFFINITY_BIG_CORE=5
-	DHDCFLAGS += -DIRQ_AFFINITY_SMALL_CORE=1
+	DHDCFLAGS += -DCLEAN_IRQ_AFFINITY_HINT
+	DHDCFLAGS += -DIRQ_AFFINITY_BIG_CORE=4
+	DHDCFLAGS += -DIRQ_AFFINITY_SMALL_CORE=4
 endif
 
 # Memory consumed by DHD
@@ -274,17 +280,28 @@ ifneq ($(CONFIG_BCMDHD_PCIE),)
 	DHDCFLAGS += -DWL_MONITOR
 # WLBR Regon coordinator
 	DHDCFLAGS += -DWBRC
+# DPC bounds
+        DHDCFLAGS += -DDHD_TX_CPL_BOUND=64
+        DHDCFLAGS += -DDHD_TX_POST_BOUND=128
+        DHDCFLAGS += -DDHD_RX_CPL_POST_BOUND=156
+        DHDCFLAGS += -DDHD_CTRL_CPL_POST_BOUND=64
 endif
 
 ifneq ($(CONFIG_FIB_RULES),)
 # Debugability
 # HAL File dump is supported only for iptable builds(brcm_wlan_iptables_defconfig)
 ifneq ($(CONFIG_SOC_GOOGLE),)
-DHDCFLAGS += -DDHD_DEBUGABILITY_DEBUG_DUMP
+DHDCFLAGS += -DDHD_FILE_DUMP_EVENT
+DHDCFLAGS += -DDHD_HAL_RING_DUMP
+DHDCFLAGS += -DDHD_HAL_RING_DUMP_MEMDUMP
 # Pixel platform only, to support ring data flushing properly
 DHDCFLAGS += -DDHD_DUMP_START_COMMAND
+# Enable pktid logging
+DHDCFLAGS += -DDHD_MAP_PKTID_LOGGING
 else
 DHDCFLAGS += -DDHD_FILE_DUMP_EVENT
+# The debug dump file path is blank in DHD, it is defined in HAL.
+DHDCFLAGS += -DDHD_COMMON_DUMP_PATH="\"/\""
 endif
 DHDCFLAGS := $(filter-out -DDHD_DUMP_FILE_WRITE_FROM_KERNEL ,$(DHDCFLAGS))
 endif
@@ -367,7 +384,9 @@ DHDCFLAGS += -DWL_P2P_RAND
 #Custom Mapping of DSCP to User Priority
 DHDCFLAGS += -DWL_CUSTOM_MAPPING_OF_DSCP
 # Enable below define for production
+ifneq ($(CONFIG_SOC_GOOGLE),)
 DHDCFLAGS += -DMACADDR_PROVISION_ENFORCED
+endif
 ifneq ($(CONFIG_BCMDHD_PCIE),)
 	DHDCFLAGS += -DDHD_WAKE_STATUS
 endif
@@ -394,7 +413,6 @@ DHDCFLAGS += -DRSSI_MONITOR_SUPPORT
 DHDCFLAGS += -DSET_SSID_FAIL_CUSTOM_RC=100
 DHDCFLAGS += -DDHD_EVENT_LOG_FILTER
 DHDCFLAGS += -DWL_CFGVENDOR_SEND_HANG_EVENT
-DHDCFLAGS += -DDHD_MAP_PKTID_LOGGING
 # Packet
 DHDCFLAGS += -DBLOCK_IPV6_PACKET
 #DHDCFLAGS += -DDHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT # NAN test failure
@@ -587,7 +605,9 @@ DHDCFLAGS += -DESCAN_RESULT_PATCH
 DHDCFLAGS += -DDUAL_ESCAN_RESULT_BUFFER
 
 # NAN
-DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE -DWL_NANP2P
+DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE -DWL_NANP2P -DWL_NAN_INSTANT_MODE
+
+DHDCFLAGS += -DQOS_MAP_SET
 
 # Thermal mitigation flag
 DHDCFLAGS += -DWL_THERMAL_MITIGATION
@@ -680,6 +700,12 @@ DHDCFLAGS += -DDHD_SCAN_INC_RNR
 # debug code to identify root cause of scan timeout due to syncid mismatch
 DHDCFLAGS += -DSYNCID_MISMATCH_DEBUG
 
+# MSCS OFFLOAD
+DHDCFLAGS += -DWL_RAV_MSCS_NEG_IN_ASSOC
+
+# MAX_PFN_LIST_COUNT is defined as 64 in wlioctl_defs.h
+DHDCFLAGS += -DMAX_PFN_LIST_COUNT=16
+
 ##########################
 # driver type
 # m: module type driver
@@ -694,6 +720,10 @@ DRIVER_TYPE ?= $(CONFIG_BCMDHD)
 ifneq ($(filter y, $(CONFIG_BCM4389)),)
   #6GHz support
   DHDCFLAGS += -DWL_6G_BAND
+  # UNII4 channel support
+  DHDCFLAGS += -DWL_5P9G
+  # UNII-4 channel filter for non-sta roles
+  DHDCFLAGS += -DWL_UNII4_CHAN
 endif
 
 # For 4389 and 43752
@@ -882,6 +912,10 @@ ifneq ($(filter y, $(CONFIG_BCM4389)),)
 	DHDCFLAGS += -DBCM4389_CHIP_DEF -DSUPPORT_MULTIPLE_REVISION -DSUPPORT_MULTIPLE_REVISION_MAP
 	DHDCFLAGS += -DSUPPORT_MIXED_MODULES -DUSE_CID_CHECK -DSUPPORT_MULTIPLE_CHIPS
 	DHDCFLAGS += -DCONCAT_DEF_REV_FOR_NOMATCH_VID
+	# Detect NON DMA M2M corruption (MFG only)
+	DHDCFLAGS += -DDHD_NON_DMA_M2M_CORRUPTION
+	# Detect FW Memory Corruption (MFG only)
+	DHDCFLAGS += -DDHD_FW_MEM_CORRUPTION
 endif
 ifneq ($(CONFIG_BCMDHD_PCIE),)
 	DHDCFLAGS += -DDHD_LINUX_STD_FW_API
@@ -899,6 +933,10 @@ else ifneq ($(CONFIG_ARCH_HISI),)
 	DHDCFLAGS += -DDHD_SUPPORT_VFS_CALL
 	# Skip pktlogging of data packets
 	DHDCFLAGS += -DDHD_SKIP_PKTLOGGING_FOR_DATA_PKTS
+
+	# Allow wl event forwarding as network packet
+	DHDCFLAGS += -DWL_EVENT_ENAB
+
 ifneq ($(CONFIG_BCMDHD_PCIE),)
 	# LB RXP Flow control to avoid OOM
 	DHDCFLAGS += -DLB_RXP_STOP_THR=200 -DLB_RXP_STRT_THR=199
@@ -911,8 +949,6 @@ endif
 	DHDCFLAGS += -DDHD_CAP_PLATFORM="\"hikey \""
 	# Dongle init fail
 	DHDCFLAGS += -DPOWERUP_MAX_RETRY=3
-	# UNII4 channel support
-	DHDCFLAGS += -DWL_5P9G
 	DHDCFLAGS := $(filter-out -DSIMPLE_MAC_PRINT ,$(DHDCFLAGS))
 endif
 

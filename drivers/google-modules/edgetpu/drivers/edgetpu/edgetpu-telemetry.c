@@ -329,6 +329,7 @@ static int telemetry_init(struct edgetpu_dev *etdev, struct edgetpu_telemetry *t
 
 	tel->header = (struct edgetpu_telemetry_header *)vaddr;
 	tel->header->head = 0;
+	tel->header->size = 0;
 	tel->header->tail = 0;
 	tel->header->entries_dropped = 0;
 

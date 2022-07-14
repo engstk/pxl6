@@ -165,11 +165,11 @@ static inline int __dma_dir_to_iommu_prot(enum dma_data_direction dir)
 static inline int mmu_flag_to_iommu_prot(u32 mmu_flags, struct device *dev,
 					 enum dma_data_direction dir)
 {
-	int prot = 0; /* hardcode to non-dma-coherent for prior kernels */
+	int prot = 0;
 
 	if (mmu_flags & EDGETPU_MMU_COHERENT) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-		prot = dev_is_dma_coherent(dev) ? IOMMU_CACHE : 0;
+#ifdef EDGETPU_IS_DMA_COHERENT
+		prot = IOMMU_CACHE;
 #endif
 	}
 	prot |= __dma_dir_to_iommu_prot(dir);

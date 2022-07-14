@@ -23,11 +23,14 @@
 #include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/sched.h>
-#include <linux/interrupt.h>
 #include <linux/mutex.h>
+
 #include "dw3000.h"
 #include "dw3000_core.h"
 
+#define DW3000_MIN_CLAMP_VALUE	170
+
+/* First version with sched_setattr_nocheck: v4.16-rc1~164^2~5 */
 #if (KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE)
 #include <uapi/linux/sched/types.h>
 #endif
@@ -39,12 +42,10 @@ static inline int dw3000_set_sched_attr(struct task_struct *p)
 	/* Increase thread priority */
 	return sched_setscheduler(p, SCHED_FIFO, &sched_par);
 #else
-	struct sched_attr attr = {
-		.sched_policy = SCHED_FIFO,
-		.sched_priority = MAX_USER_RT_PRIO - 1,
-		.sched_flags = SCHED_FLAG_UTIL_CLAMP_MIN,
-		.sched_util_min = SCHED_CAPACITY_SCALE
-	};
+	struct sched_attr attr = { .sched_policy = SCHED_FIFO,
+				   .sched_priority = MAX_RT_PRIO - 2,
+				   .sched_flags = SCHED_FLAG_UTIL_CLAMP_MIN,
+				   .sched_util_min = DW3000_MIN_CLAMP_VALUE };
 	return sched_setattr_nocheck(p, &attr);
 #endif
 }
@@ -55,10 +56,10 @@ void dw3000_enqueue(struct dw3000 *dw, unsigned long work)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work |= work;
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 }
 
 /* Enqueue a generic work and wait for execution */
@@ -74,7 +75,7 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 		return cmd->cmd(dw, cmd->in, cmd->out);
 	}
 
-	/* Mutex is used in dw3000_enqueue_generic()
+	/* Mutex is used in dw3000_enqueue_generic() 
 	* This protection will work with the spinlock in order to allow
 	* the CPU to sleep and avoid ressources wasting during spinning
 	*/
@@ -83,14 +84,13 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 		return -EINTR;
 	}
 	/* Slow path if not in STM thread context */
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work |= work;
 	stm->generic_work = cmd;
-	wake_up(&stm->work_wq);
-	wait_event_lock_irq(stm->work_wq,
-						!(stm->pending_work & work),
-						stm->lock);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	wake_up_locked(&stm->work_wq);
+	wait_event_interruptible_locked_irq(stm->work_wq,
+					    !(stm->pending_work & work));
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 	mutex_unlock(&stm->mtx);
 	return cmd->ret;
 }
@@ -103,10 +103,10 @@ void dw3000_enqueue_timer(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	if (stm->pending_work & DW3000_TIMER_WORK) {
 		/* A timer cmd is already queued. */
-		spin_unlock_irqrestore(&stm->lock, flags);
+		spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 		dev_err(dw->dev,
 			"A timer cmd is already queued, this cmd will be ignored\n");
 		return;
@@ -121,7 +121,7 @@ void dw3000_enqueue_timer(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 	 * occurs in call_timer_fn().
 	 * So, it's less bad to unlock here.
 	 */
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 	/* Can't return cmd->ret because it's not yet executed. */
 }
 
@@ -131,10 +131,10 @@ void dw3000_dequeue(struct dw3000 *dw, unsigned long work)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work &= ~work;
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 }
 
 /* Enqueue IRQ work */
@@ -143,13 +143,13 @@ void dw3000_enqueue_irq(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	if (!(stm->pending_work & DW3000_IRQ_WORK)) {
 		stm->pending_work |= DW3000_IRQ_WORK;
 		disable_irq_nosync(dw->spi->irq);
 	}
 	wake_up_locked(&stm->work_wq);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 }
 
 void dw3000_clear_irq(struct dw3000 *dw)
@@ -157,10 +157,10 @@ void dw3000_clear_irq(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work &= ~DW3000_IRQ_WORK;
 	enable_irq(dw->spi->irq);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 }
 
 /* Wait for new work in the queue */
@@ -169,9 +169,10 @@ void dw3000_wait_pending_work(struct dw3000 *dw)
 	struct dw3000_state *stm = &dw->stm;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
-	wait_event_lock_irq(stm->work_wq, stm->pending_work || kthread_should_stop(), stm->lock);
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
+	wait_event_interruptible_locked_irq(
+		stm->work_wq, stm->pending_work || kthread_should_stop());
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 }
 
 /* Read work queue state */
@@ -181,9 +182,9 @@ unsigned long dw3000_get_pending_work(struct dw3000 *dw)
 	unsigned long work;
 	unsigned long flags;
 
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	work = stm->pending_work;
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 
 	return work;
 }
@@ -193,22 +194,22 @@ static int dw3000_detect_work(struct dw3000 *dw, const void *in, void *out)
 {
 	int rc;
 
-	rc = dw3000_poweron(dw);
-	if (rc) {
-		return rc;
-	}
-
-	dev_warn(dw->dev, "checking device presence\n");
-
 	/* Now, read DEV_ID and initialise chip version */
+	dev_notice(dw->dev, "checking device presence\n");
 	rc = dw3000_check_devid(dw);
 	if (rc) {
 		dev_err(dw->dev, "device checking failed: %d\n", rc);
 		dw3000_poweroff(dw); // Force power-off if error.
 		return rc;
 	}
+	dev_notice(dw->dev, "device present\n");
 
-	dev_warn(dw->dev, "device present\n");
+	/* Read OTP data early */
+	rc = dw3000_read_otp(dw, DW3000_READ_OTP_PID | DW3000_READ_OTP_LID);
+	if (unlikely(rc)) {
+		dev_err(dw->dev, "device OTP read has failed (%d)\n", rc);
+		return rc;
+	}
 
 	/* Now, we just power-off the device waiting for it to be used by the
 	 * MAC to avoid power consumption. Except if SPI tests are enabled. */
@@ -287,7 +288,6 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 {
 	struct dw3000_state *stm = &dw->stm;
 	int rc;
-
 	/* Clear memory */
 	memset(stm, 0, sizeof(*stm));
 
@@ -297,7 +297,6 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 	mutex_init(&stm->mtx);
 
 	/* SKIP: Setup timers (state timeout and ADC timers) */
-	spin_lock_init(&stm->lock);
 
 	/* Init event handler thread */
 	stm->mthread = kthread_create(dw3000_event_thread, dw, "dw3000-%s",
@@ -306,15 +305,13 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 		return PTR_ERR(stm->mthread);
 	}
 	if (cpu >= 0)
-		kthread_bind(stm->mthread, cpu);
+		kthread_bind(stm->mthread, (unsigned)cpu);
+	dw->dw3000_pid = stm->mthread->pid;
 
-	/* Increase thread priority and hint scheduler */
+	/* Increase thread priority */
 	rc = dw3000_set_sched_attr(stm->mthread);
 	if (rc)
 		dev_err(dw->dev, "dw3000_set_sched_attr failed: %d\n", rc);
-
-	dw->dw3000_pid = stm->mthread->pid;
-
 	return 0;
 }
 
@@ -328,18 +325,30 @@ int dw3000_state_start(struct dw3000 *dw)
 
 	/* Ensure spurious IRQ that may come during dw3000_setup_irq() (because
 	   IRQ pin is already HIGH) isn't handle by the STM thread. */
-	spin_lock_irqsave(&stm->lock, flags);
+	spin_lock_irqsave(&stm->work_wq.lock, flags);
 	stm->pending_work &= ~DW3000_IRQ_WORK;
-	spin_unlock_irqrestore(&stm->lock, flags);
+	spin_unlock_irqrestore(&stm->work_wq.lock, flags);
 
 	/* Start state machine thread */
 	wake_up_process(stm->mthread);
 	dev_dbg(dw->dev, "state machine started\n");
 
 	/* Turn on power and de-assert reset GPIO */
-	rc = dw3000_hardreset(dw);
+	rc = dw3000_poweron(dw);
 	if (rc) {
 		dev_err(dw->dev, "device power on failed: %d\n", rc);
+		return rc;
+	}
+	/* Ensure RESET GPIO for enough time */
+	rc = dw3000_hardreset(dw);
+	if (rc) {
+		dev_err(dw->dev, "hard reset failed: %d\n", rc);
+		return rc;
+	}
+	/* and wait SPI ready IRQ */
+	rc = dw3000_wait_idle_state(dw);
+	if (rc) {
+		dev_err(dw->dev, "wait device power on failed: %d\n", rc);
 		return rc;
 	}
 	/* Do chip detection and return result to caller */

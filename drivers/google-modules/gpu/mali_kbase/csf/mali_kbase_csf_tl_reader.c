@@ -80,9 +80,8 @@ static int kbase_csf_tl_debugfs_poll_interval_write(void *data, u64 val)
 	struct kbase_device *kbdev = (struct kbase_device *)data;
 	struct kbase_csf_tl_reader *self = &kbdev->timeline->csf_tl_reader;
 
-	if (val > KBASE_CSF_TL_READ_INTERVAL_MAX || val < KBASE_CSF_TL_READ_INTERVAL_MIN) {
+	if (val > KBASE_CSF_TL_READ_INTERVAL_MAX || val < KBASE_CSF_TL_READ_INTERVAL_MIN)
 		return -EINVAL;
-	}
 
 	self->timer_interval = (u32)val;
 
@@ -96,7 +95,7 @@ DEFINE_DEBUGFS_ATTRIBUTE(kbase_csf_tl_poll_interval_fops,
 
 void kbase_csf_tl_reader_debugfs_init(struct kbase_device *kbdev)
 {
-	debugfs_create_file("csf_tl_poll_interval_in_ms", S_IRUGO | S_IWUSR,
+	debugfs_create_file("csf_tl_poll_interval_in_ms", 0644,
 		kbdev->debugfs_instr_directory, kbdev,
 		&kbase_csf_tl_poll_interval_fops);
 
@@ -171,13 +170,12 @@ static int kbase_ts_converter_init(
  *
  * Return: The CPU timestamp.
  */
-static void kbase_ts_converter_convert(
-	const struct kbase_ts_converter *self,
-	u64 *gpu_ts)
+static void __maybe_unused
+kbase_ts_converter_convert(const struct kbase_ts_converter *self, u64 *gpu_ts)
 {
 	u64 old_gpu_ts = *gpu_ts;
-	*gpu_ts = div64_u64(old_gpu_ts * self->multiplier,
-		self->divisor) + self->offset;
+	*gpu_ts = div64_u64(old_gpu_ts * self->multiplier, self->divisor) +
+		  self->offset;
 }
 
 /**
@@ -256,6 +254,7 @@ static void tl_reader_reset(struct kbase_csf_tl_reader *self)
 	self->tl_header.btc = 0;
 }
 
+
 int kbase_csf_tl_reader_flush_buffer(struct kbase_csf_tl_reader *self)
 {
 	int ret = 0;
@@ -279,6 +278,7 @@ int kbase_csf_tl_reader_flush_buffer(struct kbase_csf_tl_reader *self)
 		spin_unlock_irqrestore(&self->read_lock, flags);
 		return -EBUSY;
 	}
+
 
 	/* Copying the whole buffer in a single shot. We assume
 	 * that the buffer will not contain partially written messages.
@@ -330,9 +330,8 @@ int kbase_csf_tl_reader_flush_buffer(struct kbase_csf_tl_reader *self)
 		{
 			struct kbase_csffw_tl_message *msg =
 				(struct kbase_csffw_tl_message *) csffw_data_it;
-			kbase_ts_converter_convert(
-				&self->ts_converter,
-				&msg->timestamp);
+			kbase_ts_converter_convert(&self->ts_converter,
+						   &msg->timestamp);
 		}
 
 		/* Copy the message out to the tl_stream. */
@@ -406,9 +405,8 @@ static int tl_reader_init_late(
 		return -1;
 	}
 
-	if (kbase_ts_converter_init(&self->ts_converter, kbdev)) {
+	if (kbase_ts_converter_init(&self->ts_converter, kbdev))
 		return -1;
-	}
 
 	self->kbdev = kbdev;
 	self->trace_buffer = tb;
@@ -477,7 +475,14 @@ int kbase_csf_tl_reader_start(struct kbase_csf_tl_reader *self,
 		return 0;
 
 	if (tl_reader_init_late(self, kbdev)) {
+#if IS_ENABLED(CONFIG_MALI_NO_MALI)
+		dev_warn(
+			kbdev->dev,
+			"CSFFW timeline is not available for MALI_NO_MALI builds!");
+		return 0;
+#else
 		return -EINVAL;
+#endif
 	}
 
 	tl_reader_reset(self);
@@ -521,14 +526,5 @@ void kbase_csf_tl_reader_stop(struct kbase_csf_tl_reader *self)
 
 void kbase_csf_tl_reader_reset(struct kbase_csf_tl_reader *self)
 {
-	u64 gpu_cycle = 0;
-	struct kbase_device *kbdev = self->kbdev;
-
-	if (!kbdev)
-		return;
-
 	kbase_csf_tl_reader_flush_buffer(self);
-
-	get_cpu_gpu_time(kbdev, NULL, NULL, &gpu_cycle);
-	KBASE_TLSTREAM_TL_KBASE_CSFFW_RESET(kbdev, gpu_cycle);
 }

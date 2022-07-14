@@ -377,7 +377,11 @@ int lwis_i2c_io_entry_rw(struct lwis_i2c_device *i2c, struct lwis_io_entry *entr
 {
 	int ret;
 	uint64_t reg_value;
-	BUG_ON(!entry);
+
+	if (!entry) {
+		dev_err(i2c->base_dev.dev, "IO entry is NULL.\n");
+		return -EINVAL;
+	}
 
 	if (entry->type == LWIS_IO_ENTRY_READ) {
 		return i2c_read(i2c, entry->rw.offset, &entry->rw.val);

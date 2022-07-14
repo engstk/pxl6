@@ -1,7 +1,7 @@
 /*
  * Wifi Virtual Interface implementaion
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -134,6 +134,10 @@ extern int wl_set_ap_suspend(struct net_device *dev, bool enable, char *ifname);
 int wl_set_softap_elna_bypass(struct net_device *dev, char *ifname, int enable);
 int wl_get_softap_elna_bypass(struct net_device *dev, char *ifname, void *param);
 #endif /* SUPPORT_SOFTAP_ELNA_BYPASS */
+#ifdef CUSTOM_SOFTAP_SET_ANT
+int wl_set_softap_antenna(struct net_device *dev, char *ifname, int set_chain);
+int wl_get_softap_antenna(struct net_device *dev, char *ifname, void *param);
+#endif /* CUSTOM_SOFTAP_SET_ANT */
 #ifdef SUPPORT_AP_BWCTRL
 extern int wl_set_ap_bw(struct net_device *dev, u32 bw, char *ifname);
 extern int wl_get_ap_bw(struct net_device *dev, char* command, char *ifname, int total_len);
@@ -245,4 +249,13 @@ extern uint32
 wl_update_configured_bw(uint32 bw);
 #endif /* SUPPORT_AP_INIT_BWCONF */
 extern uint32 wl_cfgvif_get_iftype_count(struct bcm_cfg80211 *cfg, wl_iftype_t iftype);
+extern s32 wl_update_akm_from_assoc_ie(struct bcm_cfg80211 *cfg, struct net_device *ndev,
+	u8 *assoc_ies, u32 assoc_ie_len);
+
+#if defined(LIMIT_AP_BW)
+uint32 wl_cfg80211_get_ap_bw_limit_bit(struct bcm_cfg80211 *cfg, uint32 band);
+chanspec_t wl_cfg80211_get_ap_bw_limited_chspec(struct bcm_cfg80211 *cfg,
+	uint32 band, chanspec_t candidate);
+int wl_cfg80211_set_softap_bw(struct bcm_cfg80211 *cfg, uint32 band, uint32 limit);
+#endif /* LIMIT_AP_BW */
 #endif /* _wl_cfgvif_h_ */

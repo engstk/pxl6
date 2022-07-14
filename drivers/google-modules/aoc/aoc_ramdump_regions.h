@@ -61,6 +61,11 @@ enum ramdump_section_index {
 	RAMDUMP_NUM_SECTIONS,
 };
 
+enum RamdumpPlatform : uint32_t {
+	RAMDUMP_PLATFORM_1 = 1,
+	RAMDUMP_PLATFORM_2,
+};
+
 struct aoc_section_header {
 	char name[16]; /* User-friendly name */
 	enum ramdump_section_type type;
@@ -78,6 +83,10 @@ struct aoc_ramdump_header {
 	u32 num_sections;
 	u32 time_taken[5]; /* Time taken for ramdump to complete per core, in AoC timer ticks */
 	struct aoc_section_header sections[RAMDUMP_NUM_SECTIONS];
+	enum RamdumpPlatform platform;
+	uint32_t version;
+	uint32_t breadcrumbs[16];
+	uint8_t debug_authorized;
 };
 
 #define RAMDUMP_MAGIC "AOCDUMP"

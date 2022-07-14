@@ -113,6 +113,8 @@ struct cs35l41_private {
 	bool fast_switch_en;
 	bool force_int;
 	bool hibernate_force_wake;
+	bool asprx1_enabled;
+	bool asprx2_enabled;
 	/* GPIO for /RST */
 	struct gpio_desc *reset_gpio;
 	/* Run-time mixer */

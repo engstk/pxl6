@@ -6,7 +6,9 @@
  */
 
 #include <linux/atomic.h>
+#include <linux/bitops.h>
 #include <linux/cdev.h>
+#include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/file.h>
@@ -25,6 +27,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/uidgid.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
@@ -38,6 +41,10 @@
 #include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
+
+#ifdef EDGETPU_FEATURE_INTEROP
+#include <soc/google/tpu-ext.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/edgetpu.h>
@@ -104,27 +111,22 @@ static int edgetpu_fs_release(struct inode *inode, struct file *file)
 		return 0;
 	etdev = client->etdev;
 
-	wakelock_count = edgetpu_wakelock_lock(client->wakelock);
-	mutex_lock(&client->group_lock);
+	LOCK(client);
 	/*
-	 * @wakelock_count = 0 means the device might be powered off. And for group with a
-	 * non-detachable mailbox, its mailbox is removed when the group is released, in such case
-	 * we need to ensure the device is powered to prevent kernel panic on programming VII
-	 * mailbox CSRs.
-	 *
-	 * For mailbox-detachable groups the mailbox had been removed when the wakelock was
-	 * released, edgetpu_device_group_release() doesn't need the device be powered in this case.
+	 * Safe to read wakelock->req_count here since req_count is only
+	 * modified during [acquire/release]_wakelock ioctl calls which cannot
+	 * race with releasing client/fd.
 	 */
-	if (!wakelock_count && client->group && !client->group->mailbox_detachable) {
-		/* assumes @group->etdev == @client->etdev, i.e. @client is the leader of @group */
-		if (!edgetpu_pm_get(etdev->pm))
-			wakelock_count = 1;
-		else
-			/* failed to power on - prevent group releasing from accessing the device */
-			client->group->dev_inaccessible = true;
-	}
-	mutex_unlock(&client->group_lock);
-	edgetpu_wakelock_unlock(client->wakelock);
+	wakelock_count = NO_WAKELOCK(client->wakelock) ? 1 : client->wakelock->req_count;
+	/*
+	 * @wakelock_count = 0 means the device might be powered off. Mailbox(EXT/VII) is removed
+	 * when the group is released, So we need to ensure the device should not accessed to
+	 * prevent kernel panic on programming mailbox CSRs.
+	 */
+	if (!wakelock_count && client->group)
+		client->group->dev_inaccessible = true;
+
+	UNLOCK(client);
 
 	edgetpu_client_remove(client);
 
@@ -215,32 +217,29 @@ static int edgetpu_ioctl_unset_perdie_eventfd(struct edgetpu_client *client,
 static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 {
 	struct edgetpu_device_group *group;
-	int ret = -EINVAL, wakelock_count;
+	int ret = -EINVAL;
 
-	/*
-	 * Hold the wakelock since we need to decide whether VII should be
-	 * initialized during finalization.
-	 */
-	wakelock_count = edgetpu_wakelock_lock(client->wakelock);
 	LOCK(client);
 	group = client->group;
 	if (!group || !edgetpu_device_group_is_leader(group, client))
 		goto out_unlock;
 	/* Finalization has to be performed with device on. */
-	if (!wakelock_count) {
-		ret = edgetpu_pm_get(client->etdev->pm);
-		if (ret) {
-			etdev_err(client->etdev, "%s: pm_get failed (%d)",
-				  __func__, ret);
-			goto out_unlock;
-		}
+	ret = edgetpu_pm_get(client->etdev->pm);
+	if (ret) {
+		etdev_err(client->etdev, "%s: pm_get failed (%d)",
+			  __func__, ret);
+		goto out_unlock;
 	}
+	/*
+	 * Hold the wakelock since we need to decide whether VII should be
+	 * initialized during finalization.
+	 */
+	edgetpu_wakelock_lock(client->wakelock);
 	ret = edgetpu_device_group_finalize(group);
-	if (!wakelock_count)
-		edgetpu_pm_put(client->etdev->pm);
+	edgetpu_wakelock_unlock(client->wakelock);
+	edgetpu_pm_put(client->etdev->pm);
 out_unlock:
 	UNLOCK(client);
-	edgetpu_wakelock_unlock(client->wakelock);
 	return ret;
 }
 
@@ -555,21 +554,22 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 {
 	int count;
 
+	LOCK(client);
 	edgetpu_wakelock_lock(client->wakelock);
 	/* when NO_WAKELOCK: count should be 1 so here is a no-op */
 	count = edgetpu_wakelock_release(client->wakelock);
 	if (count < 0) {
 		edgetpu_wakelock_unlock(client->wakelock);
+		UNLOCK(client);
 		return count;
 	}
 	if (!count) {
-		mutex_lock(&client->group_lock);
 		if (client->group)
 			edgetpu_group_close_and_detach_mailbox(client->group);
-		mutex_unlock(&client->group_lock);
 		edgetpu_pm_put(client->etdev->pm);
 	}
 	edgetpu_wakelock_unlock(client->wakelock);
+	UNLOCK(client);
 	etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__,
 		  count);
 	return 0;
@@ -581,51 +581,64 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 	int ret;
 	struct edgetpu_thermal *thermal = client->etdev->thermal;
 
+	LOCK(client);
+	/*
+	 * Update client PID; the client may have been passed from the
+	 * edgetpu service that originally created it to a new process.
+	 * By the time the client holds TPU wakelocks it will have been
+	 * passed to the new owning process.
+	 */
+	client->pid = current->pid;
+	client->tgid = current->tgid;
+	edgetpu_thermal_lock(thermal);
+	if (edgetpu_thermal_is_suspended(thermal)) {
+		/* TPU is thermal suspended, so fail acquiring wakelock */
+		ret = -EAGAIN;
+		etdev_warn_ratelimited(client->etdev,
+				       "wakelock acquire rejected due to thermal suspend");
+		edgetpu_thermal_unlock(thermal);
+		goto error_unlock;
+	} else {
+		ret = edgetpu_pm_get(client->etdev->pm);
+		edgetpu_thermal_unlock(thermal);
+		if (ret) {
+			etdev_warn(client->etdev, "%s: pm_get failed (%d)",
+				   __func__, ret);
+			goto error_unlock;
+		}
+	}
 	edgetpu_wakelock_lock(client->wakelock);
 	/* when NO_WAKELOCK: count should be 1 so here is a no-op */
 	count = edgetpu_wakelock_acquire(client->wakelock);
 	if (count < 0) {
-		edgetpu_wakelock_unlock(client->wakelock);
-		return count;
+		edgetpu_pm_put(client->etdev->pm);
+		ret = count;
+		goto error_unlock;
 	}
 	if (!count) {
-		edgetpu_thermal_lock(thermal);
-		if (edgetpu_thermal_is_suspended(thermal)) {
-			/* TPU is thermal suspended, so fail acquiring wakelock */
-			ret = -EAGAIN;
-			etdev_warn_ratelimited(client->etdev,
-					       "wakelock acquire rejected due to thermal suspend");
-			edgetpu_thermal_unlock(thermal);
-			goto error_release;
-		} else {
-			ret = edgetpu_pm_get(client->etdev->pm);
-			edgetpu_thermal_unlock(thermal);
-		}
-		if (ret) {
-			etdev_warn(client->etdev, "%s: pm_get failed (%d)",
-				   __func__, ret);
-			goto error_release;
-		}
-		mutex_lock(&client->group_lock);
 		if (client->group)
-			ret = edgetpu_group_attach_and_open_mailbox(
-				client->group);
-		mutex_unlock(&client->group_lock);
+			ret = edgetpu_group_attach_and_open_mailbox(client->group);
 		if (ret) {
 			etdev_warn(client->etdev,
 				   "failed to attach mailbox: %d", ret);
 			edgetpu_pm_put(client->etdev->pm);
-			goto error_release;
+			edgetpu_wakelock_release(client->wakelock);
+			edgetpu_wakelock_unlock(client->wakelock);
+			goto error_unlock;
 		}
+	} else {
+		/* Balance the power up count due to pm_get above.*/
+		edgetpu_pm_put(client->etdev->pm);
 	}
 	edgetpu_wakelock_unlock(client->wakelock);
+	UNLOCK(client);
 	etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__,
 		  count + 1);
 	return 0;
-error_release:
-	edgetpu_wakelock_release(client->wakelock);
-	edgetpu_wakelock_unlock(client->wakelock);
-	etdev_err(client->etdev, "PID: %d failed to acquire wakelock", client->pid);
+error_unlock:
+	UNLOCK(client);
+	etdev_err(client->etdev, "client pid %d failed to acquire wakelock",
+		  client->pid);
 	return ret;
 }
 
@@ -654,7 +667,8 @@ edgetpu_ioctl_acquire_ext_mailbox(struct edgetpu_client *client,
 
 	ret = edgetpu_chip_acquire_ext_mailbox(client, &ext_mailbox);
 	if (ret)
-		etdev_err(client->etdev, "PID: %d failed to acquire ext mailbox", client->pid);
+		etdev_err(client->etdev, "client pid %d failed to acquire ext mailbox",
+			  client->pid);
 	return ret;
 }
 
@@ -676,14 +690,48 @@ static int edgetpu_ioctl_get_fatal_errors(struct edgetpu_client *client,
 	u32 fatal_errors = 0;
 	int ret = 0;
 
-	mutex_lock(&client->group_lock);
+	LOCK(client);
 	if (client->group)
 		fatal_errors = edgetpu_group_get_fatal_errors(client->group);
-	mutex_unlock(&client->group_lock);
+	UNLOCK(client);
 	if (copy_to_user(argp, &fatal_errors, sizeof(fatal_errors)))
 		ret = -EFAULT;
 	return ret;
 }
+
+#ifdef EDGETPU_FEATURE_INTEROP
+static int edgetpu_ioctl_test_external(struct edgetpu_client *client,
+				       struct edgetpu_test_ext_ioctl __user *argp)
+{
+	int ret = 0;
+	struct edgetpu_test_ext_ioctl test_ext;
+	struct edgetpu_ext_client_info client_info;
+	struct edgetpu_ext_mailbox_info *info;
+
+	if (!uid_eq(current_euid(), GLOBAL_ROOT_UID))
+		return -EPERM;
+
+	if (copy_from_user(&test_ext, argp, sizeof(test_ext)))
+		return -EFAULT;
+
+	if (hweight32(test_ext.mbox_bmap) != 1)
+		return -EINVAL;
+
+	client_info.attr = (struct edgetpu_mailbox_attr __user *)test_ext.attrs;
+	client_info.tpu_fd = test_ext.fd;
+	client_info.mbox_map = test_ext.mbox_bmap;
+
+	info = kmalloc(sizeof(*info) + sizeof(struct edgetpu_ext_mailbox_descriptor), GFP_KERNEL);
+	if (!info)
+		return -ENOMEM;
+
+	ret = edgetpu_ext_driver_cmd(client->etdev->dev, test_ext.client_type, test_ext.cmd,
+				     &client_info, info);
+
+	kfree(info);
+	return ret;
+}
+#endif /* EDGETPU_FEATURE_INTEROP */
 
 long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 {
@@ -776,7 +824,11 @@ long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 	case EDGETPU_GET_FATAL_ERRORS:
 		ret = edgetpu_ioctl_get_fatal_errors(client, argp);
 		break;
-
+#ifdef EDGETPU_FEATURE_INTEROP
+	case EDGETPU_TEST_EXTERNAL:
+		ret = edgetpu_ioctl_test_external(client, argp);
+		break;
+#endif /* EDGETPU_FEATURE_INTEROP */
 	default:
 		return -ENOTTY; /* unknown command */
 	}

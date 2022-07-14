@@ -22,27 +22,27 @@ enum votable_type {
 	NUM_VOTABLE_TYPES,
 };
 
-bool is_client_vote_enabled(struct votable *votable, const char *client_str);
-bool is_client_vote_enabled_locked(struct votable *votable,
+bool __deprecated is_client_vote_enabled(struct votable *votable, const char *client_str);
+bool __deprecated is_client_vote_enabled_locked(struct votable *votable,
 							const char *client_str);
-int get_client_vote(struct votable *votable, const char *client_str);
-int get_client_vote_locked(struct votable *votable, const char *client_str);
-int get_effective_result(struct votable *votable);
-int get_effective_result_locked(struct votable *votable);
-const char *get_effective_client(struct votable *votable);
-const char *get_effective_client_locked(struct votable *votable);
-int vote(struct votable *votable, const char *client_str, bool state, int val);
-int rerun_election(struct votable *votable);
-struct votable *find_votable(const char *name);
-struct votable *create_votable(const char *name,
+int __deprecated get_client_vote(struct votable *votable, const char *client_str);
+int __deprecated get_client_vote_locked(struct votable *votable, const char *client_str);
+int __deprecated get_effective_result(struct votable *votable);
+int __deprecated get_effective_result_locked(struct votable *votable);
+const char * __deprecated get_effective_client(struct votable *votable);
+const char * __deprecated get_effective_client_locked(struct votable *votable);
+int __deprecated vote(struct votable *votable, const char *client_str, bool state, int val);
+int __deprecated rerun_election(struct votable *votable);
+struct votable * __deprecated find_votable(const char *name);
+struct votable * __deprecated create_votable(const char *name,
 				int votable_type,
 				int (*callback)(struct votable *votable,
 						void *data,
 						int effective_result,
 						const char *effective_client),
 				void *data);
-void destroy_votable(struct votable *votable);
-void lock_votable(struct votable *votable);
-void unlock_votable(struct votable *votable);
+void __deprecated destroy_votable(struct votable *votable);
+void __deprecated lock_votable(struct votable *votable);
+void __deprecated unlock_votable(struct votable *votable);
 
 #endif /* __PMIC_VOTER_H */

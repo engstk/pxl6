@@ -339,6 +339,7 @@ static void __exit tbn_exit(void)
 module_init(tbn_init);
 module_exit(tbn_exit);
 
+MODULE_SOFTDEP("pre: touch_offload");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Touch Bus Negotiator");
 MODULE_AUTHOR("Google, Inc.");

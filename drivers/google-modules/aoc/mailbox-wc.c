@@ -38,6 +38,8 @@
 
 static int wc_mbox_probe(struct platform_device *dev);
 static int wc_mbox_remove(struct platform_device *dev);
+static int wc_mbox_suspend(struct platform_device *dev, pm_message_t state);
+static int wc_mbox_resume(struct platform_device *dev);
 
 /* Channel ops */
 static int wc_mbox_send_data(struct mbox_chan *chan, void *data);
@@ -63,6 +65,8 @@ static const struct of_device_id wc_mbox_match[] = {
 static struct platform_driver wc_mbox_driver = {
 	.probe = wc_mbox_probe,
 	.remove = wc_mbox_remove,
+	.suspend = wc_mbox_suspend,
+	.resume = wc_mbox_resume,
 	.driver = {
 		.name = "wc-mbox",
 		.owner = THIS_MODULE,
@@ -149,10 +153,11 @@ static irqreturn_t wc_int_handler(int irq, void *dev)
 
 	for (i = 0; i < MBOX_WC_INTERRUPTS; i++) {
 		if ((status & (1 << i)) != 0) {
+			wc_mbox_int_clear(prvdata->base, i);
+
 			if (chans[i].cl != NULL)
 				mbox_chan_received_data(&chans[i], &data);
 
-			wc_mbox_int_clear(prvdata->base, i);
 		}
 	}
 
@@ -248,6 +253,22 @@ static bool wc_mbox_peek_data(struct mbox_chan *chan)
 
 	status = ioread32(prvdata->base + MB_INTSR1);
 	return (status & (1 << index)) != 0;
+}
+
+static int wc_mbox_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	struct wc_mbox_prvdata *prvdata = platform_get_drvdata(pdev);
+
+	enable_irq_wake(prvdata->interrupt);
+	return 0;
+}
+
+static int wc_mbox_resume(struct platform_device *pdev)
+{
+	struct wc_mbox_prvdata *prvdata = platform_get_drvdata(pdev);
+
+	disable_irq_wake(prvdata->interrupt);
+	return 0;
 }
 
 static int wc_mbox_probe(struct platform_device *pdev)

@@ -226,6 +226,10 @@ struct edgetpu_dev {
 	/* debug dump handlers */
 	edgetpu_debug_dump_handlers *debug_dump_handlers;
 	struct work_struct debug_dump_work;
+
+	struct mutex freq_lock;	/* protects below freq_* variables */
+	uint32_t *freq_table;	/* Array to record reported frequencies by f/w */
+	uint32_t freq_count;	/* Number of entries in freq_table */
 };
 
 struct edgetpu_dev_iface {

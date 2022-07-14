@@ -47,6 +47,7 @@ static inline int exynos_acpm_set_policy(unsigned int id, unsigned long policy)
 enum mobile_reverse_kci_code {
 	RKCI_CODE_PM_QOS = RKCI_CHIP_CODE_FIRST + 1,
 	RKCI_CODE_BTS = RKCI_CHIP_CODE_FIRST + 2,
+	RKCI_CODE_PM_QOS_BTS = RKCI_CHIP_CODE_FIRST + 3,
 };
 
 #define MAX_VOLTAGE_VAL 1250000
@@ -84,6 +85,6 @@ void mobile_pm_destroy(struct edgetpu_dev *etdev);
 void mobile_pm_set_pm_qos(struct edgetpu_dev *etdev, u32 pm_qos_val);
 
 /* Set BTS value for the edgetpu device. */
-void mobile_pm_set_bts(struct edgetpu_dev *etdev, u32 bts_val);
+void mobile_pm_set_bts(struct edgetpu_dev *etdev, u16 bts_val);
 
 #endif /* __MOBILE_PM_H__ */

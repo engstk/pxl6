@@ -2,7 +2,7 @@
  * Fundamental types and constants relating to WFA NAN
  * (Neighbor Awareness Networking)
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -159,39 +159,44 @@ enum {
 	NAN_ATTR_COUNTRY_CODE	= 11,
 	NAN_ATTR_RANGING	= 12,
 	NAN_ATTR_CLUSTER_DISC	= 13,
+
 	/* nan 2.0 */
-	NAN_ATTR_SVC_DESC_EXTENSION = 14,
-	NAN_ATTR_NAN_DEV_CAP = 15,
-	NAN_ATTR_NAN_NDP = 16,
-	NAN_ATTR_NAN_NMSG = 17,
-	NAN_ATTR_NAN_AVAIL = 18,
-	NAN_ATTR_NAN_NDC = 19,
-	NAN_ATTR_NAN_NDL = 20,
-	NAN_ATTR_NAN_NDL_QOS = 21,
-	NAN_ATTR_MCAST_SCHED = 22,
-	NAN_ATTR_UNALIGN_SCHED = 23,
-	NAN_ATTR_PAGING_UCAST = 24,
-	NAN_ATTR_PAGING_MCAST = 25,
-	NAN_ATTR_RANGING_INFO = 26,
-	NAN_ATTR_RANGING_SETUP = 27,
-	NAN_ATTR_FTM_RANGE_REPORT = 28,
-	NAN_ATTR_ELEMENT_CONTAINER = 29,
-	NAN_ATTR_WLAN_INFRA_EXT = 30,
-	NAN_ATTR_EXT_P2P_OPER = 31,
-	NAN_ATTR_EXT_IBSS = 32,
-	NAN_ATTR_EXT_MESH = 33,
-	NAN_ATTR_CIPHER_SUITE_INFO = 34,
-	NAN_ATTR_SEC_CTX_ID_INFO = 35,
-	NAN_ATTR_SHARED_KEY_DESC = 36,
-	NAN_ATTR_MCAST_SCHED_CHANGE = 37,
-	NAN_ATTR_MCAST_SCHED_OWNER_CHANGE = 38,
-	NAN_ATTR_PUBLIC_AVAILABILITY = 39,
-	NAN_ATTR_SUB_SVC_ID_LIST = 40,
-	NAN_ATTR_NDPE = 41,
+	NAN_ATTR_SVC_DESC_EXTENSION		= 14,
+	NAN_ATTR_NAN_DEV_CAP			= 15,
+	NAN_ATTR_NAN_NDP			= 16,
+	NAN_ATTR_NAN_NMSG			= 17,
+	NAN_ATTR_NAN_AVAIL			= 18,
+	NAN_ATTR_NAN_NDC			= 19,
+	NAN_ATTR_NAN_NDL			= 20,
+	NAN_ATTR_NAN_NDL_QOS			= 21,
+	NAN_ATTR_MCAST_SCHED			= 22,
+	NAN_ATTR_UNALIGN_SCHED			= 23,
+	NAN_ATTR_PAGING_UCAST			= 24,
+	NAN_ATTR_PAGING_MCAST			= 25,
+	NAN_ATTR_RANGING_INFO			= 26,
+	NAN_ATTR_RANGING_SETUP			= 27,
+	NAN_ATTR_FTM_RANGE_REPORT		= 28,
+	NAN_ATTR_ELEMENT_CONTAINER		= 29,
+	NAN_ATTR_WLAN_INFRA_EXT			= 30,
+	NAN_ATTR_EXT_P2P_OPER			= 31,
+	NAN_ATTR_EXT_IBSS			= 32,
+	NAN_ATTR_EXT_MESH			= 33,
+	NAN_ATTR_CIPHER_SUITE_INFO		= 34,
+	NAN_ATTR_SEC_CTX_ID_INFO		= 35,
+	NAN_ATTR_SHARED_KEY_DESC		= 36,
+	NAN_ATTR_MCAST_SCHED_CHANGE		= 37,
+	NAN_ATTR_MCAST_SCHED_OWNER_CHANGE	= 38,
+	NAN_ATTR_PUBLIC_AVAILABILITY		= 39,
+	NAN_ATTR_SUB_SVC_ID_LIST		= 40,
+	NAN_ATTR_NDPE				= 41,
+	NAN_ATTR_DEV_CAP_EXT			= 42, /* NAN R4, Device Capability Extension */
+	NAN_ATTR_NIRA				= 43, /* NAN R4, Identity Resolution Attribute */
+	NAN_ATTR_NPBA				= 44, /* NAN R4, Pairing Bootstrapping Attribute */
+
 	/* change NAN_ATTR_MAX_ID to max ids + 1, excluding NAN_ATTR_VENDOR_SPECIFIC.
 	 * This is used in nan_parse.c
 	 */
-	NAN_ATTR_MAX_ID		= NAN_ATTR_NDPE + 1,
+	NAN_ATTR_MAX_ID		= NAN_ATTR_NPBA + 1,
 
 	NAN_ATTR_VENDOR_SPECIFIC = 221
 };
@@ -786,6 +791,16 @@ enum
 #define NAN_CHAN_ENTRY_BW_LT_80MHZ	0
 #define NAN_CHAN_ENTRY_BW_EQ_160MHZ	1
 
+/* Channel bitmap field for when opclass >=131 */
+#define NAN_CHAN_BITMAP_EXT_START_CHANNEL_MASK	0x00FF
+#define NAN_CHAN_BITMAP_EXT_START_CHANNEL_SHIFT	0
+#define NAN_CHAN_BITMAP_EXT_NUM_CHANNEL_MASK	0xFF00
+#define NAN_CHAN_BITMAP_EXT_NUM_CHANNEL_SHIFT	8
+#define NAN_CHAN_BITMAP_EXT_NUM_CHANNEL(bmap)	(((bmap) & NAN_CHAN_BITMAP_EXT_NUM_CHANNEL_MASK) \
+		>> NAN_CHAN_BITMAP_EXT_NUM_CHANNEL_SHIFT)
+#define NAN_CHAN_BITMAP_EXT_START_CHANNEL(bmap)	(((bmap) & NAN_CHAN_BITMAP_EXT_START_CHANNEL_MASK) \
+		>> NAN_CHAN_BITMAP_EXT_START_CHANNEL_SHIFT)
+
 /*
  * NDL Attribute WFA Tech. Spec ver 1.0.r12 (section 10.7.19.2)
  */
@@ -899,6 +914,51 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_dev_cap_s {
 	uint8 capabilities;	/* DFS Master, Extended key id etc */
 } BWL_POST_PACKED_STRUCT wifi_nan_dev_cap_t;
 
+/* Regulatory info - operation types in 6G band, Table 126, NAN R4 spec.
+ * Also, see Table E-12, REVme_D1.0
+ */
+typedef enum nan_mac_6g_op_type {
+	/* Indoor AP, i.e., LPI(Low Power Indoor) AP.
+	 * AFC is not required but with some regulations to be indoor opeation.
+	 */
+	NAN_MAC_6G_OP_INDOOR_AP		= 0,
+
+	/* Standard Power AP, needs AFC coordination */
+	NAN_MAC_6G_OP_SP_AP		= 1,
+
+	/* Very Low Power AP - VLP AP
+	 * AFC is not required. Resticted with very low transmit power
+	 * This is the default mode of all P2P devices.
+	 */
+	NAN_MAC_6G_OP_VLP_AP		= 2,
+
+	/* Indoor Enabled AP.
+	 * Devices capable of receiving the "enabling signal" and configures itself to use
+	 * C2C power level which is 10dB Higher than VLP AP.
+	 */
+	NAN_MAC_6G_OP_INDOOR_ENABLED_AP	= 3,
+
+	/* This is kind of hybrid mode (AFC in indoors).
+	 * Devices opering in indoors and standard power mode with AFC.
+	 */
+	NAN_MAC_6G_OP_INDOOR_SP_AP	= 4
+} nan_mac_6g_op_type_e;
+
+/* First byte of the extended capabilities is the regulatory info */
+typedef struct nan_mac_dev_cap_ext_reg_info_s {
+	uint8 reg_info_6g_present:1;	/* bit0 */
+	uint8 reg_info_6g:3;		/* bits 1-3, see nan_mac_6g_op_type_e */
+	uint8 reserved:4;		/* bits 4-7 */
+} nan_mac_dev_cap_ext_reg_info_t;
+
+/* NAN R4 - Device Capability Extension Attribute */
+typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_dev_cap_ext_s {
+	uint8 id;		/* 0x2A */
+	uint16 len;		/* Length */
+	/* Bit field with variable length in octets as indicated in the len field */
+	uint8 data[];
+} BWL_POST_PACKED_STRUCT wifi_nan_dev_cap_ext_t;
+
 /* map id related */
 
 /* all maps */
@@ -937,12 +997,15 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_dev_cap_s {
 #define NAN_DEV_CAP_COMMIT_DW_5G_SHIFT	3
 #define NAN_DEV_CAP_COMMIT_DW_2G_OVERWRITE_SHIFT	6
 #define NAN_DEV_CAP_COMMIT_DW_5G_OVERWRITE_SHIFT	10
+
 /* Operation Mode */
 #define NAN_DEV_CAP_OP_PHY_MODE_HT_ONLY		0x00
 #define NAN_DEV_CAP_OP_PHY_MODE_VHT		0x01
 #define NAN_DEV_CAP_OP_PHY_MODE_VHT_8080	0x02
 #define NAN_DEV_CAP_OP_PHY_MODE_VHT_160		0x04
+#define NAN_DEV_CAP_OP_PHY_MODE_HE_160		0x04
 #define NAN_DEV_CAP_OP_PAGING_NDL		0x08
+#define NAN_DEV_CAP_OP_PHY_MODE_HE		0x10
 
 #define NAN_DEV_CAP_OP_MODE_VHT_MASK		0x01
 #define NAN_DEV_CAP_OP_MODE_VHT_SHIFT		0
@@ -952,6 +1015,8 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_dev_cap_s {
 #define NAN_DEV_CAP_OP_MODE_VHT160_SHIFT	2
 #define NAN_DEV_CAP_OP_MODE_PAGING_NDL_MASK	0x08
 #define NAN_DEV_CAP_OP_MODE_PAGING_NDL_SHIFT	3
+#define NAN_DEV_CAP_OP_MODE_HE_MASK		0x10
+#define NAN_DEV_CAP_OP_MODE_HE_SHIFT		4
 
 #define NAN_DEV_CAP_RX_ANT_SHIFT		4
 #define NAN_DEV_CAP_TX_ANT_MASK			0x0F
@@ -964,13 +1029,25 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_dev_cap_s {
 
 /* DFS master capability */
 #define NAN_DEV_CAP_DFS_MASTER_MASK		0x01
-#define NAN_DEV_CAP_DFS_MASTER_SHIFT	0
+#define NAN_DEV_CAP_DFS_MASTER_SHIFT		0u
 /* extended iv cap */
 #define NAN_DEV_CAP_EXT_KEYID_MASK		0x02
-#define NAN_DEV_CAP_EXT_KEYID_SHIFT		1
+#define NAN_DEV_CAP_EXT_KEYID_SHIFT		1u
+/* Simultaneous NDP data reception capability */
+#define NAN_DEV_CAP_SIMULTANEOUS_DATA_RECV_MASK		0x04
+#define NAN_DEV_CAP_SIMULTANEOUS_DATA_RECV_SHIFT	2u
 /* NDPE attribute support */
 #define	NAN_DEV_CAP_NDPE_ATTR_SUPPORT_MASK	0x08
+#define	NAN_DEV_CAP_NDPE_ATTR_SUPPORT_SHIFT	3u
 #define NAN_DEV_CAP_NDPE_ATTR_SUPPORT(_cap)	((_cap) & NAN_DEV_CAP_NDPE_ATTR_SUPPORT_MASK)
+
+#ifdef NAN_REKEY
+#define NAN_DEV_CAP_PTK_REKEY_SUPPORT_MASK	0x10
+#define NAN_DEV_CAP_PTK_REKEY_SUPPORT_SHIFT	4u
+
+#define NAN_DEV_CAP_GTK_REKEY_SUPPORT_MASK	0x20
+#define NAN_DEV_CAP_GTK_REKEY_SUPPORT_SHIFT	5u
+#endif /* NAN_REKEY */
 
 /* Band IDs */
 enum {
@@ -980,14 +1057,28 @@ enum {
 	NAN_BAND_ID_3G			= 3,	/* 3.6 GHz */
 	NAN_BAND_ID_5G			= 4,	/* 4.9 & 5 GHz */
 	NAN_BAND_ID_60G			= 5,	/* 60 GHz */
-	NAN_BAND_ID_6G			= 6	/* 6 GHz (proprietary) */
+	NAN_BAND_ID_6G			= 6	/* 6 GHz */
 };
 typedef uint8 nan_band_id_t;
 
 /* NAN supported band in device capability */
 #define NAN_DEV_CAP_SUPPORTED_BANDS_2G	(1 << NAN_BAND_ID_2G)
 #define NAN_DEV_CAP_SUPPORTED_BANDS_5G	(1 << NAN_BAND_ID_5G)
+#define NAN_DEV_CAP_SUPPORTED_BANDS_6G	(1 << NAN_BAND_ID_6G)
 
+/* NAN Supported Band ID bitmap, Table 72 in NAN R4 spec,
+ * bitmap of supported bands in the device capability attribute.
+ */
+typedef enum nan_mac_supp_band_flags {
+	NAN_MAC_SUPP_BAND_TV_WHITE_SPACES	= (1u << 0u),	 /* bit0 */
+	NAN_MAC_SUPP_BAND_SUB_1GHZ		= (1u << 1u),
+	NAN_MAC_SUPP_BAND_2G			= (1u << 2u),
+	NAN_MAC_SUPP_BAND_3G			= (1u << 3u),
+	NAN_MAC_SUPP_BAND_5G			= (1u << 4u),
+	NAN_MAC_SUPP_BAND_60G			= (1u << 5u),
+	NAN_MAC_SUPP_BAND_45G			= (1u << 6u),
+	NAN_MAC_SUPP_BAND_6G			= (1u << 7u)	/* bit7 */
+} nan_mac_supp_band_flags_e;
 /*
  * Unaligned schedule attribute section 10.7.19.6 spec. ver r15
  */
@@ -1084,6 +1175,14 @@ typedef BWL_PRE_PACKED_STRUCT struct nan2_pub_act_frame_s {
 #define NAN_MGMT_FRM_SUBTYPE_SCHED_CONF		12
 /* Schedule Update */
 #define NAN_MGMT_FRM_SUBTYPE_SCHED_UPD		13
+#ifdef NAN_REKEY
+/* Rekey Trigger  frame */
+#define NAN_MGMT_FRM_SUBTYPE_REKEY_TRIGGER	14
+/* Group key request frame */
+#define NAN_MGMT_FRM_SUBTYPE_GRP_REKEY_REQ	15
+/* Group key response frame */
+#define NAN_MGMT_FRM_SUBTYPE_GRP_REKEY_RESP	16
+#endif /* NAN_REKEY */
 
 /* Vendor specific NAN OOB AF subtype */
 #define NAN_MGMT_FRM_SUBTYPE_NAN_OOB_AF		0xDD
@@ -1117,11 +1216,26 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_ndp_qos_s {
 
 /* NDP control bitmap defines */
 #define NAN_NDP_CTRL_CONFIRM_REQUIRED		0x01
+#ifdef NAN_REKEY
+/* 0 = NDP setup, 1 = rekey handshake */
+#define NAN_NDP_CTRL_NDP_REKEY			0x02
+#endif /* NAN_REKEY */
 #define NAN_NDP_CTRL_SECURTIY_PRESENT		0x04
 #define NAN_NDP_CTRL_PUB_ID_PRESENT		0x08
 #define NAN_NDP_CTRL_RESP_NDI_PRESENT		0x10
 #define NAN_NDP_CTRL_SPEC_INFO_PRESENT		0x20
 #define NAN_NDP_CTRL_RESERVED			0xA0
+
+#if defined(WL_NAN_GAF_PROTECT) || defined(NAN_GTK)
+/*
+ * NDPE control bitmap defines
+ * currently NDP & NDPE share same control bitmap before b5
+ * GTK/IGTK Required b5
+ * 0: GTK/IGTK protection is not required
+ * 1: GTK/IGTK protection is required
+ */
+#define NAN_NDPE_CTRL_GTK_REQUIRED		0x20
+#endif /* WL_NAN_GAF_PROTECT || NAN_GTK */
 
 /* Used for both NDP Attribute and NDPE Attribute, since the structures are identical */
 typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_ndp_attr_s {
@@ -1142,6 +1256,11 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_ndp_attr_s {
 #define NAN_NDP_TYPE_CONFIRM	0x2
 #define NAN_NDP_TYPE_SECURITY	0x3
 #define NAN_NDP_TYPE_TERMINATE	0x4
+#ifdef NAN_REKEY
+#define NAN_NDP_TYPE_REKEY		0x5
+#define NAN_NDP_TYPE_GRP_REKEY_REQ	0x6
+#define NAN_NDP_TYPE_GRP_REKEY_RESP	0x7
+#endif /* NAN_REKEY */
 #define NAN_NDP_REQUEST(_ndp)	(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == NAN_NDP_TYPE_REQUEST)
 #define NAN_NDP_RESPONSE(_ndp)	(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == NAN_NDP_TYPE_RESPONSE)
 #define NAN_NDP_CONFIRM(_ndp)	(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == NAN_NDP_TYPE_CONFIRM)
@@ -1149,6 +1268,14 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_ndp_attr_s {
 						NAN_NDP_TYPE_SECURITY)
 #define NAN_NDP_TERMINATE(_ndp) (((_ndp)->type_status & NAN_NDP_TYPE_MASK) == \
 						NAN_NDP_TYPE_TERMINATE)
+#ifdef NAN_REKEY
+#define NAN_NDP_REKEY(_ndp)		(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == \
+						NAN_NDP_TYPE_REKEY)
+#define NAN_NDP_GRP_REKEY_REQ(_ndp)	(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == \
+						NAN_NDP_TYPE_GRP_REKEY_REQ)
+#define NAN_NDP_GRP_REKEY_RESP(_ndp)	(((_ndp)->type_status & NAN_NDP_TYPE_MASK) == \
+						NAN_NDP_TYPE_GRP_REKEY_RESP)
+#endif /* NAN_REKEY */
 #define NAN_NDP_STATUS_SHIFT	4
 #define NAN_NDP_STATUS_MASK	0xF0
 #define NAN_NDP_STATUS_CONT	(0 << NAN_NDP_STATUS_SHIFT)
@@ -1306,6 +1433,9 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_svc_desc_ext_attr_s {
 #define NAN_SDE_CF_RANGING_REQUIRED	(1 << 7)
 #define NAN_SDE_CF_RANGE_PRESENT	(1 << 8)
 #define NAN_SDE_CF_SVC_UPD_IND_PRESENT	(1 << 9)
+#if defined(WL_NAN_GAF_PROTECT) || defined(NAN_GTK)
+#define NAN_SDE_CF_GTK_REQUIRED	        (1u << 10u)
+#endif /* WL_NAN_GAF_PROTECT || NAN_GTK */
 /* Using Reserved Bits as per Spec */
 #define NAN_SDE_CF_LIFE_CNT_PUB_RX      (1 << 15)
 #define NAN_SDE_FSD_REQUIRED(_sde)	((_sde)->control & NAN_SDE_CF_FSD_REQUIRED)
@@ -1342,6 +1472,46 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_svc_desc_ext_attr_s {
  */
 #define NAN_SEC_CIPHER_SUITE_CAP_REPLAY_4	0u
 #define NAN_SEC_CIPHER_SUITE_CAP_REPLAY_16	(1u << 0u)
+
+#if defined(WL_NAN_GAF_PROTECT) || defined(NAN_GTK)
+/* Defines for GTK, IGTK and BIGTK */
+/*
+ * Bit 1 and 2:
+ * 00: GTKSA, IGTKSA, BIGTKSA are not supported;
+ * 01: GTKSA and IGTKSA are supported, and BIGTKSA is not supported;
+ * 10: GTKSA, IGTKSA, and BIGTKSA are supported;
+ * 11: Reserved;
+ */
+#define NAN_SEC_CIPHER_SUITE_CAP_DIS_GTK_IGTK_BIGTK     (0 << 1)
+#define NAN_SEC_CIPHER_SUITE_CAP_DIS_BIGTK		(1 << 1)
+#define NAN_SEC_CIPHER_SUITE_CAP_ENAB_GTK_IGTK_BIGTK	(1 << 2)
+
+/*
+ * Bit 3 is 0 for 4 GTKSA replay counters, if GTKSA is supported
+ * Bit 3 is 1 for 16 GTKSA replay counters, if GTKSA is supported
+ */
+#define NAN_SEC_CIPHER_SUITE_CAP_GTK_REPLAY_4		(0 << 4)
+#define NAN_SEC_CIPHER_SUITE_CAP_GTK_REPLAY_16		(1 << 4)
+
+/*
+ * Bit 4 is 0: BIP-CMAC-128 is selected for transmit, if IGTKSA or BIGTKSA is supported
+ * Bit 4 is 1: BIP-GMAC-256 is selected for transmit, if IGTKSA or BIGTKSA is supported
+ */
+#define NAN_SEC_CIPHER_SUITE_CAP_BIP_CMAC_128		(0)
+#define NAN_SEC_CIPHER_SUITE_CAP_BIP_GMAC_256		(1 << 5)
+
+#define NAN_SEC_BIP_ENABLED(cap)	((cap) & \
+	(NAN_SEC_CIPHER_SUITE_CAP_ENAB_GTK_IGTK_BIGTK | \
+	NAN_SEC_CIPHER_SUITE_CAP_DIS_BIGTK))
+
+#define NAN_SEC_BIP_CAP_TO_CIPER(cap)	\
+	(((cap) & NAN_SEC_CIPHER_SUITE_CAP_BIP_GMAC_256) ?\
+		 CRYPTO_ALGO_BIP_GMAC256 : CRYPTO_ALGO_BIP)
+#define NAN_SEC_IGTK_ENABLED(cap)	NAN_SEC_BIP_ENABLED(cap)
+
+#define NAN_SEC_BIGTK_ENABLED(cap)	((cap) & \
+	(NAN_SEC_CIPHER_SUITE_CAP_ENAB_GTK_IGTK_BIGTK))
+#endif /* WL_NAN_GAF_PROTECT || NAN_GTK */
 
 /* enum security algo.
 */

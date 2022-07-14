@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -20,15 +20,12 @@
  */
 
 /**
- * @file
- * Mali arbiter power manager state machine and APIs
+ * DOC: Mali arbiter power manager state machine and APIs
  */
 
 #include <mali_kbase.h>
 #include <mali_kbase_pm.h>
-#include <mali_kbase_hwaccess_jm.h>
 #include <backend/gpu/mali_kbase_irq_internal.h>
-#include <mali_kbase_hwcnt_context.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
 #include <tl/mali_kbase_tracepoints.h>
 #include <mali_kbase_gpuprops.h>
@@ -319,6 +316,7 @@ int kbase_arbiter_pm_early_init(struct kbase_device *kbdev)
 	if (kbdev->arb.arb_if) {
 		kbase_arbif_gpu_request(kbdev);
 		dev_dbg(kbdev->dev, "Waiting for initial GPU assignment...\n");
+
 		err = wait_event_timeout(arb_vm_state->vm_state_wait,
 			arb_vm_state->vm_state ==
 					KBASE_VM_STATE_INITIALIZING_WITH_GPU,
@@ -328,8 +326,9 @@ int kbase_arbiter_pm_early_init(struct kbase_device *kbdev)
 			dev_dbg(kbdev->dev,
 			"Kbase probe Deferred after waiting %d ms to receive GPU_GRANT\n",
 			gpu_req_timeout);
-			err = -EPROBE_DEFER;
-			goto arbif_eprobe_defer;
+
+			err = -ENODEV;
+			goto arbif_timeout;
 		}
 
 		dev_dbg(kbdev->dev,
@@ -337,9 +336,10 @@ int kbase_arbiter_pm_early_init(struct kbase_device *kbdev)
 	}
 	return 0;
 
-arbif_eprobe_defer:
+arbif_timeout:
 	kbase_arbiter_pm_early_term(kbdev);
 	return err;
+
 arbif_init_fail:
 	destroy_workqueue(arb_vm_state->vm_arb_wq);
 	kfree(arb_vm_state);
@@ -394,6 +394,8 @@ void kbase_arbiter_pm_release_interrupts(struct kbase_device *kbdev)
  * @kbdev: The kbase device structure for the device (must be a valid pointer)
  *
  * Install interrupts and set the interrupt_install flag to true.
+ *
+ * Return: 0 if success, or a Linux error code
  */
 int kbase_arbiter_pm_install_interrupts(struct kbase_device *kbdev)
 {
@@ -924,6 +926,8 @@ static void kbase_arbiter_pm_vm_wait_gpu_assignment(struct kbase_device *kbdev)
  * @kbdev: The kbase device structure for the device (must be a valid pointer)
  *
  * Checks if the virtual machine holds VM state lock.
+ *
+ * Return: true if GPU is assigned, else false.
  */
 static inline bool kbase_arbiter_pm_vm_gpu_assigned_lockheld(
 	struct kbase_device *kbdev)
@@ -1020,8 +1024,8 @@ int kbase_arbiter_pm_ctx_active_handle_suspend(struct kbase_device *kbdev,
 /**
  * kbase_arbiter_pm_update_gpu_freq() - Updates GPU clock frequency received
  * from arbiter.
- * @arb_freq - Pointer to struchture holding GPU clock frequenecy data
- * @freq - New frequency value in KHz
+ * @arb_freq: Pointer to struchture holding GPU clock frequenecy data
+ * @freq: New frequency value in KHz
  */
 void kbase_arbiter_pm_update_gpu_freq(struct kbase_arbiter_freq *arb_freq,
 	uint32_t freq)
@@ -1030,8 +1034,8 @@ void kbase_arbiter_pm_update_gpu_freq(struct kbase_arbiter_freq *arb_freq,
 
 	mutex_lock(&arb_freq->arb_freq_lock);
 	if (arb_freq->arb_freq != freq) {
-		ndata.new_rate = freq * KHZ_TO_HZ;
-		ndata.old_rate = arb_freq->arb_freq * KHZ_TO_HZ;
+		ndata.new_rate = (unsigned long)freq * KHZ_TO_HZ;
+		ndata.old_rate = (unsigned long)arb_freq->arb_freq * KHZ_TO_HZ;
 		ndata.gpu_clk_handle = arb_freq;
 		arb_freq->arb_freq = freq;
 		arb_freq->freq_updated = true;
@@ -1044,14 +1048,14 @@ void kbase_arbiter_pm_update_gpu_freq(struct kbase_arbiter_freq *arb_freq,
 }
 
 /**
- * enumerate_arb_gpu_clk() - Enumerate a GPU clock on the given index
- * @kbdev - kbase_device pointer
- * @index - GPU clock index
+ * get_arb_gpu_clk() - Enumerate a GPU clock on the given index
+ * @kbdev: kbase_device pointer
+ * @index: GPU clock index
  *
- * Returns pointer to structure holding GPU clock frequency data reported from
+ * Return: Pointer to structure holding GPU clock frequency data reported from
  * arbiter, only index 0 is valid.
  */
-static void *enumerate_arb_gpu_clk(struct kbase_device *kbdev,
+static void *get_arb_gpu_clk(struct kbase_device *kbdev,
 		unsigned int index)
 {
 	if (index == 0)
@@ -1061,10 +1065,10 @@ static void *enumerate_arb_gpu_clk(struct kbase_device *kbdev,
 
 /**
  * get_arb_gpu_clk_rate() - Get the current rate of GPU clock frequency value
- * @kbdev - kbase_device pointer
- * @index - GPU clock index
+ * @kbdev:          kbase_device pointer
+ * @gpu_clk_handle: Handle unique to the enumerated GPU clock
  *
- * Returns the GPU clock frequency value saved when gpu is granted from arbiter
+ * Return: The GPU clock frequency value saved when gpu is granted from arbiter
  */
 static unsigned long get_arb_gpu_clk_rate(struct kbase_device *kbdev,
 		void *gpu_clk_handle)
@@ -1082,14 +1086,14 @@ static unsigned long get_arb_gpu_clk_rate(struct kbase_device *kbdev,
 
 /**
  * arb_gpu_clk_notifier_register() - Register a clock rate change notifier.
- * @kbdev          - kbase_device pointer
- * @gpu_clk_handle - Handle unique to the enumerated GPU clock
- * @nb             - notifier block containing the callback function pointer
- *
- * Returns 0 on success, negative error code otherwise.
+ * @kbdev:           kbase_device pointer
+ * @gpu_clk_handle:  Handle unique to the enumerated GPU clock
+ * @nb:              notifier block containing the callback function pointer
  *
  * This function registers a callback function that is invoked whenever the
  * frequency of the clock corresponding to @gpu_clk_handle changes.
+ *
+ * Return: 0 on success, negative error code otherwise.
  */
 static int arb_gpu_clk_notifier_register(struct kbase_device *kbdev,
 	void *gpu_clk_handle, struct notifier_block *nb)
@@ -1108,9 +1112,9 @@ static int arb_gpu_clk_notifier_register(struct kbase_device *kbdev,
 
 /**
  * gpu_clk_notifier_unregister() - Unregister clock rate change notifier
- * @kbdev          - kbase_device pointer
- * @gpu_clk_handle - Handle unique to the enumerated GPU clock
- * @nb             - notifier block containing the callback function pointer
+ * @kbdev:           kbase_device pointer
+ * @gpu_clk_handle:  Handle unique to the enumerated GPU clock
+ * @nb:              notifier block containing the callback function pointer
  *
  * This function pointer is used to unregister a callback function that
  * was previously registered to get notified of a frequency change of the
@@ -1131,7 +1135,7 @@ static void arb_gpu_clk_notifier_unregister(struct kbase_device *kbdev,
 
 struct kbase_clk_rate_trace_op_conf arb_clk_rate_trace_ops = {
 	.get_gpu_clk_rate = get_arb_gpu_clk_rate,
-	.enumerate_gpu_clk = enumerate_arb_gpu_clk,
+	.enumerate_gpu_clk = get_arb_gpu_clk,
 	.gpu_clk_notifier_register = arb_gpu_clk_notifier_register,
 	.gpu_clk_notifier_unregister = arb_gpu_clk_notifier_unregister
 };

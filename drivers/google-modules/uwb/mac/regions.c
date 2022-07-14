@@ -27,6 +27,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
+#include <linux/netdevice.h>
 
 #include "mcps802154_i.h"
 
@@ -59,7 +60,7 @@ unlock:
 
 	return r;
 }
-EXPORT_SYMBOL(mcps802154_region_register);
+EXPORT_SYMBOL_GPL(mcps802154_region_register);
 
 void mcps802154_region_unregister(struct mcps802154_region_ops *region_ops)
 {
@@ -67,7 +68,7 @@ void mcps802154_region_unregister(struct mcps802154_region_ops *region_ops)
 	list_del(&region_ops->registered_entry);
 	mutex_unlock(&registered_regions_lock);
 }
-EXPORT_SYMBOL(mcps802154_region_unregister);
+EXPORT_SYMBOL_GPL(mcps802154_region_unregister);
 
 struct mcps802154_region *
 mcps802154_region_open(struct mcps802154_llhw *llhw, const char *name,
@@ -108,7 +109,7 @@ mcps802154_region_open(struct mcps802154_llhw *llhw, const char *name,
 
 	return region;
 }
-EXPORT_SYMBOL(mcps802154_region_open);
+EXPORT_SYMBOL_GPL(mcps802154_region_open);
 
 void mcps802154_region_close(struct mcps802154_llhw *llhw,
 			     struct mcps802154_region *region)
@@ -119,7 +120,7 @@ void mcps802154_region_close(struct mcps802154_llhw *llhw,
 	ops->close(region);
 	module_put(ops->owner);
 }
-EXPORT_SYMBOL(mcps802154_region_close);
+EXPORT_SYMBOL_GPL(mcps802154_region_close);
 
 void mcps802154_region_notify_stop(struct mcps802154_llhw *llhw,
 				   struct mcps802154_region *region)
@@ -130,7 +131,7 @@ void mcps802154_region_notify_stop(struct mcps802154_llhw *llhw,
 	if (ops->notify_stop)
 		ops->notify_stop(region);
 }
-EXPORT_SYMBOL(mcps802154_region_notify_stop);
+EXPORT_SYMBOL_GPL(mcps802154_region_notify_stop);
 
 int mcps802154_region_set_parameters(struct mcps802154_llhw *llhw,
 				     struct mcps802154_region *region,
@@ -145,7 +146,7 @@ int mcps802154_region_set_parameters(struct mcps802154_llhw *llhw,
 
 	return region->ops->set_parameters(region, params_attr, extack);
 }
-EXPORT_SYMBOL(mcps802154_region_set_parameters);
+EXPORT_SYMBOL_GPL(mcps802154_region_set_parameters);
 
 int mcps802154_region_call(struct mcps802154_llhw *llhw,
 			   struct mcps802154_region *region, u32 call_id,
@@ -157,7 +158,7 @@ int mcps802154_region_call(struct mcps802154_llhw *llhw,
 
 	return region->ops->call(region, call_id, params_attr, info);
 }
-EXPORT_SYMBOL(mcps802154_region_call);
+EXPORT_SYMBOL_GPL(mcps802154_region_call);
 
 int mcps802154_region_get_demand(struct mcps802154_llhw *llhw,
 				 struct mcps802154_region *region,
@@ -169,4 +170,39 @@ int mcps802154_region_get_demand(struct mcps802154_llhw *llhw,
 
 	return region->ops->get_demand(region, next_timestamp_dtu, demand);
 }
-EXPORT_SYMBOL(mcps802154_region_get_demand);
+EXPORT_SYMBOL_GPL(mcps802154_region_get_demand);
+
+void mcps802154_region_xmit_resume(struct mcps802154_llhw *llhw,
+				   struct mcps802154_region *region,
+				   int queue_index)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	ieee802154_wake_queue(local->hw);
+}
+EXPORT_SYMBOL_GPL(mcps802154_region_xmit_resume);
+
+void mcps802154_region_xmit_done(struct mcps802154_llhw *llhw,
+				 struct mcps802154_region *region,
+				 struct sk_buff *skb, bool ok)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	if (ok) {
+		ieee802154_xmit_complete(local->hw, skb, false);
+	} else {
+		ieee802154_wake_queue(local->hw);
+		dev_kfree_skb_any(skb);
+	}
+}
+EXPORT_SYMBOL_GPL(mcps802154_region_xmit_done);
+
+void mcps802154_region_rx_skb(struct mcps802154_llhw *llhw,
+			      struct mcps802154_region *region,
+			      struct sk_buff *skb, u8 lqi)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	ieee802154_rx_irqsafe(local->hw, skb, lqi);
+}
+EXPORT_SYMBOL_GPL(mcps802154_region_rx_skb);

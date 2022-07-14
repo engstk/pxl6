@@ -21,8 +21,8 @@
 #include <linux/platform_device.h>
 #include <linux/printk.h>
 #include <linux/thermal.h>
+#include <misc/gvotable.h>
 #include "gbms_power_supply.h"
-#include "pmic-voter.h" /* TODO(b/163679860): use gvotables */
 #include "google_psy.h"
 
 #define USB_OVERHEAT_MITIGATION_VOTER	"USB_OVERHEAT_MITIGATION_VOTER"
@@ -49,8 +49,8 @@ struct overheat_event_stats {
 struct overheat_info {
 	struct device              *dev;
 	struct power_supply        *usb_psy;
-	struct votable             *usb_icl_votable;
-	struct votable             *disable_power_role_switch;
+	struct gvotable_election   *usb_icl_votable;
+	struct gvotable_election   *disable_power_role_switch;
 	struct notifier_block      psy_nb;
 	struct delayed_work        port_overheat_work;
 	struct wakeup_source	   *overheat_ws;
@@ -162,8 +162,8 @@ static int suspend_usb(struct overheat_info *ovh_info)
 	ovh_info->usb_replug = false;
 
 	/* disable USB */
-	ret = vote(ovh_info->disable_power_role_switch,
-		   USB_OVERHEAT_MITIGATION_VOTER, true, 0);
+	ret = gvotable_cast_bool_vote(ovh_info->disable_power_role_switch,
+				      USB_OVERHEAT_MITIGATION_VOTER, true);
 	if (ret < 0) {
 		dev_err(ovh_info->dev,
 			"Couldn't vote for disable_power_role_switch ret=%d\n",
@@ -172,8 +172,8 @@ static int suspend_usb(struct overheat_info *ovh_info)
 	}
 
 	/* suspend charging */
-	ret = vote(ovh_info->usb_icl_votable,
-		  USB_OVERHEAT_MITIGATION_VOTER, true, 0);
+	ret = gvotable_cast_int_vote(ovh_info->usb_icl_votable,
+				     USB_OVERHEAT_MITIGATION_VOTER, 0, true);
 	if (ret < 0) {
 		dev_err(ovh_info->dev,
 			"Couldn't vote for USB ICL ret=%d\n", ret);
@@ -200,8 +200,8 @@ static int resume_usb(struct overheat_info *ovh_info)
 		(int) (get_seconds_since_boot() - ovh_info->hysteresis_time);
 
 	/* enable charging */
-	ret = vote(ovh_info->usb_icl_votable,
-		  USB_OVERHEAT_MITIGATION_VOTER, false, 0);
+	ret = gvotable_cast_int_vote(ovh_info->usb_icl_votable,
+				     USB_OVERHEAT_MITIGATION_VOTER, 0, false);
 	if (ret < 0) {
 		dev_err(ovh_info->dev,
 			"Couldn't un-vote for USB ICL ret=%d\n", ret);
@@ -209,8 +209,8 @@ static int resume_usb(struct overheat_info *ovh_info)
 	}
 
 	/* enable USB */
-	ret = vote(ovh_info->disable_power_role_switch,
-		   USB_OVERHEAT_MITIGATION_VOTER, false, 0);
+	ret = gvotable_cast_bool_vote(ovh_info->disable_power_role_switch,
+				      USB_OVERHEAT_MITIGATION_VOTER, false);
 	if (ret < 0) {
 		dev_err(ovh_info->dev,
 			"Couldn't un-vote for disable_power_role_switch ret=%d\n",
@@ -256,8 +256,8 @@ static int update_usb_status(struct overheat_info *ovh_info)
 		*check_status = (*check_status + 1) % ovh_info->polling_freq;
 		if (*check_status > 0)
 			return 0;
-		ret = vote(ovh_info->disable_power_role_switch,
-			   USB_OVERHEAT_MITIGATION_VOTER, false, 0);
+		ret = gvotable_cast_bool_vote(ovh_info->disable_power_role_switch,
+					      USB_OVERHEAT_MITIGATION_VOTER, false);
 		if (ret < 0) {
 			dev_err(ovh_info->dev,
 				"Couldn't un-vote for disable_power_role_switch ret=%d\n",
@@ -299,8 +299,8 @@ static int update_usb_status(struct overheat_info *ovh_info)
 	}
 
 	if (ovh_info->overheat_mitigation) {
-		ret = vote(ovh_info->disable_power_role_switch,
-			   USB_OVERHEAT_MITIGATION_VOTER, true, 0);
+		ret = gvotable_cast_bool_vote(ovh_info->disable_power_role_switch,
+					      USB_OVERHEAT_MITIGATION_VOTER, true);
 		if (ret < 0) {
 			dev_err(ovh_info->dev,
 				"Couldn't vote for disable_power_role_switch ret=%d\n",
@@ -456,20 +456,21 @@ static int ovh_probe(struct platform_device *pdev)
 	int ret = 0;
 	struct overheat_info *ovh_info;
 	struct power_supply  *usb_psy;
-	struct votable       *usb_icl_votable;
-	struct votable       *disable_power_role_switch;
+	struct gvotable_election *usb_icl_votable;
+	struct gvotable_election *disable_power_role_switch;
 
 	usb_psy = power_supply_get_by_name("usb");
 	if (!usb_psy)
 		return -EPROBE_DEFER;
 
-	usb_icl_votable = find_votable("USB_ICL");
+	usb_icl_votable = gvotable_election_get_handle("USB_ICL");
 	if (usb_icl_votable == NULL) {
 		pr_err("Couldn't find USB_ICL votable\n");
 		return -EPROBE_DEFER;
 	}
 
-	disable_power_role_switch = find_votable("DISABLE_POWER_ROLE_SWITCH");
+	disable_power_role_switch =
+		gvotable_election_get_handle("DISABLE_POWER_ROLE_SWITCH");
 	if (disable_power_role_switch == NULL) {
 		pr_err("Couldn't find DISABLE_POWER_ROLE_SWITCH votable\n");
 		return -EPROBE_DEFER;
@@ -491,10 +492,10 @@ static int ovh_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	// initialize votables
-	vote(ovh_info->usb_icl_votable,
-	     USB_OVERHEAT_MITIGATION_VOTER, false, 0);
-	vote(ovh_info->disable_power_role_switch,
-	     USB_OVERHEAT_MITIGATION_VOTER, false, 0);
+	gvotable_cast_int_vote(ovh_info->usb_icl_votable,
+			       USB_OVERHEAT_MITIGATION_VOTER, 0, false);
+	gvotable_cast_bool_vote(ovh_info->disable_power_role_switch,
+				USB_OVERHEAT_MITIGATION_VOTER, false);
 
 	ovh_info->overheat_ws = wakeup_source_register(NULL, "overheat_mitigation");
 	if (!ovh_info->overheat_ws) {

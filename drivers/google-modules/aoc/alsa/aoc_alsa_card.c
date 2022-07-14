@@ -251,6 +251,7 @@ static const struct be_param_cache default_be_params[PORT_MAX] = {
 	MK_TDM_BE_PARAMS(TDM_1_TX, SNDRV_PCM_FORMAT_S16_LE,
 			2, 48000, 4, SNDRV_PCM_FORMAT_S32_LE)
 	MK_BE_PARAMS(INTERNAL_MIC_TX, SNDRV_PCM_FORMAT_S16_LE, 2, 48000)
+	MK_BE_PARAMS(INTERNAL_MIC_US_TX, SNDRV_PCM_FORMAT_S32_LE, 2, 96000)
 	MK_BE_PARAMS(ERASER_TX, SNDRV_PCM_FORMAT_S16_LE, 2, 48000)
 	MK_BE_PARAMS(BT_RX, SNDRV_PCM_FORMAT_S16_LE, 1, 16000)
 	MK_BE_PARAMS(BT_TX, SNDRV_PCM_FORMAT_S16_LE, 1, 16000)
@@ -942,6 +943,7 @@ MK_TDM_HW_PARAM_CTRLS(TDM_0_TX, "TDM_0_TX");
 MK_TDM_HW_PARAM_CTRLS(TDM_1_RX, "TDM_1_RX");
 MK_TDM_HW_PARAM_CTRLS(TDM_1_TX, "TDM_1_TX");
 MK_HW_PARAM_CTRLS(INTERNAL_MIC_TX, "INTERNAL_MIC_TX");
+MK_HW_PARAM_CTRLS(INTERNAL_MIC_US_TX, "INTERNAL_MIC_US_TX");
 MK_HW_PARAM_CTRLS(ERASER_TX, "ERASER_TX");
 MK_HW_PARAM_CTRLS(BT_RX, "BT_RX");
 MK_HW_PARAM_CTRLS(BT_TX, "BT_TX");
@@ -968,6 +970,7 @@ static const struct dai_link_res_map be_res_map[PORT_MAX] = {
 	MK_BE_RES_ITEM(TDM_1_RX, &aoc_tdm_ops, hw_params_fixup)
 	MK_BE_RES_ITEM(TDM_1_TX, &aoc_tdm_ops, hw_params_fixup)
 	MK_BE_RES_ITEM(INTERNAL_MIC_TX, &aoc_i2s_ops, hw_params_fixup)
+	MK_BE_RES_ITEM(INTERNAL_MIC_US_TX, &aoc_i2s_ops, hw_params_fixup)
 	MK_BE_RES_ITEM(ERASER_TX, &aoc_i2s_ops, hw_params_fixup)
 	MK_BE_RES_ITEM(BT_RX, &aoc_i2s_ops, hw_params_fixup)
 	MK_BE_RES_ITEM(BT_TX, &aoc_i2s_ops, hw_params_fixup)
@@ -1808,8 +1811,10 @@ static int snd_aoc_init(struct aoc_chip *chip)
 
 	chip->default_mic_id = DEFAULT_MICPHONE_ID;
 	chip->buildin_mic_id_list[0] = DEFAULT_MICPHONE_ID;
+	chip->buildin_us_mic_id_list[0] = DEFAULT_MICPHONE_ID;
 	for (i = 1; i < NUM_OF_BUILTIN_MIC; i++) {
 		chip->buildin_mic_id_list[i] = -1;
+		chip->buildin_us_mic_id_list[i] = -1;
 	}
 
 	chip->default_sink_id = DEFAULT_AUDIO_SINK_ID;
@@ -1821,6 +1826,8 @@ static int snd_aoc_init(struct aoc_chip *chip)
 	chip->audio_capture_mic_source = BUILTIN_MIC;
 	chip->voice_call_mic_source = 0;
 	chip->voice_call_mic_mute = 0;
+	chip->ft_aec_ref_source = DEFAULT_PLAYBACK;
+	chip->eraser_aec_ref_source = DEFAULT_PLAYBACK;
 	chip->compr_offload_volume = 15;
 	chip->voice_call_audio_enable = 1;
 	chip->mic_spatial_module_enable = 0;

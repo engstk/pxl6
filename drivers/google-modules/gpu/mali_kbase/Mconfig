@@ -35,7 +35,7 @@ config MALI_PLATFORM_NAME
 	default "devicetree"
 	help
 	  Enter the name of the desired platform configuration directory to
-	  include in the build. 'platform/$(MALI_PLATFORM_NAME)/Makefile' must
+	  include in the build. 'platform/$(MALI_PLATFORM_NAME)/Kbuild' must
 	  exist.
 
 	  When PLATFORM_CUSTOM is set, this needs to be set manually to
@@ -46,6 +46,14 @@ config MALI_REAL_HW
 	depends on MALI_MIDGARD
 	default y
 	default n if NO_MALI
+
+config MALI_PLATFORM_DT_PIN_RST
+	bool "Enable Juno GPU Pin reset"
+	depends on MALI_MIDGARD
+	default n
+	default y if BUSLOG
+	help
+	  Enables support for GPUs pin reset on Juno platforms.
 
 config MALI_CSF_SUPPORT
 	bool "Enable Mali CSF based GPU support"

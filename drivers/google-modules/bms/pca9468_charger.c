@@ -122,6 +122,10 @@ static int adc_gain[16] = { 0,  1,  2,  3,  4,  5,  6,  7,
 #define PCA9468_IRDROP_LIMIT_TIER2	75000	/* uV */
 #define PCA9468_IRDROP_LIMIT_TIER3	0	/* uV */
 
+/* Spread Spectrum default settings */
+#define PCA9468_SC_CLK_DITHER_RATE_DEF	0	/* 25kHz */
+#define PCA9468_SC_CLK_DITHER_LIMIT_DEF	0xF	/* 10% */
+
 /* INT1 Register Buffer */
 enum {
 	REG_INT1,
@@ -3972,6 +3976,23 @@ static int pca9468_hw_init(struct pca9468_charger *pca9468)
 	if (ret < 0)
 		return ret;
 
+	/* Spread Spectrum settings */
+	ret = regmap_update_bits(pca9468->regmap, PCA9468_REG_ADC_CTRL,
+				 PCA9468_BIT_SC_CLK_DITHER_RATE,
+				 pca9468->pdata->sc_clk_dither_rate);
+	if (ret < 0)
+		return ret;
+	ret = regmap_update_bits(pca9468->regmap, PCA9468_REG_NTC_TH_2,
+				 PCA9468_SC_CLK_DITHER_LIMIT,
+				 pca9468->pdata->sc_clk_dither_limit << 4);
+	if (ret < 0)
+		return ret;
+	val = pca9468->pdata->sc_clk_dither_en ? PCA9468_BIT_SC_CLK_DITHER_EN : 0;
+	ret = regmap_update_bits(pca9468->regmap, PCA9468_REG_TEMP_CTRL,
+				 PCA9468_BIT_SC_CLK_DITHER_EN, val);
+	if (ret < 0)
+		return ret;
+
 	return ret;
 }
 
@@ -4504,7 +4525,7 @@ static bool pca9468_is_reg(struct device *dev, unsigned int reg)
 	return false;
 }
 
-static const struct regmap_config pca9468_regmap = {
+static struct regmap_config pca9468_regmap = {
 	.name		= "pca9468-mains",
 	.reg_bits	= 8,
 	.val_bits	= 8,
@@ -4513,7 +4534,7 @@ static const struct regmap_config pca9468_regmap = {
 	.volatile_reg = pca9468_is_reg,
 };
 
-static const struct power_supply_desc pca9468_mains_desc = {
+static struct power_supply_desc pca9468_mains_desc = {
 	.name		= "pca9468-mains",
 	/* b/179246019 will not look online to Android */
 	.type		= POWER_SUPPLY_TYPE_UNKNOWN,
@@ -4618,6 +4639,24 @@ static int of_pca9468_dt(struct device *dev,
 		pdata->irdrop_limits[1] = PCA9468_IRDROP_LIMIT_TIER2;
 		pdata->irdrop_limits[2] = PCA9468_IRDROP_LIMIT_TIER3;
 	}
+
+	/* Spread Spectrum settings */
+	ret = of_property_read_u32(np_pca9468, "pca9468,sc-clk-dither-rate",
+				   &pdata->sc_clk_dither_rate);
+	if (ret)
+		pdata->sc_clk_dither_rate = PCA9468_SC_CLK_DITHER_RATE_DEF;
+	else
+		pr_info("%s: pca9468,sc-clk-dither-rate is %u\n", __func__,
+			pdata->sc_clk_dither_rate);
+	ret = of_property_read_u32(np_pca9468, "pca9468,sc-clk-dither-limit",
+				   &pdata->sc_clk_dither_limit);
+	if (ret)
+		pdata->sc_clk_dither_limit = PCA9468_SC_CLK_DITHER_LIMIT_DEF;
+	else
+		pr_info("%s: pca9468,sc-clk-dither-limit is %u\n", __func__,
+			pdata->sc_clk_dither_limit);
+	pdata->sc_clk_dither_en = of_property_read_bool(np_pca9468, "pca9468,spread-spectrum");
+	pr_info("%s: pca9468,spread-spectrum is %u\n", __func__, pdata->sc_clk_dither_en);
 
 #ifdef CONFIG_THERMAL
 	/* USBC thermal zone */
@@ -4897,6 +4936,7 @@ static int pca9468_probe(struct i2c_client *client,
 	struct pca9468_platform_data *pdata;
 	struct pca9468_charger *pca9468_chg;
 	struct device *dev = &client->dev;
+	const char *psy_name = NULL;
 	int ret;
 
 	pr_debug("%s: =========START=========\n", __func__);
@@ -4961,6 +5001,12 @@ static int pca9468_probe(struct i2c_client *client,
 	pca9468_chg->timer_period = 0;
 
 	INIT_DELAYED_WORK(&pca9468_chg->pps_work, pca9468_pps_request_work);
+
+	ret = of_property_read_string(dev->of_node,
+				      "pca9468,psy_name", &psy_name);
+	if ((ret == 0) && (strlen(psy_name) > 0))
+		pca9468_regmap.name = pca9468_mains_desc.name =
+		    devm_kstrdup(dev, psy_name, GFP_KERNEL);
 
 	pca9468_chg->regmap = devm_regmap_init_i2c(client, &pca9468_regmap);
 	if (IS_ERR(pca9468_chg->regmap)) {

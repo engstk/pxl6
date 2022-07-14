@@ -131,12 +131,14 @@ int mcps802154_register_llhw(struct mcps802154_llhw *llhw)
 
 	local->pib.mac_extended_addr = local->hw->phy->perm_extended_addr;
 	local->pib.mac_pan_id = IEEE802154_PAN_ID_BROADCAST;
+	local->pib.mac_promiscuous = false;
 	local->pib.mac_short_addr = IEEE802154_ADDR_SHORT_BROADCAST;
 	local->pib.phy_current_channel.page = local->hw->phy->current_page;
 	local->pib.phy_current_channel.channel =
 		local->hw->phy->current_channel;
 	local->pib.phy_current_channel.preamble_code =
 		llhw->current_preamble_code;
+	local->mac_pan_coord = false;
 
 	mutex_lock(&registered_llhw_lock);
 	list_add(&local->registered_entry, &registered_llhw);
@@ -207,12 +209,12 @@ EXPORT_SYMBOL(mcps802154_get_current_timestamp_dtu);
 
 u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
 						u32 tx_timestamp_dtu,
-						int ant_id)
+						int ant_set_id)
 {
 	struct mcps802154_local *local = llhw_to_local(llhw);
 
 	return llhw_tx_timestamp_dtu_to_rmarker_rctu(local, tx_timestamp_dtu,
-						     ant_id);
+						     ant_set_id);
 }
 EXPORT_SYMBOL(mcps802154_tx_timestamp_dtu_to_rmarker_rctu);
 
@@ -226,6 +228,15 @@ s64 mcps802154_difference_timestamp_rctu(struct mcps802154_llhw *llhw,
 					      timestamp_b_rctu);
 }
 EXPORT_SYMBOL(mcps802154_difference_timestamp_rctu);
+
+int mcps802154_compute_frame_duration_dtu(struct mcps802154_llhw *llhw,
+					  int payload_bytes)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	return llhw_compute_frame_duration_dtu(local, payload_bytes);
+}
+EXPORT_SYMBOL(mcps802154_compute_frame_duration_dtu);
 
 int mcps802154_vendor_cmd(struct mcps802154_llhw *llhw, u32 vendor_id,
 			  u32 subcmd, void *data, size_t data_len)
@@ -267,6 +278,8 @@ int __init mcps802154_init(void)
 	WARN_ON(r);
 	r = mcps802154_endless_scheduler_init();
 	WARN_ON(r);
+	r = mcps802154_default_scheduler_init();
+	WARN_ON(r);
 	r = mcps802154_on_demand_scheduler_init();
 	WARN_ON(r);
 #ifdef CONFIG_MCPS802154_TESTMODE
@@ -282,6 +295,7 @@ void __exit mcps802154_exit(void)
 	ping_pong_region_exit();
 #endif
 	mcps802154_on_demand_scheduler_exit();
+	mcps802154_default_scheduler_exit();
 	mcps802154_endless_scheduler_exit();
 	simple_ranging_region_exit();
 	mcps802154_default_region_exit();
