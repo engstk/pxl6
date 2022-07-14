@@ -85,5 +85,4 @@ void edgetpu_mobile_firmware_destroy(struct edgetpu_dev *etdev);
  */
 int edgetpu_mobile_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_reset);
 
-
 #endif /* __MOBILE_FIRMWARE_H__ */

@@ -67,8 +67,7 @@
 
 #define CL_DSP_ALGO_LIST_TERM		0xBEDEAD
 
-#define CL_DSP_REV_OFFSET_MASK		GENMASK(23, 16)
-#define CL_DSP_REV_OFFSET_SHIFT	8
+#define CL_DSP_REV_OFFSET_SHIFT		8
 
 #define CL_DSP_REV_MAJOR_MASK		GENMASK(23, 16)
 #define CL_DSP_REV_MAJOR_SHIFT		16
@@ -144,9 +143,6 @@
 #define CL_DSP_WORD_ALIGN(n)	(CL_DSP_BYTES_PER_WORD +\
 				(((n) / CL_DSP_BYTES_PER_WORD) *\
 				CL_DSP_BYTES_PER_WORD))
-
-#define CL_DSP_SHIFT_REV(n)	(((n) >> CL_DSP_REV_OFFSET_SHIFT) &\
-				CL_DSP_REV_OFFSET_MASK)
 
 #define CL_DSP_GET_MAJOR(n)	(((n) & CL_DSP_REV_MAJOR_MASK) >>\
 				CL_DSP_REV_MAJOR_SHIFT)
@@ -316,6 +312,7 @@ int cl_dsp_get_reg(struct cl_dsp *dsp, const char *coeff_name,
 struct cl_dsp_memchunk cl_dsp_memchunk_create(void *data, int size);
 int cl_dsp_memchunk_write(struct cl_dsp_memchunk *ch, int nbits, u32 val);
 int cl_dsp_memchunk_read(struct cl_dsp_memchunk *ch, int nbits);
+int cl_dsp_memchunk_flush(struct cl_dsp_memchunk *ch);
 int cl_dsp_raw_write(struct cl_dsp *dsp, unsigned int reg,
 		const void *val, size_t val_len, size_t limit);
 int cl_dsp_fw_id_get(struct cl_dsp *dsp, unsigned int *id);

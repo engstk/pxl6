@@ -72,14 +72,22 @@ enum gbms_property {
 	GBMS_PROP_LOCAL_EXTENSIONS = POWER_SUPPLY_PROP_SERIAL_NUMBER + 100,
 
 	GBMS_PROP_ADAPTER_DETAILS,	/* GBMS Adapter Details */
-	GBMS_PROP_BATT_CE_CTRL,		/* GBMS batt */
-	GBMS_PROP_CAPACITY_RAW,		/* GBMS ssoc */
+	GBMS_PROP_BATT_CE_CTRL,		/* GBMS plugged (replace with GBMS_PROP_CHARGING_ENABLED) */
+	GBMS_PROP_CAPACITY_RAW,		/* GBMS used for ssoc */
 	GBMS_PROP_CHARGING_ENABLED,	/* GBMS cpm control */
-	GBMS_PROP_CHARGE_CHARGER_STATE,	/* GBMS charge, need int64 */
+	GBMS_PROP_CHARGE_CHARGER_STATE,	/* GBMS charge, need uint64 */
 	GBMS_PROP_CHARGE_DISABLE,	/* GBMS disconnect */
-	GBMS_PROP_DEAD_BATTERY,		/* GBMS boot */
+	GBMS_PROP_DEAD_BATTERY,		/* GBMS during boot */
 	GBMS_PROP_INPUT_CURRENT_LIMITED, /* can be device prop */
 	GBMS_PROP_TAPER_CONTROL,	/* GBMS DC, needs for last tier */
+	GBMS_PROP_HEALTH_ACT_IMPEDANCE,	/* GBMS activation impedance, qualified */
+	GBMS_PROP_HEALTH_IMPEDANCE,	/* GBMS impedance, qualified */
+	GBMS_PROP_RESISTANCE,		/* GBMS battery resistance, unqualified */
+	GBMS_PROP_RESISTANCE_RAW,	/* GBMS battery resistance, unqualified, u16 */
+	GBMS_PROP_RESISTANCE_AVG,	/* GBMS google_resistance */
+	GBMS_PROP_BATTERY_AGE,		/* GBMS time in field */
+	GBMS_PROP_CAPACITY_FADE_RATE,	/* GBMS capaciy fade rate */
+	GBMS_PROP_CHARGE_FULL_ESTIMATE,	/* GBMS google_capacity */
 };
 
 union gbms_propval {
@@ -101,7 +109,7 @@ static inline int gpsy_set_int64_prop(struct power_supply *psy,
 		return -EINVAL;
 
 	pr_debug("set %s for '%s' to %lld\n", prop_name,
-		 psy->desc->name, val.int64val);
+		 psy->desc->name, (long long)val.int64val);
 
 	ret = power_supply_set_property(psy, (enum power_supply_property)psp,
 				        &val.prop);
@@ -137,7 +145,7 @@ static inline int64_t gpsy_get_int64_prop(struct power_supply *psy,
 	}
 
 	pr_debug("get %s for '%s' => %lld\n", prop_name,
-		 psy->desc->name, val.int64val);
+		 psy->desc->name, (long long)val.int64val);
 
 	return val.int64val;
 }

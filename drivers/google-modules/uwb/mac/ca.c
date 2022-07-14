@@ -22,6 +22,7 @@
  */
 
 #include <linux/errno.h>
+#include <linux/list.h>
 #include <linux/string.h>
 
 #include "mcps802154_i.h"
@@ -38,26 +39,58 @@ static int mcps802154_ca_trace_int(struct mcps802154_local *local, const int r)
 
 static void mcps802154_ca_close_scheduler(struct mcps802154_local *local)
 {
+	struct mcps802154_region *region, *r;
+	struct mcps802154_ca *ca = &local->ca;
+	struct list_head *regions = &ca->regions;
+
 	mcps802154_schedule_clear(local);
 	if (local->ca.scheduler) {
 		mcps802154_scheduler_close(local->ca.scheduler);
 		local->ca.scheduler = NULL;
 	}
+	list_for_each_entry_safe (region, r, regions, ca_entry) {
+		list_del(&region->ca_entry);
+		mcps802154_region_close(&local->llhw, region);
+	}
+	ca->n_regions = 0;
+}
+
+static int check_and_get_region(struct mcps802154_ca *ca,
+				const char *scheduler_name, u32 region_id,
+				const char *region_name,
+				struct mcps802154_region **sel_region)
+{
+	struct mcps802154_scheduler *scheduler = ca->scheduler;
+	struct list_head *regions = &ca->regions;
+	struct mcps802154_region *region;
+
+	/* Check scheduler is the correct one. */
+	if (!scheduler || strcmp(scheduler->ops->name, scheduler_name) ||
+	    !region_name)
+		return -EINVAL;
+
+	list_for_each_entry (region, regions, ca_entry) {
+		if (!strcmp(region_name, region->ops->name) &&
+		    region->id == region_id) {
+			*sel_region = region;
+			return 0;
+		}
+	}
+	return -ENOENT;
 }
 
 void mcps802154_ca_init(struct mcps802154_local *local)
 {
+	struct mcps802154_ca *ca = &local->ca;
+
 	local->ca.held = false;
 	local->ca.reset = false;
-	skb_queue_head_init(&local->ca.queue);
-	atomic_set(&local->ca.n_queued, 0);
-	local->ca.retries = 0;
+	INIT_LIST_HEAD(&ca->regions);
+	ca->n_regions = 0;
 }
 
 void mcps802154_ca_uninit(struct mcps802154_local *local)
 {
-	skb_queue_purge(&local->ca.queue);
-	atomic_set(&local->ca.n_queued, 0);
 }
 
 int mcps802154_ca_start(struct mcps802154_local *local)
@@ -66,6 +99,11 @@ int mcps802154_ca_start(struct mcps802154_local *local)
 
 	if (!local->ca.scheduler) {
 		r = mcps802154_ca_set_scheduler(local, "default", NULL, NULL);
+		if (r)
+			return r;
+
+		r = mcps802154_ca_set_region(local, "default", 0, "default",
+					     NULL, NULL);
 		if (r)
 			return r;
 	}
@@ -84,7 +122,14 @@ void mcps802154_ca_stop(struct mcps802154_local *local)
 
 void mcps802154_ca_notify_stop(struct mcps802154_local *local)
 {
+	struct mcps802154_region *region;
+	struct mcps802154_ca *ca = &local->ca;
+	struct list_head *regions = &ca->regions;
+
 	mcps802154_scheduler_notify_stop(local->ca.scheduler);
+	list_for_each_entry (region, regions, ca_entry) {
+		mcps802154_region_notify_stop(&local->llhw, region);
+	}
 }
 
 void mcps802154_ca_close(struct mcps802154_local *local)
@@ -114,6 +159,62 @@ int mcps802154_ca_set_scheduler(struct mcps802154_local *local,
 	return mcps802154_ca_trace_int(local, 0);
 }
 
+int mcps802154_ca_set_region(struct mcps802154_local *local,
+			     const char *scheduler_name, u32 region_id,
+			     const char *region_name,
+			     const struct nlattr *params_attr,
+			     struct netlink_ext_ack *extack)
+{
+	struct mcps802154_ca *ca = &local->ca;
+	struct list_head *regions = &ca->regions;
+	struct mcps802154_scheduler *scheduler;
+	struct mcps802154_region *region, *old_region;
+	struct list_head *position = regions;
+	bool region_id_present = false;
+
+	trace_ca_set_region(local, scheduler_name, region_id, region_name);
+
+	scheduler = local->ca.scheduler;
+	/* Check scheduler is the correct one. */
+	if (!scheduler || strcmp(scheduler->ops->name, scheduler_name) ||
+	    !region_name)
+		return mcps802154_ca_trace_int(local, -EINVAL);
+
+	/* Check if we need to replace an already opened region. */
+	list_for_each_entry (old_region, regions, ca_entry) {
+		if (old_region->id == region_id) {
+			region_id_present = true;
+			break;
+		} else if (old_region->id < region_id) {
+			position = &old_region->ca_entry;
+		} else {
+			break;
+		}
+	}
+
+	/* Regions number is limited by the scheduler */
+	if (!region_id_present && scheduler->n_regions &&
+	    ca->n_regions >= scheduler->n_regions)
+		return mcps802154_ca_trace_int(local, -ENOSPC);
+
+	region = mcps802154_region_open(&local->llhw, region_name, params_attr,
+					extack);
+
+	if (!region)
+		return mcps802154_ca_trace_int(local, -EINVAL);
+	region->id = region_id;
+
+	if (region_id_present) {
+		list_replace(&old_region->ca_entry, &region->ca_entry);
+		mcps802154_region_close(&local->llhw, old_region);
+	} else {
+		list_add(&region->ca_entry, position);
+		ca->n_regions++;
+	}
+
+	return mcps802154_ca_trace_int(local, 0);
+}
+
 int mcps802154_ca_scheduler_set_parameters(struct mcps802154_local *local,
 					   const char *name,
 					   const struct nlattr *params_attr,
@@ -131,27 +232,6 @@ int mcps802154_ca_scheduler_set_parameters(struct mcps802154_local *local,
 		return mcps802154_ca_trace_int(local, -EINVAL);
 
 	r = mcps802154_scheduler_set_parameters(scheduler, params_attr, extack);
-	return mcps802154_ca_trace_int(local, r);
-}
-
-int mcps802154_ca_scheduler_set_region_parameters(
-	struct mcps802154_local *local, const char *scheduler_name,
-	u32 region_id, const char *region_name,
-	const struct nlattr *params_attr, struct netlink_ext_ack *extack)
-{
-	struct mcps802154_scheduler *scheduler;
-	int r;
-
-	trace_ca_scheduler_set_region_parameters(local, scheduler_name,
-						 region_id, region_name);
-
-	scheduler = local->ca.scheduler;
-	/* Check scheduler is the correct one. */
-	if (!scheduler || strcmp(scheduler->ops->name, scheduler_name) ||
-	    !region_name)
-		return mcps802154_ca_trace_int(local, -EINVAL);
-	r = mcps802154_scheduler_set_region_parameters(
-		scheduler, region_id, region_name, params_attr, extack);
 	return mcps802154_ca_trace_int(local, r);
 }
 
@@ -173,27 +253,68 @@ int mcps802154_ca_scheduler_call(struct mcps802154_local *local,
 	return mcps802154_ca_trace_int(local, r);
 }
 
-int mcps802154_ca_scheduler_call_region(struct mcps802154_local *local,
+int mcps802154_ca_set_region_parameters(struct mcps802154_local *local,
 					const char *scheduler_name,
 					u32 region_id, const char *region_name,
-					u32 call_id,
 					const struct nlattr *params_attr,
-					const struct genl_info *info)
+					struct netlink_ext_ack *extack)
 {
-	struct mcps802154_scheduler *scheduler;
+	struct mcps802154_region *region;
 	int r;
 
-	trace_ca_scheduler_call_region(local, scheduler_name, region_id,
-				       region_name, call_id);
+	trace_ca_set_region_params(local, scheduler_name, region_id,
+				   region_name);
 
-	scheduler = local->ca.scheduler;
-	/* Check scheduler is the correct one. */
-	if (!scheduler || strcmp(scheduler->ops->name, scheduler_name) ||
-	    !region_name)
-		return mcps802154_ca_trace_int(local, -EINVAL);
-	r = mcps802154_scheduler_call_region(scheduler, region_id, region_name,
-					     call_id, params_attr, info);
+	r = check_and_get_region(&local->ca, scheduler_name, region_id,
+				 region_name, &region);
+	if (r)
+		goto end;
+
+	r = mcps802154_region_set_parameters(&local->llhw, region, params_attr,
+					     extack);
+
+end:
 	return mcps802154_ca_trace_int(local, r);
+}
+
+int mcps802154_ca_call_region(struct mcps802154_local *local,
+			      const char *scheduler_name, u32 region_id,
+			      const char *region_name, u32 call_id,
+			      const struct nlattr *params_attr,
+			      const struct genl_info *info)
+{
+	struct mcps802154_region *region;
+	int r;
+
+	trace_ca_call_region(local, scheduler_name, region_id, region_name,
+			     call_id);
+
+	r = check_and_get_region(&local->ca, scheduler_name, region_id,
+				 region_name, &region);
+	if (r)
+		goto end;
+
+	r = mcps802154_region_call(&local->llhw, region, call_id, params_attr,
+				   info);
+
+end:
+	return mcps802154_ca_trace_int(local, r);
+}
+
+int mcps802154_ca_xmit_skb(struct mcps802154_local *local, struct sk_buff *skb)
+{
+	struct mcps802154_region *region;
+	int r = -EOPNOTSUPP;
+
+	list_for_each_entry (region, &local->ca.regions, ca_entry) {
+		if (region->ops->xmit_skb) {
+			if (region->ops->xmit_skb(region, skb)) {
+				r = 0;
+				break;
+			}
+		}
+	}
+	return r;
 }
 
 /**
@@ -223,11 +344,8 @@ static int mcps802154_ca_next_region(struct mcps802154_local *local,
 
 		/* No more region, need a new schedule. */
 		if (sched->current_index >= sched->n_regions) {
-			int r = mcps802154_schedule_update(local,
-							   next_timestamp_dtu);
-			if (r)
-				return r;
-			return 1;
+			return mcps802154_schedule_update(local,
+							  next_timestamp_dtu);
 		}
 
 		sched_region = &sched->regions[sched->current_index];
@@ -281,19 +399,21 @@ mcps802154_ca_get_access(struct mcps802154_local *local, u32 next_timestamp_dtu)
 	idle_timestamp_dtu = next_timestamp_dtu + local->llhw.idle_dtu;
 	while (1) {
 		/* Need a schedule. */
-		if (!sched->n_regions) {
+		if (!sched->n_regions)
 			r = mcps802154_schedule_update(local,
 						       next_timestamp_dtu);
-			if (r)
-				return NULL;
-			changed = 1;
-		} else {
+		else
 			/* Need a region. */
-			changed = mcps802154_ca_next_region(local,
-							    next_timestamp_dtu);
-			if (changed < 0)
-				return NULL;
-		}
+			r = mcps802154_ca_next_region(local,
+						      next_timestamp_dtu);
+
+		/* Stay in IDLE when no schedule. */
+		if (r == -ENOENT)
+			return mcps802154_ca_idle(local, false, 0);
+		else if (r < 0)
+			return NULL;
+
+		changed = r;
 		sched_region = &sched->regions[sched->current_index];
 		region = sched_region->region;
 		region_start_timestamp_dtu =

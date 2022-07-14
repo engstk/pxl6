@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -385,6 +385,8 @@ typedef enum {
 #define WLFC_CTL_PKTFLAG_DROPPED	7
 /* Firmware free this packet  */
 #define WLFC_CTL_PKTFLAG_MKTFREE	8
+/* Firmware drop this packet due to AMPDU cleanup  */
+#define WLFC_CTL_PKTFLAG_AMPDU_CLEANUP	8
 /* Firmware dropped the frame after suppress retries reached max */
 #define WLFC_CTL_PKTFLAG_MAX_SUP_RETR   9
 
@@ -475,6 +477,7 @@ typedef enum {
 #define FLOW_RING_GET_BUFFERED_TIME  15u
 #define FLOW_RING_HP2P_TXQ_STRT      16u
 #define FLOW_RING_HP2P_TXQ_STOP      17u
+#define FLOW_RING_GET_TXPARAMS       18u
 
 /* bit 7, indicating if is TID(1) or AC(0) mapped info in tid field) */
 #define PCIEDEV_IS_AC_TID_MAP_MASK	0x80

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -91,7 +91,7 @@ static int kbase_context_submit_check(struct kbase_context *kctx)
 
 	base_context_create_flags const flags = kctx->create_flags;
 
-	mutex_lock(&js_kctx_info->ctx.jsctx_mutex);
+	rt_mutex_lock(&js_kctx_info->ctx.jsctx_mutex);
 	spin_lock_irqsave(&kctx->kbdev->hwaccess_lock, irq_flags);
 
 	/* Translate the flags */
@@ -99,7 +99,7 @@ static int kbase_context_submit_check(struct kbase_context *kctx)
 		kbase_ctx_flag_clear(kctx, KCTX_SUBMIT_DISABLED);
 
 	spin_unlock_irqrestore(&kctx->kbdev->hwaccess_lock, irq_flags);
-	mutex_unlock(&js_kctx_info->ctx.jsctx_mutex);
+	rt_mutex_unlock(&js_kctx_info->ctx.jsctx_mutex);
 
 	return 0;
 }
@@ -110,6 +110,11 @@ static void kbase_context_flush_jobs(struct kbase_context *kctx)
 	kthread_flush_worker(&kctx->kbdev->job_done_worker);
 }
 
+/**
+ * kbase_context_free - Free kcontext at its destruction
+ *
+ * @kctx: kcontext to be freed
+ */
 static void kbase_context_free(struct kbase_context *kctx)
 {
 	kbase_timeline_post_kbase_context_destroy(kctx);

@@ -27,6 +27,8 @@
 
 #define ALIX_DCHIP_ID_0			0x36	/* /< LSB chip ID for FTM5 */
 #define ALIX_DCHIP_ID_1			0x48	/* /< MSB chip ID for FTM5 */
+#define SALIXP_DCHIP_ID_0		0x36
+#define SALIXP_DCHIP_ID_1		0x40
 
 #ifdef ALIX
 #define DCHIP_ID_0		ALIX_DCHIP_ID_0	/* /< LSB chip ID for FTM5 */

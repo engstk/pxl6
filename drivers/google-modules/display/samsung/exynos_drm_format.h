@@ -78,4 +78,9 @@ struct dpu_fmt {
 
 const struct dpu_fmt *dpu_find_fmt_info(u32 fmt);
 
+static inline const char *dpu_get_fmt_name(const struct dpu_fmt *fmt)
+{
+	return (fmt && fmt->name) ? fmt->name : "Unknown";
+}
+
 #endif /* __EXYNOS_FORMAT_H__ */

@@ -1,7 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
+ * cal_9845/regs-hdr.h
+ *
  * Copyright (c) 2020 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
+ *
+ * Jaehoe Yang <jaehoe.yang@samsung.com>
+ * Jiun Yu <jiun.yu@samsung.com>
  *
  * Register definition file for Samsung HDR
  *
@@ -10,12 +15,12 @@
  * published by the Free Software Foundation.
  */
 
-#ifndef __HDR_REGS_H__
-#define __HDR_REGS_H__
+#ifndef _REGS_HDR_H
+#define _REGS_HDR_H
 
 /*
  *-------------------------------------------------------------------
- * HDR(L0~L5) SFR list
+ * DPP_HDR(L0~L5) SFR list
  * L0,L2,L4 : LSI_L_HDR
  * L1,L3,L5 : LSI_H_HDR - dynamic meta
  *
@@ -31,7 +36,6 @@
 #define HDR_SHD_OFFSET			(0x0800)
 
 #define HDR_LSI_VERSION			(0x0000)
-#define HDR_VERSION			(0x01010000)
 #define HDR_VERSION_GET(_v)		(((_v) >> 0) & 0xFFFFFFFF)
 
 #define HDR_LSI_L_COM_CTRL		(0x0004)
@@ -39,13 +43,13 @@
 
 #define HDR_LSI_L_MOD_CTRL		(0x0008)
 #define MOD_CTRL_TEN(_v)		((_v) << 5)	/* H only */
-#define MOD_CTRL_TEN_MASK		(1 << 5)
+#define MOD_CTRL_TEN_MASK		(0x1 << 5)
 #define MOD_CTRL_GEN(_v)		((_v) << 2)
-#define MOD_CTRL_GEN_MASK		(1 << 2)
+#define MOD_CTRL_GEN_MASK		(0x1 << 2)
 #define MOD_CTRL_EEN(_v)		((_v) << 1)
-#define MOD_CTRL_EEN_MASK		(1 << 1)
+#define MOD_CTRL_EEN_MASK		(0x1 << 1)
 #define MOD_CTRL_OEN(_v)		((_v) << 0)
-#define MOD_CTRL_OEN_MASK		(1 << 0)
+#define MOD_CTRL_OEN_MASK		(0x1 << 0)
 
 /*-----[ OETF : Inverse EOTF ]-------------------------------------------------
  * 32-segment transfer function, 16-bit >> 10-bit
@@ -162,4 +166,4 @@
 #define TM_POSY(_v)			((_v) << 0)
 #define TM_POSY_MASK			(0x7FFFFFF << 0)
 
-#endif /* __HDR_REGS_H__ */
+#endif /* _REGS_HDR_H */

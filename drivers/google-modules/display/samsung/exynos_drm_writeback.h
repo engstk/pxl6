@@ -96,7 +96,7 @@ static inline bool wb_check_job(const struct drm_connector_state *conn_state)
 
 int exynos_drm_atomic_check_writeback(struct drm_device *dev,
 		struct drm_atomic_state *state);
-void wb_dump(struct writeback_device *wb);
+void wb_dump(struct drm_printer *p, struct writeback_device *wb);
 
 void writeback_exit_hibernation(struct writeback_device *wb);
 void writeback_enter_hibernation(struct writeback_device *wb);

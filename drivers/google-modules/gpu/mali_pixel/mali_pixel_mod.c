@@ -8,6 +8,9 @@ MODULE_DESCRIPTION("Pixel platform integration for GPU");
 MODULE_AUTHOR("<sidaths@google.com>");
 MODULE_VERSION("1.0");
 MODULE_SOFTDEP("pre: pixel_stat_sysfs");
+MODULE_SOFTDEP("pre: slc_pmon");
+MODULE_SOFTDEP("pre: slc_dummy");
+MODULE_SOFTDEP("pre: slc_acpm");
 
 extern struct kobject *pixel_stat_kobj;
 

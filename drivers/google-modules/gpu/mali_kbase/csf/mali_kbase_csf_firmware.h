@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2018-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -23,7 +23,7 @@
 #define _KBASE_CSF_FIRMWARE_H_
 
 #include "device/mali_kbase_device.h"
-#include <uapi/gpu/arm/midgard/csf/mali_gpu_csf_registers.h>
+#include <csf/mali_kbase_csf_registers.h>
 
 /*
  * PAGE_KERNEL_RO was only defined on 32bit ARM in 4.19 in:
@@ -75,11 +75,8 @@
 #define MAX_SUPPORTED_CSGS 31
 /* GROUP_STREAM_NUM: At least 8 CSs per CSG, but no more than 32 */
 #define MIN_SUPPORTED_STREAMS_PER_GROUP 8
-/* Maximum CSs per csg. */
+/* MAX_SUPPORTED_STREAMS_PER_GROUP: Maximum CSs per csg. */
 #define MAX_SUPPORTED_STREAMS_PER_GROUP 32
-
-/* Waiting timeout for status change acknowledgment, in milliseconds */
-#define CSF_FIRMWARE_TIMEOUT_MS (3000) /* Relaxed to 3000ms from 800ms due to Android */
 
 struct kbase_device;
 
@@ -349,14 +346,14 @@ static inline void kbase_csf_ring_doorbell(struct kbase_device *kbdev,
 /**
  * kbase_csf_read_firmware_memory - Read a value in a GPU address
  *
+ * @kbdev:     Device pointer
+ * @gpu_addr:  GPU address to read
+ * @value:     output pointer to which the read value will be written.
+ *
  * This function read a value in a GPU address that belongs to
  * a private firmware memory region. The function assumes that the location
  * is not permanently mapped on the CPU address space, therefore it maps it
  * and then unmaps it to access it independently.
- *
- * @kbdev:     Device pointer
- * @gpu_addr:  GPU address to read
- * @value:     output pointer to which the read value will be written.
  */
 void kbase_csf_read_firmware_memory(struct kbase_device *kbdev,
 	u32 gpu_addr, u32 *value);
@@ -364,14 +361,14 @@ void kbase_csf_read_firmware_memory(struct kbase_device *kbdev,
 /**
  * kbase_csf_update_firmware_memory - Write a value in a GPU address
  *
+ * @kbdev:     Device pointer
+ * @gpu_addr:  GPU address to write
+ * @value:     Value to write
+ *
  * This function writes a given value in a GPU address that belongs to
  * a private firmware memory region. The function assumes that the destination
  * is not permanently mapped on the CPU address space, therefore it maps it
  * and then unmaps it to access it independently.
- *
- * @kbdev:     Device pointer
- * @gpu_addr:  GPU address to write
- * @value:     Value to write
  */
 void kbase_csf_update_firmware_memory(struct kbase_device *kbdev,
 	u32 gpu_addr, u32 value);
@@ -407,19 +404,19 @@ void kbase_csf_firmware_term(struct kbase_device *kbdev);
 /**
  * kbase_csf_firmware_ping - Send the ping request to firmware.
  *
- * The function sends the ping request to firmware.
- *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * The function sends the ping request to firmware.
  */
 void kbase_csf_firmware_ping(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_firmware_ping_wait - Send the ping request to firmware and waits.
  *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
  * The function sends the ping request to firmware and waits to confirm it is
  * alive.
- *
- * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  *
  * Return: 0 on success, or negative on failure.
  */
@@ -442,17 +439,35 @@ int kbase_csf_firmware_set_timeout(struct kbase_device *kbdev, u64 timeout);
 
 /**
  * kbase_csf_enter_protected_mode - Send the Global request to firmware to
- *                                  enter protected mode and wait for its
- *                                  completion.
+ *                                  enter protected mode.
  *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * The function must be called with kbdev->csf.scheduler.interrupt_lock held
+ * and it does not wait for the protected mode entry to complete.
  */
 void kbase_csf_enter_protected_mode(struct kbase_device *kbdev);
 
+/**
+ * kbase_csf_wait_protected_mode_enter - Wait for the completion of PROTM_ENTER
+ *                                       Global request sent to firmware.
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * This function needs to be called after kbase_csf_wait_protected_mode_enter()
+ * to wait for the protected mode entry to complete. GPU reset is triggered if
+ * the wait is unsuccessful.
+ */
+void kbase_csf_wait_protected_mode_enter(struct kbase_device *kbdev);
+
 static inline bool kbase_csf_firmware_mcu_halted(struct kbase_device *kbdev)
 {
+#if IS_ENABLED(CONFIG_MALI_NO_MALI)
+	return true;
+#else
 	return (kbase_reg_read(kbdev, GPU_CONTROL_REG(MCU_STATUS)) ==
 		MCU_STATUS_HALTED);
+#endif /* CONFIG_MALI_NO_MALI */
 }
 
 /**
@@ -470,24 +485,14 @@ void kbase_csf_firmware_trigger_mcu_halt(struct kbase_device *kbdev);
  *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  */
-static inline void kbase_csf_firmware_enable_mcu(struct kbase_device *kbdev)
-{
-	/* Trigger the boot of MCU firmware, Use the AUTO mode as
-	 * otherwise on fast reset, to exit protected mode, MCU will
-	 * not reboot by itself to enter normal mode.
-	 */
-	kbase_reg_write(kbdev, GPU_CONTROL_REG(MCU_CONTROL), MCU_CNTRL_AUTO);
-}
+void kbase_csf_firmware_enable_mcu(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_firmware_disable_mcu - Send the command to disable MCU
  *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  */
-static inline void kbase_csf_firmware_disable_mcu(struct kbase_device *kbdev)
-{
-	kbase_reg_write(kbdev, GPU_CONTROL_REG(MCU_CONTROL), MCU_CNTRL_DISABLE);
-}
+void kbase_csf_firmware_disable_mcu(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_firmware_disable_mcu_wait - Wait for the MCU to reach disabled
@@ -496,6 +501,26 @@ static inline void kbase_csf_firmware_disable_mcu(struct kbase_device *kbdev)
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  */
 void kbase_csf_firmware_disable_mcu_wait(struct kbase_device *kbdev);
+
+#ifdef KBASE_PM_RUNTIME
+/**
+ * kbase_csf_firmware_trigger_mcu_sleep - Send the command to put MCU in sleep
+ *                                        state.
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ */
+void kbase_csf_firmware_trigger_mcu_sleep(struct kbase_device *kbdev);
+
+/**
+ * kbase_csf_firmware_is_mcu_in_sleep - Check if sleep request has completed
+ *                                      and MCU has halted.
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * Return: true if sleep request has completed, otherwise false.
+ */
+bool kbase_csf_firmware_is_mcu_in_sleep(struct kbase_device *kbdev);
+#endif
 
 /**
  * kbase_trigger_firmware_reload - Trigger the reboot of MCU firmware, for the
@@ -529,9 +554,9 @@ void kbase_csf_firmware_global_reinit(struct kbase_device *kbdev,
  *                      requests, sent after the reboot of MCU firmware, have
  *                      completed or not.
  *
- * Return: true if the Global configuration requests completed otherwise false.
- *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * Return: true if the Global configuration requests completed otherwise false.
  */
 bool kbase_csf_firmware_global_reinit_complete(struct kbase_device *kbdev);
 
@@ -556,17 +581,16 @@ void kbase_csf_firmware_update_core_attr(struct kbase_device *kbdev,
  *                  request has completed or not, that was sent to update
  *                  the core attributes.
  *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
  * Return: true if the Global configuration request to update the core
  *         attributes has completed, otherwise false.
- *
- * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  */
 bool kbase_csf_firmware_core_attr_updated(struct kbase_device *kbdev);
 
 /**
- * Request the global control block of CSF interface capabilities
- *
- * Return: Total number of CSs, summed across all groups.
+ * kbase_csf_firmware_get_glb_iface - Request the global control block of CSF
+ *                                      interface capabilities
  *
  * @kbdev:                 Kbase device.
  * @group_data:            Pointer where to store all the group data
@@ -589,6 +613,8 @@ bool kbase_csf_firmware_core_attr_updated(struct kbase_device *kbdev);
  * @instr_features:        Instrumentation features. Bits 7:4 hold the max size
  *                         of events. Bits 3:0 hold the offset update rate.
  *                         (csf >= 1,1,0)
+ *
+ * Return: Total number of CSs, summed across all groups.
  */
 u32 kbase_csf_firmware_get_glb_iface(
 	struct kbase_device *kbdev, struct basep_cs_group_control *group_data,
@@ -597,20 +623,26 @@ u32 kbase_csf_firmware_get_glb_iface(
 	u32 *group_num, u32 *prfcnt_size, u32 *instr_features);
 
 /**
- * Get CSF firmware header timeline metadata content
- *
- * Return: The firmware timeline metadata content which match @p name.
+ * kbase_csf_firmware_get_timeline_metadata - Get CSF firmware header timeline
+ *                                            metadata content
  *
  * @kbdev:        Kbase device.
  * @name:         Name of the metadata which metadata content to be returned.
  * @size:         Metadata size if specified metadata found.
+ *
+ * Return: The firmware timeline metadata content which match @p name.
  */
 const char *kbase_csf_firmware_get_timeline_metadata(struct kbase_device *kbdev,
 	const char *name, size_t *size);
 
 /**
- * kbase_csf_firmware_mcu_shared_mapping_init -
- * Allocate and map MCU shared memory.
+ * kbase_csf_firmware_mcu_shared_mapping_init - Allocate and map MCU shared memory.
+ *
+ * @kbdev:              Kbase device the memory mapping shall belong to.
+ * @num_pages:          Number of memory pages to map.
+ * @cpu_map_properties: Either PROT_READ or PROT_WRITE.
+ * @gpu_map_properties: Either KBASE_REG_GPU_RD or KBASE_REG_GPU_WR.
+ * @csf_mapping:        Object where to write metadata for the memory mapping.
  *
  * This helper function allocates memory and maps it on both the CPU
  * and the GPU address spaces. Most of the properties of the mapping
@@ -622,12 +654,6 @@ const char *kbase_csf_firmware_get_timeline_metadata(struct kbase_device *kbdev,
  * will be ignored by the function.
  *
  * Return: 0 if success, or an error code on failure.
- *
- * @kbdev:              Kbase device the memory mapping shall belong to.
- * @num_pages:          Number of memory pages to map.
- * @cpu_map_properties: Either PROT_READ or PROT_WRITE.
- * @gpu_map_properties: Either KBASE_REG_GPU_RD or KBASE_REG_GPU_WR.
- * @csf_mapping:        Object where to write metadata for the memory mapping.
  */
 int kbase_csf_firmware_mcu_shared_mapping_init(
 		struct kbase_device *kbdev,
@@ -644,35 +670,6 @@ int kbase_csf_firmware_mcu_shared_mapping_init(
  */
 void kbase_csf_firmware_mcu_shared_mapping_term(
 		struct kbase_device *kbdev, struct kbase_csf_mapping *csf_mapping);
-
-#ifndef MALI_KBASE_BUILD
-/**
- * mali_kutf_process_fw_utf_entry() - Process the "Firmware UTF tests" section
- *
- * Read "Firmware UTF tests" section from the firmware image and create
- * necessary kutf app+suite+tests.
- *
- * Return: 0 if successful, negative error code on failure. In both cases
- * caller will have to invoke mali_kutf_fw_utf_entry_cleanup for the cleanup
- *
- * @kbdev: Kbase device structure
- * @fw_data: Pointer to the start of firmware binary image loaded from disk
- * @fw_size: Size (in bytes) of the firmware image
- * @entry: Pointer to the start of the section
- */
-int mali_kutf_process_fw_utf_entry(struct kbase_device *kbdev,
-	const void *fw_data, size_t fw_size, const u32 *entry);
-
-/**
- * mali_kutf_fw_utf_entry_cleanup() - Remove the Fw UTF tests debugfs entries
- *
- * Destroy the kutf apps+suites+tests created on parsing "Firmware UTF tests"
- * section from the firmware image.
- *
- * @kbdev: Kbase device structure
- */
-void mali_kutf_fw_utf_entry_cleanup(struct kbase_device *kbdev);
-#endif
 
 #ifdef CONFIG_MALI_DEBUG
 extern bool fw_debug;
@@ -691,11 +688,11 @@ static inline long kbase_csf_timeout_in_jiffies(const unsigned int msecs)
  * kbase_csf_firmware_enable_gpu_idle_timer() - Activate the idle hysteresis
  *                                              monitoring operation
  *
+ * @kbdev: Kbase device structure
+ *
  * Program the firmware interface with its configured hysteresis count value
  * and enable the firmware to act on it. The Caller is
  * assumed to hold the kbdev->csf.scheduler.interrupt_lock.
- *
- * @kbdev: Kbase device structure
  */
 void kbase_csf_firmware_enable_gpu_idle_timer(struct kbase_device *kbdev);
 
@@ -703,10 +700,10 @@ void kbase_csf_firmware_enable_gpu_idle_timer(struct kbase_device *kbdev);
  * kbase_csf_firmware_disable_gpu_idle_timer() - Disable the idle time
  *                                             hysteresis monitoring operation
  *
+ * @kbdev: Kbase device structure
+ *
  * Program the firmware interface to disable the idle hysteresis timer. The
  * Caller is assumed to hold the kbdev->csf.scheduler.interrupt_lock.
- *
- * @kbdev: Kbase device structure
  */
 void kbase_csf_firmware_disable_gpu_idle_timer(struct kbase_device *kbdev);
 
@@ -780,7 +777,7 @@ u32 kbase_csf_firmware_set_mcu_core_pwroff_time(struct kbase_device *kbdev, u32 
 /**
  * kbase_csf_interface_version - Helper function to build the full firmware
  *                               interface version in a format compatible with
- *                               with GLB_VERSION register
+ *                               GLB_VERSION register
  *
  * @major:     major version of csf interface
  * @minor:     minor version of csf interface

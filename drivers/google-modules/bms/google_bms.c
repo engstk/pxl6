@@ -51,7 +51,7 @@ static const char *psy_chgt_str[] = {
 	[POWER_SUPPLY_CHARGE_TYPE_ADAPTIVE]	= "Adaptive",
 	[POWER_SUPPLY_CHARGE_TYPE_CUSTOM]	= "Custom",
 	[POWER_SUPPLY_CHARGE_TYPE_LONGLIFE]	= "Long Life",
-	[POWER_SUPPLY_CHARGE_TYPE_TAPER_EXT]	= "Taper",
+	[POWER_SUPPLY_CHARGE_TYPE_TAPER]	= "Taper",
 };
 
 const char *gbms_chg_type_s(int cgh_type)
@@ -121,7 +121,7 @@ void gbms_init_chg_table(struct gbms_chg_profile *profile,
 				ccm = DIV_ROUND_CLOSEST(ccm, fv_uv_step)
 					* fv_uv_step;
 
-			GBMS_CCCM_LIMITS(profile, ti, vi) = ccm;
+			GBMS_CCCM_LIMITS_SET(profile, ti, vi) = ccm;
 		}
 	}
 }
@@ -201,10 +201,13 @@ static int gbms_read_cccm_limits(struct gbms_chg_profile *profile,
 	return 0;
 }
 
-static int gbms_read_aacr_limits(struct gbms_chg_profile *profile,
-				  struct device_node *node)
+int gbms_read_aacr_limits(struct gbms_chg_profile *profile,
+			  struct device_node *node)
 {
 	int ret = 0, cycle_nb_limits = 0, fade10_nb_limits = 0;
+
+	if (!profile || !node)
+		return -ENODEV;
 
 	ret = of_property_count_elems_of_size(node,
 					      "google,aacr-ref-cycles", sizeof(u32));
@@ -247,6 +250,7 @@ no_data:
 	profile->aacr_nb_limits = 0;
 	return ret;
 }
+EXPORT_SYMBOL_GPL(gbms_read_aacr_limits);
 
 /* return the pct amount of capacity fade at cycles or negative if not enabled */
 int gbms_aacr_fade10(const struct gbms_chg_profile *profile, int cycles)
@@ -285,11 +289,6 @@ int gbms_init_chg_profile_internal(struct gbms_chg_profile *profile,
 	ret = gbms_read_cccm_limits(profile, node);
 	if (ret < 0)
 		return ret;
-
-	/* TODO: dump the AACR table if supported */
-	ret = gbms_read_aacr_limits(profile, node);
-	if (ret == 0)
-		gbms_info(profile, "AACR: supported\n");
 
 	cccm_array_size = (profile->temp_nb_limits - 1)
 			  * profile->volt_nb_limits;
@@ -485,7 +484,7 @@ uint8_t gbms_gen_chg_flags(int chg_status, int chg_type)
 	}
 	if (chg_type == POWER_SUPPLY_CHARGE_TYPE_FAST)
 		flags |= GBMS_CS_FLAG_CC;
-	if (chg_type == POWER_SUPPLY_CHARGE_TYPE_TAPER_EXT)
+	if (chg_type == POWER_SUPPLY_CHARGE_TYPE_TAPER)
 		flags |= GBMS_CS_FLAG_CV;
 
 	return flags;
@@ -531,6 +530,8 @@ int gbms_read_charger_state(union gbms_charger_state *chg_state,
 				  &ret);
 	if (ret == 0) {
 		chg_state->v = val;
+	} else if (ret == -EAGAIN) {
+		return ret;
 	} else {
 		int ichg;
 
@@ -593,19 +594,6 @@ int gbms_cycle_count_sscan_bc(u16 *ccount, int bcnt, const char *buff)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(gbms_cycle_count_sscan_bc);
-
-/* ------------------------------------------------------------------------- */
-
-bool gbms_temp_defend_dry_run(bool update, bool dry_run)
-{
-	static bool is_dry_run;
-
-	if (update)
-		is_dry_run = dry_run;
-
-	return is_dry_run;
-}
-EXPORT_SYMBOL_GPL(gbms_temp_defend_dry_run);
 
 /* ------------------------------------------------------------------------- */
 
@@ -676,3 +664,27 @@ int gbms_get_property(struct power_supply *psy, enum gbms_property psp,
 }
 EXPORT_SYMBOL_GPL(gbms_get_property);
 
+void gbms_logbuffer_prlog(struct logbuffer *log, int level, int debug_no_logbuffer,
+			  int debug_printk_prlog, const char *f, ...)
+{
+	va_list args;
+
+	va_start(args, f);
+
+	if (!debug_no_logbuffer)
+		logbuffer_vlog(log, f, args);
+
+	if (level <= debug_printk_prlog)
+		vprintk(f, args);
+
+	va_end(args);
+}
+EXPORT_SYMBOL_GPL(gbms_logbuffer_prlog);
+
+bool chg_state_is_disconnected(const union gbms_charger_state *chg_state)
+{
+	return ((chg_state->f.flags & GBMS_CS_FLAG_BUCK_EN) == 0) &&
+	       (chg_state->f.chg_status == POWER_SUPPLY_STATUS_DISCHARGING ||
+	       chg_state->f.chg_status == POWER_SUPPLY_STATUS_UNKNOWN);
+}
+EXPORT_SYMBOL_GPL(chg_state_is_disconnected);

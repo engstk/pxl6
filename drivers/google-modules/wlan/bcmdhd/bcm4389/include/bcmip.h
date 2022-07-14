@@ -1,7 +1,7 @@
 /*
  * Fundamental constants relating to IP Protocol
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -274,6 +274,7 @@ ipv6_exthdr_len_check(uint8 *h, uint16 plen, uint8 *proto)
 	}
 	return len;
 }
+
 #define IPV4_ISMULTI(a) (((a) & 0xf0000000) == 0xe0000000)
 
 #define IPV4_MCAST_TO_ETHER_MCAST(ipv4, ether) \

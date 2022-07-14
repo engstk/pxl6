@@ -25,12 +25,25 @@ enum exynos_hbm_mode {
 	HBM_STATE_MAX
 };
 
+enum exynos_mipi_sync_mode {
+	MIPI_CMD_SYNC_REFRESH_RATE = BIT(0),
+	MIPI_CMD_SYNC_LHBM = BIT(1),
+	MIPI_CMD_SYNC_GHBM = BIT(2),
+	MIPI_CMD_SYNC_BL = BIT(3),
+};
+
 struct exynos_drm_connector;
 
 /** Private DSI msg flags **/
 
 /* packetgo feature to batch msgs can wait for vblank, use this flag to ignore */
 #define EXYNOS_DSI_MSG_IGNORE_VBLANK  BIT(14)
+/* Mark the start of mipi commands transaction. Following commands should not be
+ * sent to panel until see a EXYNOS_DSI_MSG_FORCE_FLUSH flag
+ */
+#define EXYNOS_DSI_MSG_FORCE_BATCH BIT(13)
+/* Mark the end of mipi commands transaction */
+#define EXYNOS_DSI_MSG_FORCE_FLUSH  BIT(12)
 
 struct exynos_drm_connector_properties {
 	struct drm_property *max_luminance;
@@ -44,7 +57,9 @@ struct exynos_drm_connector_properties {
 	struct drm_property *brightness_capability;
 	struct drm_property *brightness_level;
 	struct drm_property *is_partial;
-	struct drm_property *sync_rr_switch;
+	struct drm_property *panel_idle_support;
+	struct drm_property *mipi_sync;
+	struct drm_property *panel_orientation;
 };
 
 struct exynos_display_dsc {
@@ -54,6 +69,8 @@ struct exynos_display_dsc {
 	unsigned int slice_height;
 
 	const struct drm_dsc_config *cfg;
+
+	unsigned int delay_reg_init_us;
 };
 
 struct exynos_display_partial {
@@ -79,8 +96,11 @@ struct exynos_display_mode {
 	/* @mode_flags: DSI mode flags from drm_mipi_dsi.h */
 	unsigned long mode_flags;
 
-	/* @vblank_usec: command mode: TE pulse time, video mode: vbp+vfp time */
+	/* @vblank_usec: parameter to calculate bts */
 	unsigned int vblank_usec;
+
+	/* @te_usec: command mode: TE pulse time */
+	unsigned int te_usec;
 
 	/* @bpc: display bits per component */
 	unsigned int bpc;
@@ -147,10 +167,16 @@ struct exynos_drm_connector_state {
 	struct exynos_display_partial partial;
 
 	/*
-	 * @sync_rr_switch: Indicating if the refresh rate switch command and the
-	 *		    frame scanout should happen in the same vsync period.
+	 * @mipi_sync: Indicating if the mipi command in current drm commit should be
+	 *	       sent in the same vsync period as the frame.
 	 */
-	bool sync_rr_switch;
+	unsigned long mipi_sync;
+
+	/*
+	 * @panel_idle_support: Indicating display support panel idle mode. Panel can
+	 *			go into idle after some idle period.
+	 */
+	bool panel_idle_support;
 };
 
 #define to_exynos_connector_state(connector_state) \
@@ -170,6 +196,17 @@ struct exynos_drm_connector_funcs {
 };
 
 struct exynos_drm_connector_helper_funcs {
+	/*
+	 * @atomic_pre_commit: Update connector states before planes commit.
+	 *                     Usually for mipi commands and frame content synchronization.
+	 */
+	void (*atomic_pre_commit)(struct exynos_drm_connector *exynos_connector,
+				  struct exynos_drm_connector_state *exynos_old_state,
+				  struct exynos_drm_connector_state *exynos_new_state);
+
+	/*
+	 * @atomic_commit: Update connector states after planes commit.
+	 */
 	void (*atomic_commit)(struct exynos_drm_connector *exynos_connector,
 			      struct exynos_drm_connector_state *exynos_old_state,
 			      struct exynos_drm_connector_state *exynos_new_state);

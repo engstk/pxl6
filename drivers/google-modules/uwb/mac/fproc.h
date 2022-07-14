@@ -43,11 +43,13 @@ struct mcps802154_fproc_state {
 	void (*rx_frame)(struct mcps802154_local *local);
 	/** @rx_timeout: Handle reception timeout. */
 	void (*rx_timeout)(struct mcps802154_local *local);
+	void (*rx_too_late)(struct mcps802154_local *local);
 	/** @rx_error: Handle reception error. */
 	void (*rx_error)(struct mcps802154_local *local,
 			 enum mcps802154_rx_error_type error);
 	/** @tx_done: Handle end of transmission. */
 	void (*tx_done)(struct mcps802154_local *local);
+	void (*tx_too_late)(struct mcps802154_local *local);
 	/** @broken: Handle unrecoverable error. */
 	void (*broken)(struct mcps802154_local *local);
 	/** @timer_expired: Handle timer expiration, ignored if NULL. */
@@ -108,9 +110,9 @@ void mcps802154_fproc_access_now(struct mcps802154_local *local);
 /**
  * mcps802154_fproc_access_done() - Done with the access, release it.
  * @local: MCPS private data.
- * @error: Internal error code.
+ * @error: True when an error happens during the access.
  */
-void mcps802154_fproc_access_done(struct mcps802154_local *local, int error);
+void mcps802154_fproc_access_done(struct mcps802154_local *local, bool error);
 
 /**
  * mcps802154_fproc_access_reset() - Reset an access when things go wrong.

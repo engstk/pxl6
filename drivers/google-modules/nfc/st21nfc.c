@@ -39,7 +39,7 @@
 #define WAKEUP_SRC_TIMEOUT		(2000)
 #define EXYNOS_CLK_MASK		0x01
 
-#define DRIVER_VERSION "2.0.18"
+#define DRIVER_VERSION "2.0.19"
 
 #define PROP_PWR_MON_RW_ON_NTF nci_opcode_pack(NCI_GID_PROPRIETARY, 5)
 #define PROP_PWR_MON_RW_OFF_NTF nci_opcode_pack(NCI_GID_PROPRIETARY, 6)
@@ -109,7 +109,6 @@ struct st21nfc_device {
 	enum st21nfc_power_state pw_current;
 	enum st21nfc_read_state r_state_current;
 	int irq_pw_stats_idle;
-	int p_idle_last;
 	struct nfc_sub_power_stats pw_states[ST21NFC_POWER_STATE_MAX];
 	struct nfc_sub_power_stats_error pw_states_err;
 	struct workqueue_struct *st_p_wq;
@@ -354,18 +353,12 @@ static void st21nfc_power_stats_switch(
 static void st21nfc_power_stats_idle_signal(struct st21nfc_device *st21nfc_dev)
 {
 	uint64_t current_time_ms = ktime_to_ms(ktime_get_boottime());
-	int value = gpiod_get_value(st21nfc_dev->gpiod_pidle);
+	bool is_active = (bool) gpiod_get_value(st21nfc_dev->gpiod_pidle);
+	is_active = st21nfc_dev->pidle_active_low ? !is_active : is_active;
 
-	if (st21nfc_dev->pidle_active_low)
-		value = !value;
-
-	if (value != 0) {
-		st21nfc_power_stats_switch(st21nfc_dev, current_time_ms,
-			st21nfc_dev->pw_current, ST21NFC_ACTIVE, false);
-	} else {
-		st21nfc_power_stats_switch(st21nfc_dev, current_time_ms,
-			st21nfc_dev->pw_current, ST21NFC_IDLE, false);
-	}
+	st21nfc_power_stats_switch(st21nfc_dev, current_time_ms,
+		st21nfc_dev->pw_current, is_active ? ST21NFC_ACTIVE : ST21NFC_IDLE,
+		false);
 }
 
 static void st21nfc_pstate_wq(struct work_struct *work)
@@ -1133,11 +1126,6 @@ static int st21nfc_suspend(struct device *device)
 			st21nfc_dev->irq_wake_up = true;
 	}
 
-	if (!IS_ERR(st21nfc_dev->gpiod_pidle)) {
-		st21nfc_dev->p_idle_last =
-			gpiod_get_value(st21nfc_dev->gpiod_pidle);
-	}
-
 	return 0;
 }
 
@@ -1145,7 +1133,6 @@ static int st21nfc_resume(struct device *device)
 {
 	struct i2c_client *client = to_i2c_client(device);
 	struct st21nfc_device *st21nfc_dev = i2c_get_clientdata(client);
-	int pidle;
 
 	if (device_may_wakeup(&client->dev) && st21nfc_dev->irq_wake_up) {
 		if (!disable_irq_wake(client->irq))
@@ -1153,10 +1140,10 @@ static int st21nfc_resume(struct device *device)
 	}
 
 	if (!IS_ERR(st21nfc_dev->gpiod_pidle)) {
-		pidle = gpiod_get_value(st21nfc_dev->gpiod_pidle);
-		if((st21nfc_dev->p_idle_last != pidle) ||
-		   (st21nfc_dev->pw_current == ST21NFC_IDLE && pidle != 0) ||
-		   (st21nfc_dev->pw_current == ST21NFC_ACTIVE && pidle == 0)) {
+		bool is_active = (bool) gpiod_get_value(st21nfc_dev->gpiod_pidle);
+		is_active = st21nfc_dev->pidle_active_low ? !is_active : is_active;
+		if((st21nfc_dev->pw_current == ST21NFC_IDLE && is_active) ||
+		   (st21nfc_dev->pw_current == ST21NFC_ACTIVE && !is_active)) {
 			queue_work(st21nfc_dev->st_p_wq,
 				   &(st21nfc_dev->st_p_work));
 		}

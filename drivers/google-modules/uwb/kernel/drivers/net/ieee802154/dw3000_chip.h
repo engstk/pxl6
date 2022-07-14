@@ -33,12 +33,17 @@ struct dw3000;
  * @DW3000_CHIPREG_RO: register is always read-only
  * @DW3000_CHIPREG_WP: register is write-protected. write refused if device is
  *  already active.
+ * @DW3000_CHIPREG_PERM: register have a permanent access: chip off or on.
+ *  This will be usefull for some virtual registers wired on callbacks
+ * @DW3000_CHIPREG_OPENONCE: allow only one file instance at a time
  */
 enum dw3000_chip_register_flags {
 	DW3000_CHIPREG_NONE = 0,
 	DW3000_CHIPREG_DUMP = 1,
 	DW3000_CHIPREG_RO = 2,
 	DW3000_CHIPREG_WP = 4,
+	DW3000_CHIPREG_PERM = 8,
+	DW3000_CHIPREG_OPENONCE = 16,
 };
 
 /**
@@ -47,6 +52,7 @@ enum dw3000_chip_register_flags {
  * @write: true when called for a write operation
  * @buffer: input or output buffer, depending on write parameter
  * @size: size of input buffer or available space of output buffer
+ * @ppos: the callback handle the ppos to be blocking or not
  *
  * All functions of this type will parse input buffer and do the relevant
  * action according given parameters when write is true.
@@ -58,7 +64,7 @@ enum dw3000_chip_register_flags {
  * Returns: length read from buffer or written to buffer or negative error
  */
 typedef int (*dw3000_chip_register_cb)(struct file *filp, bool write,
-				       void *buffer, size_t size);
+				       void *buffer, size_t size, loff_t *ppos);
 
 /**
  * struct dw3000_chip_register - version dependent register declaration
@@ -98,6 +104,7 @@ struct dw3000_chip_register_priv {
  * @init: initialisation
  * @coex_init: initialise WiFi coexistence GPIO
  * @coex_gpio: change state of WiFi coexistence GPIO
+ * @check_tx_ok: Check device has correctly entered tx state
  * @prog_ldo_and_bias_tune: programs the device's LDO and BIAS tuning
  * @get_config_mrxlut_chan: Lookup table default values for channel provided or NULL
  * @get_dgc_dec: Read DGC_DBG register
@@ -106,6 +113,9 @@ struct dw3000_chip_register_priv {
  * @pll_calibration_from_scratch: Workaround to calibrate the PLL from scratch
  * @pll_coarse_code: Workaround to set PLL coarse code
  * @prog_pll_coarse_code: Program PLL coarse code from OTP
+ * @set_mrxlut: configure mrxlut
+ * @kick_ops_table_on_wakeup: kick the desired operating parameter set table
+ * @kick_dgc_on_wakeup: kick the DGC upon wakeup from sleep
  * @get_registers: Return known registers table and it's size
  */
 struct dw3000_chip_ops {
@@ -113,6 +123,7 @@ struct dw3000_chip_ops {
 	int (*init)(struct dw3000 *dw);
 	int (*coex_init)(struct dw3000 *dw);
 	int (*coex_gpio)(struct dw3000 *dw, bool state, int delay_us);
+	int (*check_tx_ok)(struct dw3000 *dw);
 	int (*prog_ldo_and_bias_tune)(struct dw3000 *dw);
 	const u32 *(*get_config_mrxlut_chan)(struct dw3000 *dw, u8 channel);
 	int (*get_dgc_dec)(struct dw3000 *dw, u8 *value);
@@ -121,6 +132,9 @@ struct dw3000_chip_ops {
 	int (*pll_calibration_from_scratch)(struct dw3000 *dw);
 	int (*pll_coarse_code)(struct dw3000 *dw);
 	int (*prog_pll_coarse_code)(struct dw3000 *dw);
+	int (*set_mrxlut)(struct dw3000 *dw, const u32 *lut);
+	int (*kick_ops_table_on_wakeup)(struct dw3000 *dw);
+	int (*kick_dgc_on_wakeup)(struct dw3000 *dw);
 	const struct dw3000_chip_register *(*get_registers)(struct dw3000 *dw,
 							    size_t *count);
 };

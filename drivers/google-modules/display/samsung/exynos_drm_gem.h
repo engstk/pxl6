@@ -47,6 +47,7 @@ exynos_drm_gem_prime_import_sg_table(struct drm_device *dev,
 struct drm_gem_object *exynos_drm_gem_prime_import(struct drm_device *dev,
 						   struct dma_buf *dma_buf);
 void *exynos_drm_gem_get_vaddr(struct exynos_drm_gem *exynos_gem_obj);
+struct drm_gem_object *exynos_drm_gem_fd_to_obj(struct drm_device *dev, int val);
 
 #define to_exynos_gem(x)    container_of(x, struct exynos_drm_gem, base)
 

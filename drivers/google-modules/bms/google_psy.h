@@ -43,7 +43,7 @@ static inline int gpsy_set_prop(struct power_supply *psy,
 }
 
 #define GPSY_SET_PROP(psy, psp, val) \
-	gpsy_set_prop(psy, psp, (union power_supply_propval) \
+	gpsy_set_prop(psy, (enum power_supply_property)(psp), (union power_supply_propval) \
 		{ .intval = (val) }, #psp)
 
 static inline int gpsy_get_prop(struct power_supply *psy,
@@ -69,8 +69,10 @@ static inline int gpsy_get_prop(struct power_supply *psy,
 	return val.intval;
 }
 
-#define GPSY_GET_PROP(psy, psp) gpsy_get_prop(psy, psp, #psp, 0)
+#define GPSY_GET_PROP(psy, psp) \
+		gpsy_get_prop(psy, (enum power_supply_property)(psp), #psp, 0)
 /* use GPSY_GET_INT_PROP() for properties that can be negative */
-#define GPSY_GET_INT_PROP(psy, psp, err) gpsy_get_prop(psy, psp, #psp, err)
+#define GPSY_GET_INT_PROP(psy, psp, err) \
+		gpsy_get_prop(psy, (enum power_supply_property)(psp), #psp, err)
 
 #endif	/* __GOOGLE_PSY_H_ */

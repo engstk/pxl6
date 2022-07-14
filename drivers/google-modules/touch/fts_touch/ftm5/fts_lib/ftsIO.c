@@ -591,7 +591,7 @@ int fts_writeU8UX(struct fts_ts_info *info, u8 cmd, AddrSize addrSize,
 			toWrite = remaining;
 
 		finalCmd[0] = cmd;
-		dev_dbg(info->dev, "%s: addrSize = %d, address = %X\n",
+		dev_dbg(info->dev, "%s: addrSize = %d, address = %llX\n",
 			__func__, addrSize, address);
 
 		p = (u8 *)&address + addrSize - 1;
@@ -659,7 +659,7 @@ int fts_writeReadU8UX(struct fts_ts_info *info, u8 cmd, AddrSize addrSize,
 			toRead = remaining;
 
 		finalCmd[0] = cmd;
-		dev_dbg(info->dev, "%s: addrSize = %d, address = %X\n",
+		dev_dbg(info->dev, "%s: addrSize = %d, address = %llX\n",
 			__func__, addrSize, address);
 
 		p = (u8 *)&address + addrSize - 1;

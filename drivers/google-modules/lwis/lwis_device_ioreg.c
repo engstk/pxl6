@@ -18,11 +18,13 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <uapi/linux/sched/types.h>
 
 #include "lwis_init.h"
 #include "lwis_interrupt.h"
 #include "lwis_ioreg.h"
 #include "lwis_periodic_io.h"
+#include "lwis_util.h"
 
 #ifdef CONFIG_OF
 #include "lwis_dt.h"
@@ -111,7 +113,7 @@ static int lwis_ioreg_device_probe(struct platform_device *plat_dev)
 	ioreg_dev->base_dev.subscribe_ops = ioreg_subscribe_ops;
 
 	/* Call the base device probe function */
-	ret = lwis_base_probe((struct lwis_device *)ioreg_dev, plat_dev);
+	ret = lwis_base_probe(&ioreg_dev->base_dev, plat_dev);
 	if (ret) {
 		pr_err("Error in lwis base probe\n");
 		goto error_probe;
@@ -121,8 +123,42 @@ static int lwis_ioreg_device_probe(struct platform_device *plat_dev)
 	ret = lwis_ioreg_device_setup(ioreg_dev);
 	if (ret) {
 		dev_err(ioreg_dev->base_dev.dev, "Error in IOREG device initialization\n");
-		lwis_base_unprobe((struct lwis_device *)ioreg_dev);
+		lwis_base_unprobe(&ioreg_dev->base_dev);
 		goto error_probe;
+	}
+
+	/* Create associated kworker threads */
+	ret = lwis_create_kthread_workers(&ioreg_dev->base_dev, "lwis_ioreg_trans_kthread",
+					 "lwis_ioreg_prd_io_kthread");
+	if (ret) {
+		dev_err(ioreg_dev->base_dev.dev, "Failed to create lwis_ioreg_kthread");
+		lwis_base_unprobe(&ioreg_dev->base_dev);
+		goto error_probe;
+	}
+
+	if (ioreg_dev->base_dev.transaction_thread_priority != 0) {
+		ret = lwis_set_kthread_priority(&ioreg_dev->base_dev,
+			ioreg_dev->base_dev.transaction_worker_thread,
+			ioreg_dev->base_dev.transaction_thread_priority);
+		if (ret) {
+			dev_err(ioreg_dev->base_dev.dev,
+				"Failed to set LWIS IOREG transaction kthread priority (%d)",
+				ret);
+			lwis_base_unprobe(&ioreg_dev->base_dev);
+			goto error_probe;
+		}
+	}
+	if (ioreg_dev->base_dev.periodic_io_thread_priority != 0) {
+		ret = lwis_set_kthread_priority(&ioreg_dev->base_dev,
+			ioreg_dev->base_dev.periodic_io_worker_thread,
+			ioreg_dev->base_dev.periodic_io_thread_priority);
+		if (ret) {
+			dev_err(ioreg_dev->base_dev.dev,
+				"Failed to set LWIS IOREG periodic io kthread priority (%d)",
+				ret);
+			lwis_base_unprobe(&ioreg_dev->base_dev);
+			goto error_probe;
+		}
 	}
 
 	dev_info(ioreg_dev->base_dev.dev, "IOREG Device Probe: Success\n");

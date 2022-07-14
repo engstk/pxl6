@@ -65,18 +65,7 @@ int lwis_dpm_update_qos(struct lwis_device *lwis_dev, struct lwis_qos_setting *q
 	switch (qos_setting->clock_family) {
 	case CLOCK_FAMILY_MIF:
 	case CLOCK_FAMILY_INT:
-		read_bw = qos_setting->read_bw;
-		write_bw = qos_setting->write_bw;
-		peak_bw = (qos_setting->peak_bw > 0) ?
-				  qos_setting->peak_bw :
-					((read_bw > write_bw) ? read_bw : write_bw) / 4;
-		rt_bw = (qos_setting->rt_bw > 0) ? qos_setting->rt_bw : 0;
-		ret = lwis_platform_update_bts(target_dev, peak_bw, read_bw, write_bw, rt_bw);
-		if (ret < 0) {
-			dev_err(lwis_dev->dev, "Failed to update bandwidth to bts, ret: %d\n", ret);
-			break;
-		}
-		if (qos_setting->frequency_hz >= 0 && lwis_dev->id == target_dev->id) {
+		if (qos_setting->frequency_hz >= 0 && target_dev->type == DEVICE_TYPE_DPM) {
 			/* vote to qos if frequency is specified. The vote only available for dpm
 			 * device
 			 */
@@ -87,6 +76,17 @@ int lwis_dpm_update_qos(struct lwis_device *lwis_dev, struct lwis_qos_setting *q
 				dev_err(lwis_dev->dev,
 					"Failed to vote to qos for clock family %d\n",
 					qos_setting->clock_family);
+			}
+		} else {
+			read_bw = qos_setting->read_bw;
+			write_bw = qos_setting->write_bw;
+			peak_bw = (qos_setting->peak_bw > 0) ?
+						qos_setting->peak_bw :
+						((read_bw > write_bw) ? read_bw : write_bw) / 4;
+			rt_bw = (qos_setting->rt_bw > 0) ? qos_setting->rt_bw : 0;
+			ret = lwis_platform_update_bts(target_dev, peak_bw, read_bw, write_bw, rt_bw);
+			if (ret < 0) {
+				dev_err(lwis_dev->dev, "Failed to update bandwidth to bts, ret: %d\n", ret);
 			}
 		}
 		break;
@@ -127,7 +127,7 @@ int lwis_dpm_update_clock(struct lwis_device *lwis_dev, struct lwis_clk_setting 
 
 	for (i = 0; i < num_settings; ++i) {
 		clk_index = clk_settings[i].clk_index;
-		if (clk_index >= lwis_dev->clocks->count) {
+		if (clk_index < 0 || clk_index >= lwis_dev->clocks->count) {
 			dev_err(lwis_dev->dev, "%s clk index %d is invalid\n", lwis_dev->name,
 				clk_index);
 			ret = -EINVAL;
@@ -156,7 +156,6 @@ int lwis_dpm_update_clock(struct lwis_device *lwis_dev, struct lwis_clk_setting 
 			 clk_get_rate(lwis_dev->clocks->clk[clk_index].clk));
 	}
 out:
-	kfree(clk_settings);
 	return ret;
 }
 

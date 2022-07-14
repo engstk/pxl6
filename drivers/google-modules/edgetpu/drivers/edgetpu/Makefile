@@ -16,7 +16,8 @@ endif
 edgetpu-objs	:= edgetpu-async.o edgetpu-dmabuf.o edgetpu-iremap-pool.o \
 		   edgetpu-kci.o edgetpu-mailbox.o edgetpu-mapping.o \
 		   edgetpu-sw-watchdog.o edgetpu-telemetry.o \
-		   edgetpu-firmware-util.o edgetpu-firmware.o
+		   edgetpu-firmware-util.o edgetpu-firmware.o \
+		   edgetpu-domain-pool.o
 
 abrolhos-objs	:= abrolhos-core.o abrolhos-debug-dump.o \
 		   abrolhos-device-group.o abrolhos-device.o \

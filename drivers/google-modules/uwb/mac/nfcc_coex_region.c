@@ -30,7 +30,6 @@
 
 #include <net/mcps802154_schedule.h>
 #include "net/nfcc_coex_region_nl.h"
-#include "mcps802154_i.h"
 
 #include "nfcc_coex_region.h"
 #include "nfcc_coex_region_call.h"
@@ -102,25 +101,43 @@ static int nfcc_coex_get_demand(struct mcps802154_region *region,
 	const struct mcps802154_region_demand *rd = &session->region_demand;
 
 	trace_region_nfcc_coex_get_demand(local, next_timestamp_dtu, rd);
-	if (session->started) {
-		if (session->first_access) {
-			/* region_demand have never been set.
-			 * Duration is set at 12ms, value catched during test. */
-			demand->timestamp_dtu = next_timestamp_dtu;
-			demand->duration_dtu = 187200;
-		} else if (is_before_dtu(rd->timestamp_dtu,
-					 next_timestamp_dtu)) {
-			/* Date is late. */
-			int shift = next_timestamp_dtu - rd->timestamp_dtu;
-			int duration = rd->duration_dtu - shift;
-			demand->timestamp_dtu = next_timestamp_dtu;
-			demand->duration_dtu = duration > 0 ? duration : 1;
-		} else {
-			memcpy(demand, rd, sizeof(*demand));
-		}
-		return 1;
+	if (!session->started)
+		return 0;
+
+	if (is_before_dtu(rd->timestamp_dtu, next_timestamp_dtu)) {
+		/* Date is late. */
+		int shift_dtu = next_timestamp_dtu - rd->timestamp_dtu;
+		int new_duration_dtu = rd->max_duration_dtu - shift_dtu;
+
+		new_duration_dtu =
+			new_duration_dtu <= 0 ? 1 : new_duration_dtu;
+		/* Keep 'rd' unchanged, because the update will be done
+		 * during the get_access.
+		 * See nfcc_coex_session_update function. */
+		demand->timestamp_dtu = next_timestamp_dtu;
+		demand->max_duration_dtu = new_duration_dtu;
+	} else if (!rd->max_duration_dtu) {
+		/* Infinite duration will lock the region
+		 * interleaving.
+		 * Duration value can be 0 when the region is started
+		 * when an another region have been started.
+		 * In other words, the get_demand will be call
+		 * before the get_access/access_done.
+		 *
+		 * Remarks:
+		 * - The duration_dtu must stay at 0, which is
+		 *   forward to nfcc_coex_access_controller and
+		 *   nfcc_coex_handle functions.
+		 * - 12ms is an default value returned which sess_dbg done
+		 *   on nfcc initiator board (it's a workaround).
+		 **/
+		demand->timestamp_dtu = rd->timestamp_dtu;
+		demand->max_duration_dtu =
+			12 * (local->llhw->dtu_freq_hz / 1000);
+	} else {
+		memcpy(demand, rd, sizeof(*demand));
 	}
-	return 0;
+	return 1;
 }
 
 void nfcc_coex_set_state(struct nfcc_coex_local *local,

@@ -26,7 +26,7 @@
 
 static void mcps802154_fproc_nothing_access(struct mcps802154_local *local)
 {
-	mcps802154_fproc_access_done(local, 0);
+	mcps802154_fproc_access_done(local, false);
 	mcps802154_fproc_access_now(local);
 }
 

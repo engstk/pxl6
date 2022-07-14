@@ -18,7 +18,7 @@
 
 #include <linux/gpio.h>
 #include <linux/crc8.h>
-#include "pmic-voter.h" /* TODO(b/163679860): use gvotables */
+#include <misc/gvotable.h>
 #include "gbms_power_supply.h"
 
 #define P9221_WLC_VOTER				"WLC_VOTER"
@@ -31,6 +31,9 @@
 #define DD_VOTER				"DD_VOTER"
 #define AUTH_DC_ICL_VOTER			"AUTH_VOTER"
 #define CPOUT_EN_VOTER				"CPOUT_EN_VOTER"
+#define LL_BPP_CEP_VOTER			"LL_BPP_CEP_VOTER"
+#define P9221_RAMP_VOTER			"WLC_RAMP_VOTER"
+#define P9221_HPP_VOTER				"EPP_HPP_VOTER"
 #define WLC_MFG_GOOGLE				0x72
 #define P9221_DC_ICL_BPP_UA			700000
 #define P9221_DC_ICL_BPP_RAMP_DEFAULT_UA	900000
@@ -38,8 +41,11 @@
 #define P9221_DC_ICL_EPP_UA			1100000
 #define P9221_DC_ICL_HPP_UA			500000
 #define P9221_DC_ICL_RTX_UA			600000
+#define P9XXX_SW_RAMP_ICL_START_UA		125000
+#define P9XXX_SW_RAMP_ICL_STEP_UA		100000
+#define P9XXX_CDMODE_ENABLE_ICL_UA		200000
 #define P9221_AUTH_DC_ICL_UA_500		500000
-#define P9221_AUTH_DC_ICL_UA_100		100000
+#define P9221_LL_BPP_CHG_TERM_UA		200000
 #define P9221_EPP_THRESHOLD_UV			7000000
 #define P9221_MAX_VOUT_SET_MV_DEFAULT		9000
 #define P9221_VOUT_SET_MIN_MV			3500
@@ -69,6 +75,9 @@
 #define P9221_NEG_POWER_5W		(5 / 0.5)
 #define P9221_NEG_POWER_10W		(10 / 0.5)
 #define P9221_PTMC_EPP_TX_1912		0x32
+#define P9221_PTMC_EPP_TX_4191		0x50
+
+#define P9221_DCIN_RETRY_DELAY_MS	50
 
 #define P9XXX_DC_ICL_EPP_1000		1000000
 #define P9XXX_DC_ICL_EPP_750		750000
@@ -437,6 +446,8 @@
 #define PROP_MODE_EN_CMD			BIT(8)
 #define PROP_REQ_PWR_CMD			BIT(9)
 #define P9412_COM_CCACTIVATE			BIT(10)
+/* For tx cmd register */
+#define P9412_CMD_TXMODE_EXIT			BIT(9)
 /* For INT status register */
 #define P9412_STAT_PPRCVD			BIT(15)
 #define P9412_CDMODE_ERROR_INT			BIT(14)
@@ -470,6 +481,10 @@
 #define HPP_MODE_PWR_REQUIRE			23
 
 #define RTX_RESET_COUNT_MAX			3
+
+/* p9412 AP BOOST PING register */
+#define P9412_APBSTPING_REG			0xF0
+#define P9412_APBSTPING_7V			BIT(0)
 
 /* Features */
 typedef enum {
@@ -561,15 +576,21 @@ struct p9221_charger_platform_data {
 	int				boost_gpio;
 	int				dc_switch_gpio;
 	int				qi_vbus_en;
+	int				qi_vbus_en_act_low;
+	int				wlc_en;
+	int				wlc_en_act_low;
 	int				max_vout_mv;
 	int				epp_vout_mv;
 	u8				fod[P9221R5_NUM_FOD];
 	u8				fod_epp[P9221R5_NUM_FOD];
 	u8				fod_hpp[P9221R5_NUM_FOD];
+	u8				fod_hpp_hv[P9221R5_NUM_FOD];
 	int				fod_num;
 	int				fod_epp_num;
 	int				fod_hpp_num;
-	int 				q_value;
+	int				fod_hpp_hv_num;
+	int				q_value;
+	int				tx_4191q;
 	int				epp_rp_value;
 	int				needs_dcin_reset;
 	int				nb_alignment_freq;
@@ -587,6 +608,10 @@ struct p9221_charger_platform_data {
 	u32				alignment_offset_high_current;
 	u32				alignment_current_threshold;
 	bool				feat_compat_mode;
+	bool				apbst_en;
+	bool				has_sw_ramp;
+	/* phone type for tx_id*/
+	u8				phone_type;
 };
 
 struct p9221_charger_ints_bit {
@@ -628,12 +653,13 @@ struct p9221_charger_data {
 	struct power_supply		*wc_psy;
 	struct power_supply		*dc_psy;
 	struct power_supply		*fg_psy;
-	struct votable			*dc_icl_votable;
-	struct votable			*dc_suspend_votable;
-	struct votable			*tx_icl_votable;
-	struct votable			*disable_dcin_en_votable;
-	struct votable			*chg_mode_votable;
-	struct votable			*wlc_disable_votable;
+	struct gvotable_election	*dc_icl_votable;
+	struct gvotable_election	*dc_suspend_votable;
+	struct gvotable_election	*tx_icl_votable;
+	struct gvotable_election	*disable_dcin_en_votable;
+	struct gvotable_election	*chg_mode_votable;
+	struct gvotable_election	*wlc_disable_votable;
+	struct gvotable_election	*csi_status_votable;
 	struct notifier_block		nb;
 	struct mutex			io_lock;
 	struct mutex			cmd_lock;
@@ -662,6 +688,7 @@ struct p9221_charger_data {
 	struct dentry			*debug_entry;
 	struct p9221_charger_feature	chg_features;
 	struct p9221_charger_cc_data_lock	cc_data_lock;
+	struct wakeup_source		*align_ws;
 	u16				chip_id;
 	int				online;
 	bool				enabled;
@@ -725,6 +752,7 @@ struct p9221_charger_data {
 	bool				is_rtx_mode;
 	bool				prop_mode_en;
 	bool				no_fod;
+	u32				de_q_value;
 	u16				fw_rev;
 	struct mutex			stats_lock;
 	struct p9221_charge_stats	chg_data;
@@ -735,6 +763,7 @@ struct p9221_charger_data {
 	struct mutex			rtx_lock;
 	bool				rtx_wakelock;
 	ktime_t				online_at;
+	bool				p9412_gpio_ctl;
 	bool				auth_delay;
 	struct mutex			auth_lock;
 	int 				ll_bpp_cep;
@@ -746,6 +775,9 @@ struct p9221_charger_data {
 	wait_queue_head_t		ccreset_wq;
 	bool				cc_reset_pending;
 	int				send_txid_cnt;
+	bool				sw_ramp_done;
+	bool				hpp_hv;
+	int				fod_mode;
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	struct gpio_chip gpio;
@@ -818,6 +850,7 @@ bool p9221_is_epp(struct p9221_charger_data *charger);
 bool p9xxx_is_capdiv_en(struct p9221_charger_data *charger);
 int p9221_wlc_disable(struct p9221_charger_data *charger, int disable, u8 reason);
 int p9221_set_auth_dc_icl(struct p9221_charger_data *charger, bool enable);
+int p9xxx_sw_ramp_icl(struct p9221_charger_data *charger, const int icl_target);
 
 void p9xxx_gpio_init(struct p9221_charger_data *charger);
 extern int p9221_chip_init_funcs(struct p9221_charger_data *charger,

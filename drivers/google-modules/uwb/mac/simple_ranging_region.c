@@ -87,10 +87,10 @@ struct simple_ranging_local {
 	struct mcps802154_nl_ranging_request current_request;
 	int slot_duration_dtu;
 	bool is_responder;
-	unsigned int tx_ant;
-	unsigned int rx_ant_pair_azimuth;
-	unsigned int rx_ant_pair_elevation;
-	bool is_same_rx_ant;
+	unsigned int tx_ant_set_id;
+	unsigned int rx_ant_set_id_azimuth;
+	unsigned int rx_ant_set_id_elevation;
+	bool is_same_rx_ant_set_id;
 	union {
 		struct simple_ranging_initiator initiator;
 		struct simple_ranging_responder responder;
@@ -149,7 +149,7 @@ static void twr_report(struct simple_ranging_local *local,
 		.remote_pdoa_rad_q11 = INT_MIN,
 		.local_pdoa_elevation_rad_q11 = INT_MIN,
 		.remote_pdoa_elevation_rad_q11 = INT_MIN,
-		.is_same_rx_ant = local->is_same_rx_ant,
+		.is_same_rx_ant_set_id = local->is_same_rx_ant_set_id,
 	};
 	int r;
 
@@ -207,7 +207,7 @@ bool twr_frame_header_check(struct sk_buff *skb, __le16 pan_id, __le64 dst,
 {
 	u8 buf[TWR_FRAME_HEADER_SIZE];
 
-	if (!pskb_may_pull(skb, TWR_FRAME_HEADER_SIZE))
+	if (skb->len < TWR_FRAME_HEADER_SIZE)
 		return false;
 	twr_frame_header_fill_buf(buf, pan_id, dst, src);
 	if (memcmp(skb->data, buf, TWR_FRAME_HEADER_SIZE) != 0)
@@ -223,7 +223,7 @@ bool twr_frame_header_check_no_src(struct sk_buff *skb, __le16 pan_id,
 		TWR_FRAME_HEADER_SIZE - IEEE802154_EXTENDED_ADDR_LEN;
 	u8 buf[TWR_FRAME_HEADER_SIZE];
 
-	if (!pskb_may_pull(skb, TWR_FRAME_HEADER_SIZE))
+	if (skb->len < TWR_FRAME_HEADER_SIZE)
 		return false;
 	twr_frame_header_fill_buf(buf, pan_id, dst, 0);
 	if (memcmp(skb->data, buf, check_size) != 0)
@@ -242,7 +242,7 @@ bool twr_frame_poll_check(struct sk_buff *skb)
 {
 	u8 function_code;
 
-	if (!pskb_may_pull(skb, TWR_FRAME_POLL_SIZE))
+	if (skb->len < TWR_FRAME_POLL_SIZE)
 		return false;
 	function_code = skb->data[0];
 	if (function_code != TWR_FUNCTION_CODE_POLL)
@@ -262,7 +262,7 @@ bool twr_frame_resp_check(struct sk_buff *skb, s16 *remote_pdoa_rad_q11)
 {
 	u8 function_code;
 
-	if (!pskb_may_pull(skb, TWR_FRAME_RESP_SIZE))
+	if (skb->len < TWR_FRAME_RESP_SIZE)
 		return false;
 	function_code = skb->data[0];
 	if (function_code != TWR_FUNCTION_CODE_RESP)
@@ -283,7 +283,7 @@ bool twr_frame_final_check(struct sk_buff *skb, s32 *tof_half_tag_rctu)
 {
 	u8 function_code;
 
-	if (!pskb_may_pull(skb, TWR_FRAME_FINAL_SIZE))
+	if (skb->len < TWR_FRAME_FINAL_SIZE)
 		return false;
 	function_code = skb->data[0];
 	if (function_code != TWR_FUNCTION_CODE_FINAL)
@@ -307,7 +307,7 @@ bool twr_frame_report_check(struct sk_buff *skb, s32 *tof_x4_rctu,
 {
 	u8 function_code;
 
-	if (!pskb_may_pull(skb, TWR_FRAME_REPORT_SIZE))
+	if (skb->len < TWR_FRAME_REPORT_SIZE)
 		return false;
 	function_code = skb->data[0];
 	if (function_code != TWR_FUNCTION_CODE_REPORT)
@@ -357,7 +357,7 @@ static void twr_responder_rx_frame(struct mcps802154_access *access,
 		resp_tx_dtu = info->timestamp_dtu + local->slot_duration_dtu;
 		local->responder.resp_tx_timestamp_rctu =
 			mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
-				local->llhw, resp_tx_dtu, local->tx_ant);
+				local->llhw, resp_tx_dtu, local->tx_ant_set_id);
 		/* Set the timings for the next frames. */
 		access->frames[TWR_FRAME_RESP].tx_frame_info.timestamp_dtu =
 			resp_tx_dtu;
@@ -507,7 +507,7 @@ static void twr_rx_frame(struct mcps802154_access *access, int frame_idx,
 			local->initiator.local_pdoa_elevation_rad_q11;
 		report.remote_pdoa_elevation_rad_q11 =
 			local->initiator.remote_pdoa_elevation_rad_q11;
-		report.is_same_rx_ant = local->is_same_rx_ant;
+		report.is_same_rx_ant_set_id = local->is_same_rx_ant_set_id;
 
 		twr_report(local, &report);
 	}
@@ -580,8 +580,9 @@ twr_responder_get_access(struct mcps802154_region *region,
 					MCPS802154_RX_INFO_RANGING |
 					MCPS802154_RX_INFO_KEEP_RANGING_CLOCK |
 					MCPS802154_RX_INFO_RANGING_PDOA |
-					MCPS802154_RX_INFO_SP1,
-				.ant_pair_id = local->rx_ant_pair_azimuth,
+					MCPS802154_RX_INFO_SP1 |
+					MCPS802154_RX_INFO_RANGING_ROUND,
+				.ant_set_id = local->rx_ant_set_id_azimuth,
 			},
 			.frame_info_flags_request =
 				MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU |
@@ -598,7 +599,7 @@ twr_responder_get_access(struct mcps802154_region *region,
 				MCPS802154_TX_FRAME_RANGING |
 				MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK |
 				MCPS802154_TX_FRAME_SP1,
-			.ant_id = local->tx_ant,
+			.ant_set_id = local->tx_ant_set_id,
 		},
 	};
 
@@ -610,7 +611,7 @@ twr_responder_get_access(struct mcps802154_region *region,
 					MCPS802154_RX_INFO_RANGING |
 					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
-				.ant_pair_id = local->rx_ant_pair_elevation,
+				.ant_set_id = local->rx_ant_set_id_elevation,
 			},
 			.frame_info_flags_request =
 				MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
@@ -624,7 +625,7 @@ twr_responder_get_access(struct mcps802154_region *region,
 			.flags = MCPS802154_TX_FRAME_TIMESTAMP_DTU |
 				MCPS802154_TX_FRAME_RANGING |
 				MCPS802154_TX_FRAME_SP1,
-			.ant_id = local->tx_ant,
+			.ant_set_id = local->tx_ant_set_id,
 		},
 	};
 
@@ -668,14 +669,15 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 			.flags = MCPS802154_TX_FRAME_TIMESTAMP_DTU |
 				MCPS802154_TX_FRAME_RANGING |
 				MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK |
-				MCPS802154_TX_FRAME_SP1,
-			.ant_id = local->tx_ant,
+				MCPS802154_TX_FRAME_SP1 |
+				MCPS802154_TX_FRAME_RANGING_ROUND,
+			.ant_set_id = local->tx_ant_set_id,
 		},
 		.sts_params = &local->sts_params,
 	};
 	local->initiator.poll_tx_timestamp_rctu =
 		mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
-			local->llhw, next_timestamp_dtu, local->tx_ant);
+			local->llhw, next_timestamp_dtu, local->tx_ant_set_id);
 
 	access->frames[TWR_FRAME_RESP] = (struct mcps802154_access_frame){
 		.is_tx = false,
@@ -688,7 +690,7 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 					MCPS802154_RX_INFO_KEEP_RANGING_CLOCK |
 					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
-				.ant_pair_id = local->rx_ant_pair_azimuth,
+				.ant_set_id = local->rx_ant_set_id_azimuth,
 			},
 			.frame_info_flags_request =
 				MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
@@ -704,14 +706,14 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 			.flags = MCPS802154_TX_FRAME_TIMESTAMP_DTU |
 				MCPS802154_TX_FRAME_RANGING |
 				MCPS802154_TX_FRAME_SP1,
-			.ant_id = local->tx_ant,
+			.ant_set_id = local->tx_ant_set_id,
 		},
 	};
 	local->initiator.final_tx_timestamp_rctu =
 		mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
 			local->llhw,
 			next_timestamp_dtu + 2 * local->slot_duration_dtu,
-			local->tx_ant);
+			local->tx_ant_set_id);
 
 	access->frames[TWR_FRAME_REPORT] = (struct mcps802154_access_frame){
 		.is_tx = false,
@@ -723,7 +725,7 @@ twr_get_access(struct mcps802154_region *region, u32 next_timestamp_dtu,
 					MCPS802154_RX_INFO_RANGING |
 					MCPS802154_RX_INFO_RANGING_PDOA |
 					MCPS802154_RX_INFO_SP1,
-				.ant_pair_id = local->rx_ant_pair_elevation,
+				.ant_set_id = local->rx_ant_set_id_elevation,
 			},
 			.frame_info_flags_request =
 				MCPS802154_RX_FRAME_INFO_RANGING_PDOA,
@@ -755,10 +757,10 @@ simple_ranging_scheduler_open(struct mcps802154_llhw *llhw)
 	local->sts_params.seg_len = 256;
 	local->slot_duration_dtu = TWR_SLOT_DEFAULT_RCTU / llhw->dtu_rctu;
 	local->is_responder = false;
-	local->tx_ant = TX_ANT_ID_DEFAULT;
-	local->rx_ant_pair_azimuth = RX_ANT_PAIR_ID_DEFAULT;
-	local->rx_ant_pair_elevation = RX_ANT_PAIR_ID_DEFAULT;
-	local->is_same_rx_ant = true;
+	local->tx_ant_set_id = TX_ANT_SET_ID_DEFAULT;
+	local->rx_ant_set_id_azimuth = RX_ANT_SET_ID_DEFAULT;
+	local->rx_ant_set_id_elevation = RX_ANT_SET_ID_DEFAULT;
+	local->is_same_rx_ant_set_id = true;
 
 	twr_requests_clear(local);
 	return &local->scheduler;
@@ -861,7 +863,7 @@ simple_ranging_scheduler_set_parameters(struct mcps802154_scheduler *scheduler,
 		[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_NODE_TYPE] = { .type = NLA_U32,
 									  .validation_type =
 										  NLA_VALIDATE_MAX,
-									  .max = 1 },
+									  .max = 1, },
 		[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_TX_ANTENNA] = { .type = NLA_U8 },
 		[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_AZIMUTH] = { .type = NLA_U8 },
 		[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_ELEVATION] = { .type = NLA_U8 },
@@ -897,21 +899,21 @@ simple_ranging_scheduler_set_parameters(struct mcps802154_scheduler *scheduler,
 	if (attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_TX_ANTENNA]) {
 		u8 id = nla_get_u8(
 			attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_TX_ANTENNA]);
-		local->tx_ant = id;
+		local->tx_ant_set_id = id;
 	}
 	if (attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_AZIMUTH]) {
 		u8 id = nla_get_u8(
 			attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_AZIMUTH]);
-		local->rx_ant_pair_azimuth = id;
+		local->rx_ant_set_id_azimuth = id;
 	}
 	if (attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_ELEVATION]) {
 		u8 id = nla_get_u8(
 			attrs[SIMPLE_RANGING_REGION_SET_PARAMETERS_ATTR_RX_ANTENNA_PAIR_ELEVATION]);
-		local->rx_ant_pair_elevation = id;
+		local->rx_ant_set_id_elevation = id;
 	}
 
-	local->is_same_rx_ant = local->rx_ant_pair_azimuth ==
-				local->rx_ant_pair_elevation;
+	local->is_same_rx_ant_set_id = local->rx_ant_set_id_azimuth ==
+				       local->rx_ant_set_id_elevation;
 
 	return 0;
 }
