@@ -51,8 +51,8 @@ struct mcps802154_nl_ranging_report {
 	int local_pdoa_elevation_rad_q11;
 	/** @remote_pdoa_elevation_rad_q11: Remote Phase Difference Of Arrival, or INT_MIN. */
 	int remote_pdoa_elevation_rad_q11;
-	/** @is_same_rx_ant: Has azimuth and elevation AoA been done with same antenna? */
-	bool is_same_rx_ant;
+	/** @is_same_rx_ant_set_id: Has azimuth and elevation AoA been done with same antennas set? */
+	bool is_same_rx_ant_set_id;
 };
 
 /**

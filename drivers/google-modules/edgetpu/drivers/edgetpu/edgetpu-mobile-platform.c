@@ -125,6 +125,86 @@ static void edgetpu_platform_cleanup_fw_region(struct edgetpu_mobile_platform_de
 	etmdev->shared_mem_vaddr = NULL;
 }
 
+static int mobile_check_ext_mailbox_args(const char *func, struct edgetpu_dev *etdev,
+					 struct edgetpu_ext_mailbox_ioctl *args)
+{
+	if (args->type != EDGETPU_EXT_MAILBOX_TYPE_TZ) {
+		etdev_err(etdev, "%s: Invalid type %d != %d\n", func, args->type,
+			  EDGETPU_EXT_MAILBOX_TYPE_TZ);
+		return -EINVAL;
+	}
+	if (args->count != 1) {
+		etdev_err(etdev, "%s: Invalid mailbox count: %d != 1\n", func, args->count);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
+				     struct edgetpu_ext_mailbox_ioctl *args)
+{
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
+	int ret;
+
+	ret = mobile_check_ext_mailbox_args(__func__, client->etdev, args);
+	if (ret)
+		return ret;
+
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (etmdev->secure_client) {
+		etdev_err(client->etdev, "TZ mailbox already in use by PID %d\n",
+			  etmdev->secure_client->pid);
+		mutex_unlock(&etmdev->tz_mailbox_lock);
+		return -EBUSY;
+	}
+	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_TZ_MAILBOX_ID, NULL);
+	if (!ret)
+		etmdev->secure_client = client;
+	mutex_unlock(&etmdev->tz_mailbox_lock);
+	return ret;
+}
+
+int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
+				     struct edgetpu_ext_mailbox_ioctl *args)
+{
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
+	int ret = 0;
+
+	ret = mobile_check_ext_mailbox_args(__func__, client->etdev,
+					      args);
+	if (ret)
+		return ret;
+
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (!etmdev->secure_client) {
+		etdev_warn(client->etdev, "TZ mailbox already released\n");
+		mutex_unlock(&etmdev->tz_mailbox_lock);
+		return 0;
+	}
+	if (etmdev->secure_client != client) {
+		etdev_err(client->etdev,
+			  "TZ mailbox owned by different client\n");
+		mutex_unlock(&etmdev->tz_mailbox_lock);
+		return -EBUSY;
+	}
+	etmdev->secure_client = NULL;
+	ret = edgetpu_mailbox_disable_ext(client, EDGETPU_TZ_MAILBOX_ID);
+	mutex_unlock(&etmdev->tz_mailbox_lock);
+	return ret;
+}
+
+void edgetpu_chip_client_remove(struct edgetpu_client *client)
+{
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
+
+	mutex_lock(&etmdev->tz_mailbox_lock);
+	if (etmdev->secure_client == client) {
+		etmdev->secure_client = NULL;
+		edgetpu_mailbox_disable_ext(client, EDGETPU_TZ_MAILBOX_ID);
+	}
+	mutex_unlock(&etmdev->tz_mailbox_lock);
+}
+
 int edgetpu_chip_setup_mmu(struct edgetpu_dev *etdev)
 {
 	int ret;
@@ -197,6 +277,38 @@ static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmd
 
 	for (i = 0; i < etmdev->n_irq; i++)
 		edgetpu_unregister_irq(etdev, etmdev->irq[i]);
+}
+
+/*
+ * Fetch and set the firmware context region from device tree.
+ *
+ * Maybe be unused since not all chips need this.
+ */
+static int __maybe_unused
+edgetpu_mobile_platform_set_fw_ctx_memory(struct edgetpu_mobile_platform_dev *etmdev)
+{
+	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
+	struct device *dev = etdev->dev;
+	struct resource r;
+	struct device_node *np;
+	int ret;
+
+	np = of_parse_phandle(dev->of_node, "memory-region", 1);
+	if (!np) {
+		etdev_warn(etdev, "No memory for firmware contexts");
+		return -ENODEV;
+	}
+
+	ret = of_address_to_resource(np, 0, &r);
+	of_node_put(np);
+	if (ret) {
+		etdev_warn(etdev, "No memory address for firmware contexts");
+		return ret;
+	}
+
+	etmdev->fw_ctx_paddr = r.start;
+	etmdev->fw_ctx_size = resource_size(&r);
+	return 0;
 }
 
 static int edgetpu_mobile_platform_probe(struct platform_device *pdev,

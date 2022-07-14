@@ -28,19 +28,80 @@
 #include "fira_crypto.h"
 #include "fira_round_hopping_crypto_impl.h"
 
-enum fira_session_state {
-	SESSION_STATE_INIT = 0x00,
-	SESSION_STATE_DEINIT = 0x01,
-	SESSION_STATE_ACTIVE = 0x02,
-	SESSION_STATE_IDLE = 0x03,
-	// RFU 0x04 - 0xff
-	// UCI_SESSION_STATE_ERROR = 0xff,
+/**
+ * enum fira_controlee_state - State of controlee.
+ * @FIRA_CONTROLEE_STATE_RUNNING: The controlee is running.
+ * @FIRA_CONTROLEE_STATE_PENDING_STOP: The controlee is stopping.
+ * @FIRA_CONTROLEE_STATE_PENDING_DEL: RFU.
+ */
+enum fira_controlee_state {
+	FIRA_CONTROLEE_STATE_RUNNING,
+	FIRA_CONTROLEE_STATE_PENDING_STOP,
+	FIRA_CONTROLEE_STATE_PENDING_DEL,
+};
+
+/**
+ * struct fira_controlee - Represent a controlee.
+ */
+struct fira_controlee {
+	/**
+	 * @sub_session_id: Sub-session ID used by the controlee.
+	 */
+	__u32 sub_session_id;
+	/**
+	 * @short_addr: Short address of the controlee.
+	 */
+	__le16 short_addr;
+	/**
+	 * @sub_session_key_len: Length of the sub-session key used by
+	 * the controlee.
+	 */
+	__u16 sub_session_key_len;
+	/**
+	 * @sub_session_key: Sub-session key used by the controlee.
+	 */
+	char sub_session_key[FIRA_KEY_SIZE_MAX];
+	/**
+	 * @sub_session: Is the controlee using a sub-session.
+	 */
+	bool sub_session;
+	/**
+	 * @state: Current state of the controlee.
+	 */
+	enum fira_controlee_state state;
+};
+
+enum fira_session_controlee_management_flags {
+	FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_UPDATE = 1,
+	FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_STOP = 2,
 };
 
 struct fira_controlees_array {
 	struct fira_controlee data[FIRA_CONTROLEES_MAX];
 	/* Number of data valid. */
 	size_t size;
+};
+
+struct fira_measurement_sequence_step {
+	enum fira_measurement_type type;
+	u8 n_measurements;
+	s8 rx_ant_set_nonranging;
+	s8 rx_ant_sets_ranging[2];
+	s8 tx_ant_set_nonranging;
+	s8 tx_ant_set_ranging;
+};
+
+struct fira_measurement_sequence {
+	struct fira_measurement_sequence_step
+		steps[FIRA_MEASUREMENT_SEQUENCE_STEP_MAX];
+	size_t n_steps;
+};
+
+struct fira_measurement_sequence_data {
+	struct fira_measurement_sequence *active;
+	u8 current_step;
+	u8 n_measurements_achieved;
+	bool update_flag;
 };
 
 struct fira_session_params {
@@ -56,11 +117,11 @@ struct fira_session_params {
 	int block_duration_dtu;
 	int round_duration_slots;
 	/* Behaviour parameters. */
-	int max_number_of_measurements;
-	int max_rr_retry;
+	u32 block_stride_len;
+	u32 max_number_of_measurements;
+	u32 max_rr_retry;
 	bool round_hopping;
-	int block_stride_len;
-	int priority;
+	u8 priority;
 	bool result_report_phase;
 	/* Radio. */
 	int channel_number;
@@ -73,17 +134,14 @@ struct fira_session_params {
 	/* STS and crypto. */
 	enum fira_sts_config sts_config;
 	u8 vupper64[FIRA_VUPPER64_SIZE];
-	size_t n_controlees_max;
 	bool aoa_result_req;
 	bool report_tof;
 	bool report_aoa_azimuth;
 	bool report_aoa_elevation;
 	bool report_aoa_fom;
-	u8 rx_antenna_selection;
-	u8 rx_antenna_pair_azimuth;
-	u8 rx_antenna_pair_elevation;
-	u8 tx_antenna_selection;
-	u8 rx_antenna_switch;
+	struct fira_measurement_sequence_data meas_seq;
+	struct fira_measurement_sequence _meas_seq_1;
+	struct fira_measurement_sequence _meas_seq_2;
 	u32 data_vendor_oui;
 	u8 data_payload[FIRA_DATA_PAYLOAD_SIZE_MAX];
 	u32 data_payload_seq;
@@ -98,10 +156,6 @@ struct fira_session {
 	 * @id: Session identifier.
 	 */
 	u32 id;
-	/**
-	 * @state: Session state.
-	 */
-	enum fira_session_state state;
 	/**
 	 * @entry: Entry in list of sessions.
 	 */
@@ -146,18 +200,8 @@ struct fira_session {
 	 */
 	int next_block_stride_len;
 	/**
-	 * @tx_ant: Antenna index to use for transmission in the reference
-	 * block.
-	 */
-	int tx_ant;
-	/**
-	 * @rx_ant_pair: Antenna pair indexes to use for reception in the
-	 * reference block.
-	 */
-	int rx_ant_pair[2];
-	/**
-	 * @stop_request: Session has been requested to stop.
-	 */
+	* @stop_request: Session has been requested to stop.
+	*/
 	bool stop_request;
 	/**
 	 * @stop_inband: Session has been requested to stop by controller. This
@@ -166,7 +210,7 @@ struct fira_session {
 	bool stop_inband;
 	/**
 	 * @stop_no_response: Session has been requested to stop because ranging
-	 * failed for max_rr_retry consecutives rounds.
+	 * failed for max_rr_retry consecutive rounds.
 	 */
 	bool stop_no_response;
 	/**
@@ -239,10 +283,9 @@ struct fira_session *fira_session_new(struct fira_local *local, u32 session_id);
 
 /**
  * fira_session_free() - Remove a session.
- * @local: FiRa context.
  * @session: Session to remove, must be inactive.
  */
-void fira_session_free(struct fira_local *local, struct fira_session *session);
+void fira_session_free(struct fira_session *session);
 
 /**
  * fira_session_get() - Get a session by its identifier.
@@ -264,25 +307,53 @@ void fira_session_copy_controlees(struct fira_controlees_array *to,
 				  const struct fira_controlees_array *from);
 
 /**
- * fira_session_new_controlees() - Add new controlees.
+ * fira_session_set_controlees() - Set controlees.
  * @local: FiRa context.
  * @session: Session.
- * @controlees_array: Destination array where store new controlees list.
+ * @controlees_array: Destination array where to store the new controlees list.
  * @controlees: Controlees information.
  * @n_controlees: Number of controlees.
  *
  * Return: 0 or error.
  */
-int fira_session_new_controlees(struct fira_local *local,
+int fira_session_set_controlees(struct fira_local *local,
 				struct fira_session *session,
 				struct fira_controlees_array *controlees_array,
 				const struct fira_controlee *controlees,
 				size_t n_controlees);
 
 /**
- * fira_session_del_controlees() - Set flag to indicate that controlees are
- * to be stopped then deleted.
- * @local: FiRa context.
+ * fira_session_new_controlees() - Add new controlees.
+ * @session: Session.
+ * @active: True if session is active.
+ * @controlees_array: Destination array where to store the updated
+ * controlees list.
+ * @controlees: Controlees information.
+ * @n_controlees: Number of controlees.
+ *
+ * Return: 0 or error.
+ */
+int fira_session_new_controlees(struct fira_session *session, bool active,
+				struct fira_controlees_array *controlees_array,
+				const struct fira_controlee *controlees,
+				size_t n_controlees);
+
+/**
+ * fira_session_del_controlees() - Delete without stopping controlees.
+ * @controlees_array: Destination array where to store the updated
+ * controlees list.
+ * @controlees: Controlees information.
+ * @n_controlees: Number of controlees.
+ *
+ * Return: 0 or error.
+ */
+int fira_session_del_controlees(struct fira_controlees_array *controlees_array,
+				const struct fira_controlee *controlees,
+				size_t n_controlees);
+
+/**
+ * fira_session_async_del_controlees() - Set flag to indicate that controlees
+ * need to be stopped then deleted.
  * @session: Session.
  * @controlees_array: Destination array where store new controlees list.
  * @controlees: Controlees information.
@@ -290,20 +361,18 @@ int fira_session_new_controlees(struct fira_local *local,
  *
  * Return: 0 or error.
  */
-int fira_session_del_controlees(struct fira_local *local,
-				struct fira_session *session,
-				struct fira_controlees_array *controlees_array,
-				const struct fira_controlee *controlees,
-				size_t n_controlees);
+int fira_session_async_del_controlees(
+	struct fira_session *session,
+	struct fira_controlees_array *controlees_array,
+	const struct fira_controlee *controlees, size_t n_controlees);
 
 /**
  * fira_session_stop_controlees() - Stop controlees.
- * @local: FiRa context.
  * @session: Session.
  * @controlees_array: Destination array where store new controlees list.
  */
 void fira_session_stop_controlees(
-	struct fira_local *local, struct fira_session *session,
+	struct fira_session *session,
 	struct fira_controlees_array *controlees_array);
 
 /**
@@ -318,11 +387,9 @@ bool fira_session_is_ready(struct fira_local *local,
 
 /**
  * fira_session_prepare() - Prepare a FiRa session to run.
- * @local: FiRa context.
  * @session: Session.
  */
-void fira_session_prepare(struct fira_local *local,
-			  struct fira_session *session);
+void fira_session_prepare(struct fira_session *session);
 
 /**
  * fira_session_next() - Find the next session to use after the given timestamp.
@@ -344,13 +411,12 @@ void fira_session_update_round_index(struct fira_session *session);
 
 /**
  * fira_session_resync() - Resync session parameters on control message.
- * @local: FiRa context.
  * @session: Session to synchronize.
  * @sts_index: STS index of control message.
  * @timestamp_dtu: Timestamp of control message.
  */
-void fira_session_resync(struct fira_local *local, struct fira_session *session,
-			 u32 sts_index, u32 timestamp_dtu);
+void fira_session_resync(struct fira_session *session, u32 sts_index,
+			 u32 timestamp_dtu);
 
 /**
  * fira_session_access_done() - Update session at end of access, or on event
@@ -401,6 +467,58 @@ fira_session_get_block_duration_margin(struct fira_local *local,
 	return (long long int)session->params.block_duration_dtu *
 	       (session->block_stride_len + 1) *
 	       local->block_duration_rx_margin_ppm / 1000000;
+}
+
+/**
+ * fira_session_get_current_meas_seq_step() - Get current measurement step.
+ * @session: Session.
+ *
+ * Return: Current Measurement Sequence step for given session.
+ */
+static inline const struct fira_measurement_sequence_step *
+fira_session_get_current_meas_seq_step(const struct fira_session *session)
+{
+	return &(session->params.meas_seq.active
+			 ->steps[session->params.meas_seq.current_step]);
+}
+
+/**
+ * fira_session_get_rx_ant_set() - Get Rx antenna set for a given message ID.
+ * @message_id: Message ID of Fira frame.
+ * @session: Session.
+ *
+ * Return: Adequate antenna set id for given frame and session parameters.
+ */
+static inline s8 fira_session_get_rx_ant_set(const struct fira_session *session,
+					     enum fira_message_id message_id)
+{
+	const struct fira_measurement_sequence_step *step =
+		fira_session_get_current_meas_seq_step(session);
+
+	if (message_id > FIRA_MESSAGE_ID_RFRAME_MAX)
+		return step->rx_ant_set_nonranging;
+
+	/* TODO: replace this test by device_role == FIRA_DEVICE_ROLE_INITIATOR
+	* as soon as this feature is supported */
+	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER)
+		return step->rx_ant_sets_ranging[0];
+	else
+		switch (step->type) {
+		case FIRA_MEASUREMENT_TYPE_RANGE:
+		case FIRA_MEASUREMENT_TYPE_AOA:
+		case FIRA_MEASUREMENT_TYPE_AOA_AZIMUTH:
+		case FIRA_MEASUREMENT_TYPE_AOA_ELEVATION:
+			return step->rx_ant_sets_ranging[0];
+		case FIRA_MEASUREMENT_TYPE_AOA_AZIMUTH_ELEVATION:
+			return step->rx_ant_sets_ranging
+				[message_id == FIRA_MESSAGE_ID_RANGING_FINAL];
+		/* LCOV_EXCL_START */
+		default:
+			/* defensive check, should not happen */
+			return -1;
+			/* LCOV_EXCL_STOP */
+		}
+	return -1;
 }
 
 #endif /* NET_MCPS802154_FIRA_SESSION_H */

@@ -115,19 +115,6 @@ struct dw3000_nfcc_coex_rx_msg_info {
 	bool next_slot_found;
 };
 
-/* Forward declaration. */
-struct dw3000;
-
-/**
- * typedef dw3000_nfcc_coex_spi_avail_cb - SPI available isr handler.
- * @dw: Driver context.
- * @buffer: Memory read from scratch memory.
- *
- * Return: 0 on success, else an error.
- */
-typedef int (*dw3000_nfcc_coex_spi_avail_cb)(
-	struct dw3000 *dw, const struct dw3000_nfcc_coex_buffer *buffer);
-
 /**
  * struct dw3000_nfcc_coex - NFCC coexistence context.
  */
@@ -136,10 +123,6 @@ struct dw3000_nfcc_coex {
 	 * @access_info: Access information to provide to upper layer.
 	 */
 	struct dw3000_vendor_cmd_nfcc_coex_get_access_info access_info;
-	/**
-	 * @spi_avail_cb: callback used on SPI available isr.
-	 */
-	dw3000_nfcc_coex_spi_avail_cb spi_avail_cb;
 	/**
 	 * @session_time0_dtu: Timestamp used as reference between NFCC and AP.
 	 */
@@ -165,7 +148,7 @@ struct dw3000_nfcc_coex {
 	 */
 	u8 tx_seq_num;
 	/**
-	 * @enabled: True when nfcc coex is enabled.
+	 * @enabled: True when nfcc coex is handling an access.
 	 */
 	bool enabled;
 	/**

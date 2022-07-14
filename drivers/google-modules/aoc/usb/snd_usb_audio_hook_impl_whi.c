@@ -10,6 +10,7 @@
 #include <uapi/sound/asound.h>
 #include "usbaudio.h"
 #include "card.h"
+#include "xhci-plat.h"
 
 #include "aoc_usb.h"
 
@@ -70,6 +71,25 @@ static int snd_usb_audio_vendor_set_pcm_buf(struct usb_device *udev, int iface)
 static int snd_usb_audio_vendor_set_pcm_intf(struct usb_interface *intf, int iface, int alt,
 					     int direction)
 {
+	struct usb_device *udev;
+	struct xhci_hcd *xhci;
+	struct xhci_vendor_data *vendor_data;
+
+	if (!intf) {
+		pr_err("%s: Invalid parameter\n", __func__);
+		return 0;
+	}
+
+	udev = interface_to_usbdev(intf);
+	xhci = get_xhci_hcd_by_udev(udev);
+	vendor_data = xhci_to_priv(xhci)->vendor_data;
+
+	if (vendor_data->offload_state) {
+		xhci_dbg(xhci, "offloading is enabled\n");
+		return 0;
+	}
+
+	xhci_set_offload_state(xhci, true);
 	return 0;
 }
 

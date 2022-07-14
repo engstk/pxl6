@@ -20,6 +20,7 @@
 #include <linux/minmax.h>
 #include <linux/types.h>
 #include <linux/usb/pd.h>
+#include <misc/logbuffer.h>
 #include "gbms_power_supply.h"
 #include "qmath.h"
 #include "gbms_storage.h"
@@ -42,7 +43,7 @@ struct gbms_chg_profile {
 	int topoff_nb_limits;
 	s32 topoff_limits[GBMS_CHG_TOPOFF_NB_LIMITS_MAX];
 	/* Array of constant current limits */
-	s32 *cccm_limits;
+	u32 *cccm_limits;
 	/* used to fill table  */
 	u32 capacity_ma;
 
@@ -89,6 +90,14 @@ struct gbms_chg_profile {
 #define CHG_EV_ADAPTER_STRING(s)	#s
 #define _CHG_EV_ADAPTER_PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
 
+#define BATTERY_DEBUG_ATTRIBUTE(name, fn_read, fn_write) \
+static const struct file_operations name = {	\
+	.open	= simple_open,			\
+	.llseek	= no_llseek,			\
+	.read	= fn_read,			\
+	.write	= fn_write,			\
+}
+
 /* Enums will start with CHG_EV_ADAPTER_TYPE_ */
 #define CHG_EV_ADAPTER_ENUM(e)	\
 			_CHG_EV_ADAPTER_PRIMITIVE_CAT(CHG_EV_ADAPTER_TYPE_,e)
@@ -117,6 +126,7 @@ enum gbms_msc_states_t {
 	MSC_NYET,	/* in taper */
 	MSC_HEALTH,
 	MSC_HEALTH_PAUSE,
+	MSC_HEALTH_ALWAYS_ON,
 	MSC_STATES_COUNT,
 };
 
@@ -268,6 +278,13 @@ enum gbms_stats_tier_idx_t {
 	GBMS_STATS_AC_TI_PAUSE_AON = 17,
 	GBMS_STATS_AC_TI_V2_PREDICT = 18,
 	GBMS_STATS_AC_TI_V2_PREDICT_SUCCESS = 19,
+	GBMS_STATS_AC_TI_DONE_AON = 20,
+
+	/* Thermal stats, reported from google_charger */
+	GBMS_STATS_TH_LVL0 = 50,
+	GBMS_STATS_TH_LVL1 = 51,
+	GBMS_STATS_TH_LVL2 = 52,
+	GBMS_STATS_TH_LVL3 = 53,
 
 	/* TODO: rename, these are not really related to AC */
 	GBMS_STATS_AC_TI_FULL_CHARGE = 100,
@@ -302,6 +319,11 @@ struct batt_chg_health {
 
 #define CHG_HEALTH_REST_IS_PAUSE(rest) \
 	((rest)->rest_state == CHG_HEALTH_PAUSE)
+
+#define CHG_HEALTH_REST_IS_AON(rest, ssoc) \
+	(((rest)->rest_state == CHG_HEALTH_ACTIVE) ? \
+	(((rest)->always_on_soc != -1) ? \
+	(ssoc >= (rest)->always_on_soc) : 0) : 0)
 
 #define CHG_HEALTH_REST_SOC(rest) (((rest)->always_on_soc != -1) ? \
 			(rest)->always_on_soc : (rest)->rest_soc)
@@ -340,8 +362,11 @@ struct gbms_charging_event {
 	struct gbms_ce_tier_stats trickle_stats;
 };
 
-#define GBMS_CCCM_LIMITS(profile, ti, vi) \
+#define GBMS_CCCM_LIMITS_SET(profile, ti, vi) \
 	profile->cccm_limits[(ti * profile->volt_nb_limits) + vi]
+
+#define GBMS_CCCM_LIMITS(profile, ti, vi) \
+	(ti >= 0 && vi >= 0) ? profile->cccm_limits[(ti * profile->volt_nb_limits) + vi] : 0
 
 /* newgen charging */
 #define GBMS_CS_FLAG_BUCK_EN	BIT(0)
@@ -391,6 +416,11 @@ int gbms_read_charger_state(union gbms_charger_state *chg_state,
 /* calculate aacr reference capacity */
 int gbms_aacr_fade10(const struct gbms_chg_profile *profile, int cycles);
 
+/* logbuffer and syslog */
+__printf(5,6)
+void gbms_logbuffer_prlog(struct logbuffer *log, int level, int debug_no_logbuffer,
+			  int debug_printk_prlog, const char *f, ...);
+
 /* debug/print */
 const char *gbms_chg_type_s(int chg_type);
 const char *gbms_chg_status_s(int chg_status);
@@ -404,6 +434,10 @@ const char *gbms_chg_ev_adapter_s(int adapter);
 #define VOTABLE_MSC_FV		"MSC_FV"
 #define VOTABLE_FAN_LEVEL	"FAN_LEVEL"
 #define VOTABLE_DEAD_BATTERY	"DEAD_BATTERY"
+#define VOTABLE_TEMP_DRYRUN	"MSC_TEMP_DRYRUN"
+
+#define VOTABLE_CSI_STATUS	"CSI_STATUS"
+#define VOTABLE_CSI_TYPE	"CSI_TYPE"
 
 #define FAN_LVL_UNKNOWN		-1
 #define FAN_LVL_NOT_CARE	0
@@ -467,7 +501,16 @@ ssize_t ttf_dump_details(char *buf, int max_size,
 			 const struct batt_ttf_stats *ttf_stats,
 			 int last_soc);
 
-bool gbms_temp_defend_dry_run(bool update, bool dry_run);
+int ttf_pwr_vtier_idx(const struct batt_ttf_stats *stats, int soc);
+
+int ttf_ref_cc(const struct batt_ttf_stats *stats, int soc);
+
+int ttf_pwr_ibatt(const struct gbms_ce_tier_stats *ts);
+
+int gbms_read_aacr_limits(struct gbms_chg_profile *profile,
+			  struct device_node *node);
+
+bool chg_state_is_disconnected(const union gbms_charger_state *chg_state);
 
 /*
  * Charger modes
@@ -485,5 +528,66 @@ enum gbms_charger_modes {
 };
 
 #define GBMS_MODE_VOTABLE "CHARGER_MODE"
+
+/* Battery Health */
+enum bhi_algo {
+	BHI_ALGO_DISABLED = 0,
+
+	BHI_ALGO_CYCLE_COUNT	= 1, /* bare, just use cycle count */
+	BHI_ALGO_ACHI		= 2, /* cap avg from history, no resistance */
+	BHI_ALGO_ACHI_B		= 3, /* same as ACHI + bounds check */
+	BHI_ALGO_ACHI_RAVG	= 4, /* same as ACHI and google_resistance */
+	BHI_ALGO_ACHI_RAVG_B	= 5, /* same as ACHI_RAVG + bounds check */
+
+	/* TODO:
+	 * BHI_ALGO_ACHI_QRES	 = 4,  cap avg from history, qual resistance
+	 * BHI_ALGO_ACHI_QRES_B	= 21,  same ACHI_QRES + bounds check
+	 * BHI_ALGO_GCAP_RAVG	= 40,  google_capacity, google_resistance
+	 * BHI_ALGO_GCAP_RAVG_B	= 41,  same as GCAP_RAVG + bounds check
+	 */
+
+	BHI_ALGO_MIX_N_MATCH 	= 6,
+	BHI_ALGO_MAX,
+};
+
+enum bhi_status {
+	BH_UNKNOWN = -1,
+	BH_NOMINAL,
+	BH_MARGINAL,
+	BH_NEEDS_REPLACEMENT,
+	BH_FAILED,
+};
+
+/* Charging Speed */
+enum csi_type {
+	CSI_TYPE_UNKNOWN = -1,
+
+	CSI_TYPE_None = 0,		// Disconnected
+	CSI_TYPE_Fault = 1,		// Internal Failures
+	CSI_TYPE_JEITA = 2,		// HW limits (will have HOT or COLD)
+	CSI_TYPE_LongLife = 3, 		// DefenderConditions
+	CSI_TYPE_Adaptive = 4,		// AdaptiveCharging
+	CSI_TYPE_Normal = 5,		// All Good
+};
+
+enum csi_status {
+	CSI_STATUS_UNKNOWN = -1,
+
+	CSI_STATUS_Health_Cold = 10,	// battery temperature not nominal
+	CSI_STATUS_Health_Hot = 11,	// battery temperature not nominal
+	CSI_STATUS_System_Thermals = 20,// Thermal engine
+	CSI_STATUS_System_Load = 21,	// Load might eventually become thermals
+	CSI_STATUS_Adapter_Auth = 30,	// During authentication
+	CSI_STATUS_Adapter_Power = 31,	// Low power adapter
+	CSI_STATUS_Adapter_Quality = 32,// Adapter or cable (low input voltage)
+	CSI_STATUS_Defender_Temp = 40,	// TEMP Defend
+	CSI_STATUS_Defender_Dwell = 41,	// DWELL Defend
+	CSI_STATUS_Defender_Trickle = 42,
+	CSI_STATUS_Defender_Dock = 43,	// Dock Defend
+	CSI_STATUS_NotCharging = 100,	// There will be a more specific reason
+	CSI_STATUS_Charging = 200,	// All good
+};
+
+
 
 #endif  /* __GOOGLE_BMS_H_ */

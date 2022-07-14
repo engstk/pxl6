@@ -23,42 +23,30 @@
 
 #include "nfcc_coex_session.h"
 #include "nfcc_coex_region.h"
-
-#include <linux/errno.h>
-#include <linux/ieee802154.h>
-#include <linux/string.h>
+#include "nfcc_coex_trace.h"
 
 void nfcc_coex_session_init(struct nfcc_coex_local *local)
 {
 	struct nfcc_coex_session_params *p = &local->session.params;
 
 	memset(p, 0, sizeof(*p));
-	p->time0_ns = (NS_PER_SECOND * local->llhw->anticip_dtu) /
-		      local->llhw->dtu_freq_hz;
 }
 
-void nfcc_coex_session_update(struct nfcc_coex_session *session,
+void nfcc_coex_session_update(struct nfcc_coex_local *local,
+			      struct nfcc_coex_session *session,
 			      u32 next_timestamp_dtu, int region_duration_dtu)
 {
-	s32 diff_dtu =
-		session->region_demand.timestamp_dtu - next_timestamp_dtu;
+	struct mcps802154_region_demand *rd = &session->region_demand;
 
-	if (diff_dtu < 0) {
-		session->region_demand.timestamp_dtu = next_timestamp_dtu;
-#if 0
-		/**
-		 * TODO: Update duration with futur scheduler (UWB-1101)
-		 * With endless scheduler, region_duration_dtu is always 0.
-		 */
-		if (region_duration_dtu &&
-		    session->region_demand.duration_dtu) {
-			session->region_demand.duration_dtu =
-				min(session->region_demand.duration_dtu,
-				    region_duration_dtu);
-		} else if (region_duration_dtu) {
-			session->region_demand.duration_dtu =
-				region_duration_dtu;
-		}
-#endif
+	if (is_before_dtu(rd->timestamp_dtu, next_timestamp_dtu)) {
+		int shift_dtu = next_timestamp_dtu - rd->timestamp_dtu;
+		int new_duration_dtu = rd->max_duration_dtu - shift_dtu;
+
+		/* Date is late. */
+		new_duration_dtu = new_duration_dtu < 0 ? 0 : new_duration_dtu;
+		trace_region_nfcc_coex_session_update_late(local, shift_dtu,
+							   new_duration_dtu);
+		rd->timestamp_dtu = next_timestamp_dtu;
+		rd->max_duration_dtu = new_duration_dtu;
 	}
 }

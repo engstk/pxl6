@@ -25,9 +25,6 @@
 
 #include "dw3000.h"
 
-#define COEX_TIME_US (dw->coex_delay_us)
-#define COEX_MARGIN_US (dw->coex_margin_us)
-
 static inline int dw3000_coex_stop(struct dw3000 *dw);
 
 /**
@@ -45,13 +42,17 @@ static inline int dw3000_coex_stop(struct dw3000 *dw);
  */
 static inline int dw3000_coex_gpio(struct dw3000 *dw, int state, int delay_us)
 {
-	int ret;
+	int rc;
 
-	ret = dw->chip_ops->coex_gpio(dw, state, delay_us);
-	if (!ret)
+	/* Use SPI in queuing mode */
+	dw3000_spi_queue_start(dw);
+	rc = dw->chip_ops->coex_gpio(dw, state, delay_us);
+	if (rc)
+		return dw3000_spi_queue_reset(dw, rc);
+	rc = dw3000_spi_queue_flush(dw);
+	if (!rc)
 		dw->coex_status = state;
-
-	return ret;
+	return rc;
 }
 
 /**
@@ -61,40 +62,54 @@ static inline int dw3000_coex_gpio(struct dw3000 *dw, int state, int delay_us)
  * @trx_date_dtu: pointer to tx/rx_date_dtu parameter to update
  * @cur_time_dtu: current device time in DTU
  *
+ * Calculate a timer delay in us and programme it to ensure the WiFi coex
+ * GPIO is asserted at least `coex_delay_us` before the next operation.
+ *
+ * This function also reset the GPIO immediatly if the calculated timer delay
+ * is more than `coex_interval_us`.
+ *
  * Return: 0 on success, else a negative error code.
  */
 static inline int dw3000_coex_start(struct dw3000 *dw, bool *trx_delayed,
 				    u32 *trx_date_dtu, u32 cur_time_dtu)
 {
 	int delay_us;
+	int timer_us = 0;
 
 	if (dw->coex_gpio < 0)
 		return 0;
-	delay_us = COEX_TIME_US + COEX_MARGIN_US;
+	/* Add a margin for required SPI transactions to the coex delay time
+	 * to ensure GPIO change at right time. */
+	delay_us = dw->coex_delay_us + dw->coex_margin_us;
 	if (*trx_delayed == false) {
-		/* Change to delayed TX/RX with the configured delay */
+		/* Change to delayed TX/RX with the minimum required delay */
 		*trx_date_dtu = cur_time_dtu + US_TO_DTU(delay_us);
 		*trx_delayed = true;
-		/* Set gpio now */
-		delay_us = 0;
+		/* Leave timer_us to 0 to set gpio now. */
 	} else {
-		/* Calculate when we need to toggle the gpio */
+		/* Calculate timer duration to program. */
+		/* V                                     TX
+		 * |       time_difference_us            |
+		 * | margin | timer           |   delay  |
+		 *                            G
+		 *
+		 * timer = time_difference_us - (delay + margin)
+		 */
 		int time_difference_dtu = *trx_date_dtu - cur_time_dtu;
 		int time_difference_us = DTU_TO_US(time_difference_dtu);
-		if (time_difference_us <= delay_us)
-			delay_us = 0;
-		else
-			delay_us = time_difference_us - delay_us;
+		if (time_difference_us > delay_us)
+			timer_us = time_difference_us - delay_us;
+		/* else, too late for timer, set gpio now */
 	}
-	trace_dw3000_coex_gpio_start(dw, delay_us, dw->coex_status,
+	trace_dw3000_coex_gpio_start(dw, timer_us, dw->coex_status,
 				     dw->coex_interval_us);
 	if (dw->coex_status) {
-		if (delay_us < dw->coex_interval_us)
+		if (timer_us < dw->coex_interval_us)
 			return 0; /* Nothing more to do */
 		dw3000_coex_stop(dw);
 	}
 	/* Set coexistence gpio on chip */
-	return dw3000_coex_gpio(dw, true, delay_us);
+	return dw3000_coex_gpio(dw, true, timer_us);
 }
 
 /**

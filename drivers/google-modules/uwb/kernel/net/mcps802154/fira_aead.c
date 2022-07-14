@@ -27,7 +27,6 @@
 #include <crypto/aes.h>
 #include <linux/errno.h>
 #include <linux/ieee802154.h>
-#include <linux/ieee802154.h>
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <net/mcps802154_frame.h>
@@ -43,8 +42,13 @@ int fira_aead_set_key(struct fira_aead *aead, const u8 *key)
 	aead->tfm = NULL;
 
 	tfm = crypto_alloc_aead("ccm(aes)", 0, CRYPTO_ALG_ASYNC);
-	if (IS_ERR(tfm))
+	if (IS_ERR(tfm)) {
+		if (PTR_ERR(tfm) == -ENOENT) {
+			pr_err("The crypto transform ccm(aes) seems to be missing."
+			       " Please check your kernel configuration.\n");
+		}
 		return PTR_ERR(tfm);
+	}
 
 	r = crypto_aead_setkey(tfm, key, AES_KEYSIZE_128);
 	if (r)
@@ -177,4 +181,5 @@ int fira_aead_decrypt(struct fira_aead *aead, struct sk_buff *skb,
 void fira_aead_destroy(struct fira_aead *aead)
 {
 	crypto_free_aead(aead->tfm);
+	aead->tfm = NULL;
 }

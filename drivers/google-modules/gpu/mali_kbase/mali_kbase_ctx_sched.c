@@ -23,6 +23,9 @@
 #include <mali_kbase_defs.h>
 #include "mali_kbase_ctx_sched.h"
 #include "tl/mali_kbase_tracepoints.h"
+#if !MALI_USE_CSF
+#include <mali_kbase_hwaccess_jm.h>
+#endif
 
 /* Helper for ktrace */
 #if KBASE_KTRACE_ENABLE
@@ -124,7 +127,6 @@ int kbase_ctx_sched_retain_ctx(struct kbase_context *kctx)
 						kbdev, prev_kctx->id);
 					prev_kctx->as_nr = KBASEP_AS_NR_INVALID;
 				}
-
 				kctx->as_nr = free_as;
 				kbdev->as_to_kctx[free_as] = kctx;
 				KBASE_TLSTREAM_TL_KBASE_CTX_ASSIGN_AS(
@@ -173,6 +175,9 @@ void kbase_ctx_sched_release_ctx(struct kbase_context *kctx)
 			kbdev->as_to_kctx[kctx->as_nr] = NULL;
 			kctx->as_nr = KBASEP_AS_NR_INVALID;
 			kbase_ctx_flag_clear(kctx, KCTX_AS_DISABLED_ON_FAULT);
+#if !MALI_USE_CSF
+			kbase_backend_slot_kctx_purge_locked(kbdev, kctx);
+#endif
 		}
 	}
 
@@ -308,14 +313,12 @@ struct kbase_context *kbase_ctx_sched_as_to_ctx_nolock(
 bool kbase_ctx_sched_inc_refcount_nolock(struct kbase_context *kctx)
 {
 	bool result = false;
-	int as_nr;
 
 	if (WARN_ON(kctx == NULL))
 		return result;
 
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
 
-	as_nr = kctx->as_nr;
 	if (atomic_read(&kctx->refcount) > 0) {
 		KBASE_DEBUG_ASSERT(as_nr >= 0);
 

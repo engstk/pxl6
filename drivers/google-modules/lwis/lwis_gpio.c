@@ -14,6 +14,7 @@
 #include <linux/kernel.h>
 
 #include "lwis_gpio.h"
+#include "lwis_interrupt.h"
 
 /* debug function */
 void lwis_gpio_list_print(char *name, struct gpio_descs *gpios)
@@ -101,6 +102,44 @@ int lwis_gpio_list_set_input(struct gpio_descs *gpios)
 	return 0;
 }
 
+int lwis_gpio_list_to_irqs(struct lwis_device *lwis_dev, struct lwis_gpios_info *gpios_info,
+			   char *irq_gpios_names)
+{
+	struct gpio_descs *gpios;
+	struct lwis_interrupt_list *irq_list;
+	int i;
+	int irq;
+
+	if (!lwis_dev || !gpios_info) {
+		return -EINVAL;
+	}
+	gpios = gpios_info->gpios;
+	if (!gpios) {
+		return 0;
+	}
+
+	irq_list = lwis_interrupt_list_alloc(lwis_dev, gpios->ndescs);
+	if (IS_ERR(irq_list)) {
+		pr_err("Failed to allocate irq list\n");
+		return PTR_ERR(irq_list);
+	}
+
+	for (i = 0; i < gpios->ndescs; ++i) {
+		char *name;
+		irq = gpiod_to_irq(gpios->desc[i]);
+		if (irq < 0) {
+			pr_err("gpio to irq failed (%d)\n", irq);
+			lwis_interrupt_list_free(irq_list);
+			return irq;
+		}
+		name = irq_gpios_names + i * LWIS_MAX_NAME_STRING_LEN;
+		lwis_interrupt_get_gpio_irq(irq_list, i, name, irq);
+	}
+
+	gpios_info->irq_list = irq_list;
+	return 0;
+}
+
 struct lwis_gpios_list *lwis_gpios_list_alloc(int count)
 {
 	struct lwis_gpios_list *list;
@@ -134,6 +173,9 @@ void lwis_gpios_list_free(struct lwis_gpios_list *list)
 		return;
 	}
 
+	if (list->gpios_info->irq_list) {
+		lwis_interrupt_list_free(list->gpios_info->irq_list);
+	}
 	if (list->gpios_info) {
 		kfree(list->gpios_info);
 	}

@@ -1,7 +1,7 @@
 /*
  * Misc system wide definitions
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -35,7 +35,7 @@
 
 /* For all the corerevs of the chip being built */
 #ifdef VLSI_COREREVS
-#include <chip_defs.h>	/* auto-generated definitions from vlsi_data */
+#include <vlsi_chip_defs.h>	/* auto-generated definitions from vlsi_data */
 #endif /* VLSI_COREREVS */
 
 /* Use BCM_REFERENCE to suppress warnings about intentionally-unused function
@@ -172,7 +172,7 @@ extern bool bcm_postattach_part_reclaimed;
 #endif
 
 /* In case of coex cpu reinit, we should not relcaim the functions that are needed for reinit */
-#ifdef COEX_CPU_REINIT
+#if defined(COEX_CPU_REINIT) && !defined(COEX_CPU_REINIT_DISABLED)
 #define BCMCOEXCPUATTACHDATA(_data)	_data
 #define BCMCOEXCPUATTACHFN(_fn)		_fn
 #define BCMCOEXCPUPREATTACHDATA(_data)	_data
@@ -182,7 +182,7 @@ extern bool bcm_postattach_part_reclaimed;
 #define BCMCOEXCPUATTACHFN(_fn)		_fn
 #define BCMCOEXCPUPREATTACHDATA(_data)	BCMPREATTACHDATA(_data)
 #define BCMCOEXCPUPREATTACHFN(_fn)	BCMPREATTACHFN(_fn)
-#endif /* COEX_CPU_REINIT */
+#endif /* COEX_CPU_REINIT && !COEX_CPU_REINIT_DISABLED */
 
 #define _data	_data
 #define _fn		_fn
@@ -437,6 +437,14 @@ extern bool bcm_postattach_part_reclaimed;
 #else
 #define CR4REV(rev)	(rev)
 #define CR4REV_GE(rev, val)	((rev) >= (val))
+#endif
+
+#ifdef BCMARMCA7REV
+#define CA7REV(rev)		(BCMARMCA7REV)
+#define CA7REV_GE(rev, val)	((BCMARMCA7REV) >= (val))
+#else
+#define CA7REV(rev)		(rev)
+#define CA7REV_GE(rev, val)	((rev) >= (val))
 #endif
 
 #ifdef BCMLHLREV
@@ -922,11 +930,12 @@ extern bool _tx_histogram_enabled;
 #else
 #if defined(DONGLEBUILD)
 #define BCMPOSTTRAPFN(_fn)	__attribute__ ((__section__ (".text_posttrap." #_fn))) _fn
+#define BCMPOSTTRAPFASTPATH(_fn)	__attribute__ ((__section__ (".text_posttrapfp." #_fn))) _fn
 #else
 #define BCMPOSTTRAPFN(_fn)		_fn
+#define BCMPOSTTRAPFASTPATH(_fn)	_fn
 #endif /* DONGLEBUILD */
 #define BCMPOSTTRAPRAMFN(fn)	BCMPOSTTRAPFN(fn)
-#define BCMPOSTTRAPFASTPATH(fn)	BCMPOSTTRAPFN(fn)
 #endif /* ROMBUILD */
 
 typedef struct bcm_rng * bcm_rng_handle_t;
@@ -1014,6 +1023,9 @@ void* BCM_ASLR_CODE_FNPTR_RELOCATOR(void *func_ptr);
 /* Disable function inlining. */
 #define BCM_NOINLINE	__attribute__ ((noinline))
 
+/* Disable compiler optimizations for a function. */
+#define BCM_NO_OPTIMIZE	__attribute__ ((optimize(0)))
+
 /*
  * A compact form for a list of valid register address offsets.
  * Used for when dumping the contents of the register set for the user.
@@ -1029,6 +1041,8 @@ typedef struct _regs_bmp_list {
 	uint8 bmp_cnt[4];	/* bit[31]=1, bit[30:0] is count else it is a bitmap */
 } regs_list_t;
 
+#ifndef WL_UNITTEST
 typedef union d11rxhdr d11rxhdr_t;
+#endif /* WL_UNITTEST */
 
 #endif /* _bcmdefs_h_ */

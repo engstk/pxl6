@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -68,7 +68,8 @@
  */
 #define BASEP_MEM_NO_USER_FREE ((base_mem_alloc_flags)1 << 7)
 
-#define BASE_MEM_RESERVED_BIT_8 ((base_mem_alloc_flags)1 << 8)
+/* Must be FIXED memory. */
+#define BASE_MEM_FIXED ((base_mem_alloc_flags)1 << 8)
 
 /* Grow backing store on GPU Page Fault
  */
@@ -160,11 +161,16 @@
 /* Kernel side cache sync ops required */
 #define BASE_MEM_KERNEL_SYNC ((base_mem_alloc_flags)1 << 28)
 
+/* Must be FIXABLE memory: its GPU VA will be determined at a later point,
+ * at which time it will be at a fixed GPU VA.
+ */
+#define BASE_MEM_FIXABLE ((base_mem_alloc_flags)1 << 29)
+
 /* Number of bits used as flags for base memory management
  *
  * Must be kept in sync with the base_mem_alloc_flags flags
  */
-#define BASE_MEM_FLAGS_NR_BITS 29
+#define BASE_MEM_FLAGS_NR_BITS 30
 
 /* A mask of all the flags which are only valid for allocations within kbase,
  * and may not be passed from user space.
@@ -183,20 +189,19 @@
 
 /* A mask of all currently reserved flags
  */
-#define BASE_MEM_FLAGS_RESERVED \
-	BASE_MEM_RESERVED_BIT_8 | BASE_MEM_RESERVED_BIT_20
+#define BASE_MEM_FLAGS_RESERVED BASE_MEM_RESERVED_BIT_20
 
-#define BASEP_MEM_INVALID_HANDLE               (0ull  << 12)
-#define BASE_MEM_MMU_DUMP_HANDLE               (1ull  << 12)
-#define BASE_MEM_TRACE_BUFFER_HANDLE           (2ull  << 12)
-#define BASE_MEM_MAP_TRACKING_HANDLE           (3ull  << 12)
-#define BASEP_MEM_WRITE_ALLOC_PAGES_HANDLE     (4ull  << 12)
+#define BASEP_MEM_INVALID_HANDLE (0ul)
+#define BASE_MEM_MMU_DUMP_HANDLE (1ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_TRACE_BUFFER_HANDLE (2ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_MAP_TRACKING_HANDLE (3ul << LOCAL_PAGE_SHIFT)
+#define BASEP_MEM_WRITE_ALLOC_PAGES_HANDLE (4ul << LOCAL_PAGE_SHIFT)
 /* reserved handles ..-47<<PAGE_SHIFT> for future special handles */
-#define BASEP_MEM_CSF_USER_REG_PAGE_HANDLE     (47ul  << 12)
-#define BASEP_MEM_CSF_USER_IO_PAGES_HANDLE     (48ul  << 12)
-#define BASE_MEM_COOKIE_BASE                   (64ul  << 12)
-#define BASE_MEM_FIRST_FREE_ADDRESS            ((BITS_PER_LONG << 12) + \
-						BASE_MEM_COOKIE_BASE)
+#define BASEP_MEM_CSF_USER_REG_PAGE_HANDLE (47ul << LOCAL_PAGE_SHIFT)
+#define BASEP_MEM_CSF_USER_IO_PAGES_HANDLE (48ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_COOKIE_BASE (64ul << LOCAL_PAGE_SHIFT)
+#define BASE_MEM_FIRST_FREE_ADDRESS                                            \
+	((BITS_PER_LONG << LOCAL_PAGE_SHIFT) + BASE_MEM_COOKIE_BASE)
 
 #define KBASE_CSF_NUM_USER_IO_PAGES_HANDLE \
 	((BASE_MEM_COOKIE_BASE - BASEP_MEM_CSF_USER_IO_PAGES_HANDLE) >> \
@@ -301,7 +306,6 @@ typedef __u32 base_context_create_flags;
  */
 #define BASEP_KCPU_CQS_MAX_NUM_OBJS ((size_t)32)
 
-#if MALI_UNIT_TEST
 /**
  * enum base_kcpu_command_type - Kernel CPU queue command type.
  * @BASE_KCPU_COMMAND_TYPE_FENCE_SIGNAL:       fence_signal,
@@ -331,42 +335,8 @@ enum base_kcpu_command_type {
 	BASE_KCPU_COMMAND_TYPE_JIT_ALLOC,
 	BASE_KCPU_COMMAND_TYPE_JIT_FREE,
 	BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND,
-	BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER,
-	BASE_KCPU_COMMAND_TYPE_SAMPLE_TIME,
+	BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER
 };
-#else
-/**
- * enum base_kcpu_command_type - Kernel CPU queue command type.
- * @BASE_KCPU_COMMAND_TYPE_FENCE_SIGNAL:       fence_signal,
- * @BASE_KCPU_COMMAND_TYPE_FENCE_WAIT:         fence_wait,
- * @BASE_KCPU_COMMAND_TYPE_CQS_WAIT:           cqs_wait,
- * @BASE_KCPU_COMMAND_TYPE_CQS_SET:            cqs_set,
- * @BASE_KCPU_COMMAND_TYPE_CQS_WAIT_OPERATION: cqs_wait_operation,
- * @BASE_KCPU_COMMAND_TYPE_CQS_SET_OPERATION:  cqs_set_operation,
- * @BASE_KCPU_COMMAND_TYPE_MAP_IMPORT:         map_import,
- * @BASE_KCPU_COMMAND_TYPE_UNMAP_IMPORT:       unmap_import,
- * @BASE_KCPU_COMMAND_TYPE_UNMAP_IMPORT_FORCE: unmap_import_force,
- * @BASE_KCPU_COMMAND_TYPE_JIT_ALLOC:          jit_alloc,
- * @BASE_KCPU_COMMAND_TYPE_JIT_FREE:           jit_free,
- * @BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND:      group_suspend,
- * @BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER:      error_barrier,
- */
-enum base_kcpu_command_type {
-	BASE_KCPU_COMMAND_TYPE_FENCE_SIGNAL,
-	BASE_KCPU_COMMAND_TYPE_FENCE_WAIT,
-	BASE_KCPU_COMMAND_TYPE_CQS_WAIT,
-	BASE_KCPU_COMMAND_TYPE_CQS_SET,
-	BASE_KCPU_COMMAND_TYPE_CQS_WAIT_OPERATION,
-	BASE_KCPU_COMMAND_TYPE_CQS_SET_OPERATION,
-	BASE_KCPU_COMMAND_TYPE_MAP_IMPORT,
-	BASE_KCPU_COMMAND_TYPE_UNMAP_IMPORT,
-	BASE_KCPU_COMMAND_TYPE_UNMAP_IMPORT_FORCE,
-	BASE_KCPU_COMMAND_TYPE_JIT_ALLOC,
-	BASE_KCPU_COMMAND_TYPE_JIT_FREE,
-	BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND,
-	BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER,
-};
-#endif /* MALI_UNIT_TEST */
 
 /**
  * enum base_queue_group_priority - Priority of a GPU Command Queue Group.
@@ -568,11 +538,6 @@ struct base_kcpu_command_group_suspend_info {
 	__u8 padding[3];
 };
 
-#if MALI_UNIT_TEST
-struct base_kcpu_command_sample_time_info {
-	__u64 time;
-};
-#endif /* MALI_UNIT_TEST */
 
 /**
  * struct base_kcpu_command - kcpu command.
@@ -580,15 +545,17 @@ struct base_kcpu_command_sample_time_info {
  * @padding:	padding to a multiple of 64 bits
  * @info:	structure which contains information about the kcpu command;
  *		actual type is determined by @p type
- * @info.fence:            Fence
- * @info.cqs_wait:         CQS wait
- * @info.cqs_set:          CQS set
- * @info.import:           import
- * @info.jit_alloc:        jit allocation
- * @info.jit_free:         jit deallocation
- * @info.suspend_buf_copy: suspend buffer copy
- * @info.sample_time:      sample time
- * @info.padding:          padding
+ * @info.fence:              Fence
+ * @info.cqs_wait:           CQS wait
+ * @info.cqs_set:            CQS set
+ * @info.cqs_wait_operation: CQS wait operation
+ * @info.cqs_set_operation:  CQS set operation
+ * @info.import:             import
+ * @info.jit_alloc:          JIT allocation
+ * @info.jit_free:           JIT deallocation
+ * @info.suspend_buf_copy:   suspend buffer copy
+ * @info.sample_time:        sample time
+ * @info.padding:            padding
  */
 struct base_kcpu_command {
 	__u8 type;
@@ -603,9 +570,6 @@ struct base_kcpu_command {
 		struct base_kcpu_command_jit_alloc_info jit_alloc;
 		struct base_kcpu_command_jit_free_info jit_free;
 		struct base_kcpu_command_group_suspend_info suspend_buf_copy;
-#if MALI_UNIT_TEST
-		struct base_kcpu_command_sample_time_info sample_time;
-#endif /* MALI_UNIT_TEST */
 		__u64 padding[2]; /* No sub-struct should be larger */
 	} info;
 };

@@ -45,9 +45,6 @@ struct lwis_transaction_event_list {
 	struct hlist_node node;
 };
 
-int lwis_entry_poll(struct lwis_device *lwis_dev, struct lwis_io_entry *entry, bool non_blocking);
-int lwis_entry_read_assert(struct lwis_device *lwis_dev, struct lwis_io_entry *entry);
-
 int lwis_transaction_init(struct lwis_client *client);
 int lwis_transaction_clear(struct lwis_client *client);
 int lwis_transaction_client_flush(struct lwis_client *client);
@@ -57,6 +54,8 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 				   int64_t event_counter, struct list_head *pending_events,
 				   bool in_irq);
 int lwis_transaction_cancel(struct lwis_client *client, int64_t id);
+
+void lwis_transaction_free(struct lwis_device *lwis_dev, struct lwis_transaction *transaction);
 
 /* Expects lwis_client->transaction_lock to be acquired before calling
  * the following functions. */

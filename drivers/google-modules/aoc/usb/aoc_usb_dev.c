@@ -152,7 +152,6 @@ static int aoc_usb_setup_done(struct aoc_usb_drvdata *drvdata)
 {
 	int ret;
 	struct CMD_USB_CONTROL_SETUP *cmd;
-	uint64_t aoc_dcbaa;
 
 	cmd = kzalloc(sizeof(struct CMD_USB_CONTROL_SETUP), GFP_KERNEL);
 	if (!cmd)
@@ -171,8 +170,6 @@ static int aoc_usb_setup_done(struct aoc_usb_drvdata *drvdata)
 		kfree(cmd);
 		return ret;
 	}
-
-	aoc_dcbaa = cmd->aoc_dcbaa;
 
 	kfree(cmd);
 

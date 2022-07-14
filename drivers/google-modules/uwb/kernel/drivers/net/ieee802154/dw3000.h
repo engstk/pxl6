@@ -34,6 +34,7 @@
 #include "dw3000_calib.h"
 #include "dw3000_testmode_nl.h"
 #include "dw3000_nfcc_coex.h"
+#include "dw3000_pctt.h"
 #include "dw3000_debugfs.h"
 
 #undef BIT_MASK
@@ -45,6 +46,8 @@
 	do {                                                            \
 		pr_info("dw3000: %s(): " format "\n", __func__, ##arg); \
 	} while (0)
+
+extern unsigned dw3000_regulator_delay_us;
 
 /* Defined constants when SPI CRC mode is used */
 enum dw3000_spi_crc_mode {
@@ -98,6 +101,16 @@ struct dw3000_isr_data {
 #define DW3000_RX_ENABLE_STARTUP_DTU                          \
 	(DW3000_RX_ENABLE_STARTUP_DLY * DW3000_CHIP_PER_DLY / \
 	 DW3000_CHIP_PER_DTU)
+
+/* UWB High band 802.15.4a-2007. Only channels 5 & 9 for DW3000. */
+#define DW3000_SUPPORTED_CHANNELS ((1 << 5) | (1 << 9))
+
+/* Number of symbols of accumulation to wait before checking
+   for an SFD pattern, when Ipatov len > 64 */
+#define DW3000_RX_SFD_HLDOFF 0x20
+/* Default number of symbols of accumulation to wait before checking
+   for an SFD pattern */
+#define DW3000_RX_SFD_HLDOFF_DEF 0x14
 
 /**
  * typedef dw3000_wakeup_done_cb - Wake up done handler.
@@ -164,29 +177,33 @@ enum dw3000_ciagdiag_reg_select {
 /**
  * struct dw3000_local_data - Local data and register cache
  * @spicrc: current SPI crc mode
- * @dgc_otp_set: true if DGC info is programmed into OTP
+ * @ciadiag_reg_select: CIA diagnostic register selector according to DW3000's
+ *  config
  * @ciadiag_enabled: CIA diagnostic on/off
+ * @dgc_otp_set: true if DGC info is programmed into OTP
+ * @check_cfo: true when CFO checking is required for next RX frame
+ * @ack_time: Auto ack turnaroud time
  * @dblbuffon: double buffering mode
+ * @xtal_bias: XTAL trimming adjustment value
  * @max_frames_len: current configured max frame length
  * @sleep_mode: bitfield for work to be done on wakeup
  * @ststhreshold: current computed STS threshold
- * @ciadiag_reg_select: CIA diagnostic register selector according to DW3000's
- *  config
  * @tx_fctrl: Transmit frame control
  * @rx_timeout_pac: Preamble detection timeout period in units of PAC size
  *  symbols
  * @w4r_time: Wait-for-response time (RX after TX delay)
- * @ack_time: Auto ack turnaroud time
  * @sts_key: STS Key
  * @sts_iv: STS IV
  */
 struct dw3000_local_data {
 	enum dw3000_spi_crc_mode spicrc;
-	bool dgc_otp_set : 1;
-	bool ciadiag_enabled : 1;
 	enum dw3000_ciagdiag_reg_select ciadiag_reg_select;
+	bool ciadiag_enabled : 1;
+	bool dgc_otp_set : 1;
+	bool check_cfo : 1;
 	u8 dblbuffon;
 	u8 ack_time;
+	s8 xtal_bias;
 	u16 sleep_mode;
 	u16 max_frames_len;
 	s16 ststhreshold;
@@ -249,6 +266,8 @@ struct dw3000_rx {
 	u64 ts_rctu;
 	/* Additional information on rx. See dw3000_rx_flags. */
 	u8 flags;
+	/* Busy flag */
+	u8 busy;
 };
 
 /* DW3000 STS length field of the CP_CFG register (unit of 8 symbols bloc) */
@@ -266,6 +285,8 @@ enum dw3000_sts_lengths {
 
 /* DW3000 power supply structure */
 struct dw3000_power_control {
+	/* Power supply  generic */
+	struct regulator *regulator_vdd;
 	/* Power supply  1.8V */
 	struct regulator *regulator_1p8;
 	/* Power supply  2.5V */
@@ -287,7 +308,6 @@ struct dw3000_power_control {
  * @stsLength: STS length (see enum dw3000_sts_lengths)
  * @pdoaMode: PDOA mode
  * @ant: Antennas currently connected to RF1 & RF2 ports respectively
- * @antpair_spacing_mm_q11: Holds selected antennas pair spacing from calibration table
  * @pdoaOffset: Calibrated PDOA offset
  * @pdoaLut: Pointer to calibrated PDOA to AoA look-up table
  * @rmarkerOffset: Calibrated rmarker offset
@@ -309,7 +329,6 @@ struct dw3000_config {
 	enum dw3000_sts_lengths stsLength;
 	u8 pdoaMode;
 	s8 ant[2];
-	int antpair_spacing_mm_q11;
 	s16 pdoaOffset;
 	const dw3000_pdoa_lut_t *pdoaLut;
 	u32 rmarkerOffset;
@@ -392,6 +411,10 @@ enum power_state {
  * @DW3000_AFILT_PANC_CHANGED: same as IEEE802154_AFILT_PANC_CHANGED
  * @DW3000_CHANNEL_CHANGED: channel configuration changed
  * @DW3000_PCODE_CHANGED: preamble code configuration changed
+ * @DW3000_PREAMBLE_LENGTH_CHANGED: length of preamble changed
+ * @DW3000_SFD_CHANGED: Start Frame Delimiter changed
+ * @DW3000_PHR_RATE_CHANGED: Physical HeadeR rate changed
+ * @DW3000_DATA_RATE_CHANGED: Data rate changed
  */
 enum config_changed_flags {
 	DW3000_AFILT_SADDR_CHANGED = IEEE802154_AFILT_SADDR_CHANGED,
@@ -400,6 +423,10 @@ enum config_changed_flags {
 	DW3000_AFILT_PANC_CHANGED = IEEE802154_AFILT_PANC_CHANGED,
 	DW3000_CHANNEL_CHANGED = BIT(4),
 	DW3000_PCODE_CHANGED = BIT(5),
+	DW3000_PREAMBLE_LENGTH_CHANGED = BIT(6),
+	DW3000_SFD_CHANGED = BIT(7),
+	DW3000_PHR_RATE_CHANGED = BIT(8),
+	DW3000_DATA_RATE_CHANGED = BIT(9),
 };
 
 /**
@@ -464,6 +491,11 @@ struct dw3000_rctu_conv {
 	u64 synced_rmarker_rctu;
 };
 
+struct dw3000_cir_data;
+
+#define DW3000_MAX_QUEUED_SPI_XFER 32
+#define DW3000_QUEUED_SPI_BUFFER_SZ 2048
+
 /**
  * struct dw3000 - main DW3000 device structure
  * @spi: pointer to corresponding spi device
@@ -495,13 +527,15 @@ struct dw3000_rctu_conv {
  * @need_ranging_clock: true if next operation need ranging clock
  *			and deep sleep cannot be used
  * @nfcc_coex: NFCC coexistence specific context
+ * @pctt: PCTT specific context
  * @chip_dev_id: identified chip device ID
  * @chip_idx: index of current chip in supported devices array
  * @of_max_speed_hz: saved SPI max speed from device tree
  * @iface_is_started: interface status
  * @has_lock_pm: power management locked status
  * @reset_gpio: GPIO to use for hard reset
- * @regulator: Power supply
+ * @regulators: structure that holds regulators to toggle
+ * @is_powered: save current regulators state
  * @chips_per_pac: chips per PAC unit
  * @pre_timeout_pac: preamble timeout in PAC unit
  * @coex_delay_us: WiFi coexistence GPIO delay in us
@@ -510,7 +544,6 @@ struct dw3000_rctu_conv {
  *		      under which WiFi coexistence GPIO is kept active
  * @coex_gpio: WiFi coexistence GPIO, >= 0 if activated
  * @coex_status: WiFi coexistence GPIO status, 1 if activated
- * @sp0_rx_antenna: Special rx antenna to use for SP0, -1 if deactivated
  * @lna_pa_mode: LNA/PA configuration to use
  * @autoack: auto-ack status, true if activated
  * @pgf_cal_running: true if pgf calibration is running
@@ -522,6 +555,14 @@ struct dw3000_rctu_conv {
  * @spi_pid: PID of the SPI controller pump messages
  * @dw3000_pid: PID the dw3000 state machine thread
  * @restricted_channels: bit field of restricted channels
+ * @tx_rf2: parameter to enable the tx on rf2 port
+ * @cir_data_changed: true if buffer data have been reallocated
+ * @cir_data: allocated CIR exploitation data
+ * @msg_queue: SPI message holding transfer queue
+ * @msg_queue_xfer: next transfer available
+ * @msg_queue_xfer_count: number of queued transfers
+ * @msg_queue_buf: buffer for queued transfers
+ * @msg_queue_buf_pos: current position in buffer
  * @msg_mutex: mutex protecting @msg_readwrite_fdx
  * @msg_readwrite_fdx: pre-computed generic register read/write SPI message
  * @msg_fast_command: pre-computed fast command SPI message
@@ -581,6 +622,8 @@ struct dw3000 {
 	int auto_sleep_margin_us;
 	/* NFCC coexistence specific context. */
 	struct dw3000_nfcc_coex nfcc_coex;
+	/* PCTT specific context. */
+	struct dw3000_pctt pctt;
 	/* Chip type management */
 	u32 chip_dev_id;
 	u32 chip_idx;
@@ -592,7 +635,8 @@ struct dw3000 {
 	bool has_lock_pm;
 	/* Control GPIOs */
 	int reset_gpio;
-	/* power_state */
+	/* Regulators handler  */
+	struct dw3000_power_control regulators;
 	bool is_powered;
 	/* Chips per PAC unit. */
 	int chips_per_pac;
@@ -604,7 +648,6 @@ struct dw3000 {
 	unsigned coex_interval_us;
 	s8 coex_gpio;
 	int coex_status;
-	s8 sp0_rx_antenna;
 	/* LNA/PA mode */
 	s8 lna_pa_mode;
 	/* Is auto-ack activated? */
@@ -627,9 +670,19 @@ struct dw3000 {
 	pid_t dw3000_pid;
 	/* Restricted channels */
 	u16 restricted_channels;
+	/* enable tx on RF2 port  */
+	u8 tx_rf2;
+	/* Channel impulse response data */
+	bool cir_data_changed;
+	struct dw3000_cir_data *cir_data;
+	/* SPI message holding transfers queue */
+	struct spi_message *msg_queue;
+	struct spi_transfer *msg_queue_xfer;
+	unsigned msg_queue_xfer_count;
+	/* Buffer for queued transfers */
+	char *msg_queue_buf;
+	char *msg_queue_buf_pos;
 
-	/* Activate bandwith compensation  */
-	bool bw_comp;
 	/* Insert new fields before this line */
 
 	/* Shared message protected by a mutex */
@@ -649,7 +702,6 @@ struct dw3000 {
 	struct spi_message *msg_read_dss_status;
 	struct spi_message *msg_write_dss_status;
 	struct spi_message *msg_write_spi_collision_status;
-	struct dw3000_power_control regulators;
 };
 
 /**

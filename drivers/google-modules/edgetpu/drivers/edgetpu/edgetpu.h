@@ -11,6 +11,9 @@
 #include <linux/types.h>
 
 /* mmap offsets for mailbox CSRs, command queue, and response queue */
+#define EDGETPU_MMAP_EXT_CSR_OFFSET 0x1500000
+#define EDGETPU_MMAP_EXT_CMD_QUEUE_OFFSET 0x1600000
+#define EDGETPU_MMAP_EXT_RESP_QUEUE_OFFSET 0x1700000
 #define EDGETPU_MMAP_CSR_OFFSET 0x1800000
 #define EDGETPU_MMAP_CMD_QUEUE_OFFSET 0x1900000
 #define EDGETPU_MMAP_RESP_QUEUE_OFFSET 0x1A00000
@@ -579,5 +582,30 @@ struct edgetpu_ext_mailbox_ioctl {
  */
 #define EDGETPU_GET_FATAL_ERRORS \
 	_IOR(EDGETPU_IOCTL_BASE, 32, __u32)
+
+/*
+ * struct edgetpu_test_ext_ioctl
+ * @fd:			file descriptor of opened TPU device
+ * @mbox_bmap:		bitmap of requested mailboxes
+ * @client_type:	value based on type of client
+ * @cmd:		command to TPU driver on external interface
+ * @attrs:		mailbox attributes (pointer to
+ *			edgetpu_mailbox_attr, can be NULL)
+ */
+struct edgetpu_test_ext_ioctl {
+	__s32 fd;
+	__u32 mbox_bmap;
+	__u32 client_type;
+	__u32 cmd;
+	__u64 attrs;
+};
+
+/*
+ * Invokes external interface used for interoperating with TPU device.
+ *
+ * Usage is only for testing purpose and limited to ROOT user only.
+ */
+#define EDGETPU_TEST_EXTERNAL \
+	_IOW(EDGETPU_IOCTL_BASE, 33, struct edgetpu_test_ext_ioctl)
 
 #endif /* __EDGETPU_H__ */

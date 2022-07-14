@@ -271,7 +271,7 @@ dw3000_nfcc_coex_tlvs_check(struct dw3000 *dw,
 }
 
 /**
- * dw3000_nfcc_coex_process_tlvs() - Set data from message parsing.
+ * dw3000_nfcc_coex_message_check() - Check and read message.
  * @dw: Driver context.
  * @buffer: Buffer to read.
  * @rx_msg_info: Result of message parsed updated on success.

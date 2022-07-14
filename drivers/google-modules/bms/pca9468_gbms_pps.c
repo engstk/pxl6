@@ -18,28 +18,10 @@
 #include "pca9468_regs.h"
 #include "pca9468_charger.h"
 
-
 /* Logging ----------------------------------------------------------------- */
 
 int debug_printk_prlog = LOGLEVEL_INFO;
 int debug_no_logbuffer = 0;
-
-#define LOGBUFFER_TMPSIZE 256
-
-/* will add a \n (if not there) */
-void logbuffer_prlog(const struct pca9468_charger *pca9468, int level, const char *f, ...)
-{
-	va_list args;
-
-	va_start(args, f);
-
-	if (!debug_no_logbuffer)
-		logbuffer_vlog(pca9468->log, f, args);
-	if (level <= debug_printk_prlog)
-		vprintk(f, args);
-
-	va_end(args);
-}
 
 /* DC PPS integration ------------------------------------------------------ */
 
@@ -536,7 +518,7 @@ int pca9468_get_charge_type(struct pca9468_charger *pca9468)
 		return POWER_SUPPLY_CHARGE_TYPE_FAST;
 	case DC_STATE_START_CV:
 	case DC_STATE_CV_MODE:
-		return POWER_SUPPLY_CHARGE_TYPE_TAPER_EXT;
+		return POWER_SUPPLY_CHARGE_TYPE_TAPER;
 	case DC_STATE_CHECK_ACTIVE: /* in preset */
 	case DC_STATE_CHARGING_DONE:
 		break;

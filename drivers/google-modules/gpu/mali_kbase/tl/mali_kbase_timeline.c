@@ -197,8 +197,7 @@ int kbase_timeline_io_acquire(struct kbase_device *kbdev, u32 flags)
 		if (flags & BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS) {
 			ret = kbase_csf_tl_reader_start(
 				&timeline->csf_tl_reader, kbdev);
-			if (ret)
-			{
+			if (ret) {
 				atomic_set(timeline->timeline_flags, 0);
 				return ret;
 			}
@@ -223,13 +222,6 @@ int kbase_timeline_io_acquire(struct kbase_device *kbdev, u32 flags)
 
 		timeline->obj_header_btc = obj_desc_header_size;
 		timeline->aux_header_btc = aux_desc_header_size;
-
-		/* Start autoflush timer. */
-		atomic_set(&timeline->autoflush_timer_active, 1);
-		rcode = mod_timer(
-				&timeline->autoflush_timer,
-				jiffies + msecs_to_jiffies(AUTOFLUSH_INTERVAL));
-		CSTD_UNUSED(rcode);
 
 #if !MALI_USE_CSF
 		/* If job dumping is enabled, readjust the software event's
@@ -258,6 +250,16 @@ int kbase_timeline_io_acquire(struct kbase_device *kbdev, u32 flags)
 		kbase_tlstream_current_devfreq_target(kbdev);
 #endif /* CONFIG_MALI_DEVFREQ */
 
+		/* Start the autoflush timer.
+		 * We must do this after creating timeline objects to ensure we
+		 * don't auto-flush the streams which will be reset during the
+		 * summarization process.
+		 */
+		atomic_set(&timeline->autoflush_timer_active, 1);
+		rcode = mod_timer(&timeline->autoflush_timer,
+				  jiffies +
+					  msecs_to_jiffies(AUTOFLUSH_INTERVAL));
+		CSTD_UNUSED(rcode);
 	} else {
 		ret = -EBUSY;
 	}

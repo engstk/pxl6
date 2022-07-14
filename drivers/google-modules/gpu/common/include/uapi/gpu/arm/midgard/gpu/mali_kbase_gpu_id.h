@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2015-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2015-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -25,14 +25,15 @@
 #include <linux/types.h>
 
 /* GPU_ID register */
-#define GPU_ID_VERSION_STATUS_SHIFT       0
-#define GPU_ID_VERSION_MINOR_SHIFT        4
-#define GPU_ID_VERSION_MAJOR_SHIFT        12
-#define GPU_ID_VERSION_PRODUCT_ID_SHIFT   16
-#define GPU_ID_VERSION_STATUS             (0xFu  << GPU_ID_VERSION_STATUS_SHIFT)
-#define GPU_ID_VERSION_MINOR              (0xFFu << GPU_ID_VERSION_MINOR_SHIFT)
-#define GPU_ID_VERSION_MAJOR              (0xFu  << GPU_ID_VERSION_MAJOR_SHIFT)
-#define GPU_ID_VERSION_PRODUCT_ID  (0xFFFFu << GPU_ID_VERSION_PRODUCT_ID_SHIFT)
+#define KBASE_GPU_ID_VERSION_STATUS_SHIFT 0
+#define KBASE_GPU_ID_VERSION_MINOR_SHIFT 4
+#define KBASE_GPU_ID_VERSION_MAJOR_SHIFT 12
+#define KBASE_GPU_ID_VERSION_PRODUCT_ID_SHIFT 16
+
+#define GPU_ID_VERSION_STATUS (0xFu << KBASE_GPU_ID_VERSION_STATUS_SHIFT)
+#define GPU_ID_VERSION_MINOR (0xFFu << KBASE_GPU_ID_VERSION_MINOR_SHIFT)
+#define GPU_ID_VERSION_MAJOR (0xFu << KBASE_GPU_ID_VERSION_MAJOR_SHIFT)
+#define GPU_ID_VERSION_PRODUCT_ID (0xFFFFu << KBASE_GPU_ID_VERSION_PRODUCT_ID_SHIFT)
 
 #define GPU_ID2_VERSION_STATUS_SHIFT      0
 #define GPU_ID2_VERSION_MINOR_SHIFT       4
@@ -52,6 +53,20 @@
 #define GPU_ID2_VERSION        (GPU_ID2_VERSION_MAJOR | \
 								GPU_ID2_VERSION_MINOR | \
 								GPU_ID2_VERSION_STATUS)
+
+/* Helper macro to construct a value consisting of arch major and revision
+ * using the value of gpu_id.
+ */
+#define ARCH_MAJOR_REV_REG(gpu_id)                                             \
+	((((__u32)gpu_id) & GPU_ID2_ARCH_MAJOR) |                              \
+	 (((__u32)gpu_id) & GPU_ID2_ARCH_REV))
+
+/* Helper macro to create a partial GPU_ID (new format) that defines
+ * a arch major and revision.
+ */
+#define GPU_ID2_ARCH_MAJOR_REV_MAKE(arch_major, arch_rev)                      \
+	((((__u32)arch_major) << GPU_ID2_ARCH_MAJOR_SHIFT) |                   \
+	 (((__u32)arch_rev) << GPU_ID2_ARCH_REV_SHIFT))
 
 /* Helper macro to create a partial GPU_ID (new format) that defines
  * a product ignoring its version.
@@ -109,14 +124,21 @@
 #define GPU_ID2_PRODUCT_TGRX              GPU_ID2_MODEL_MAKE(10, 3)
 #define GPU_ID2_PRODUCT_TVAX              GPU_ID2_MODEL_MAKE(10, 4)
 #define GPU_ID2_PRODUCT_LODX              GPU_ID2_MODEL_MAKE(10, 7)
+#define GPU_ID2_PRODUCT_TTUX              GPU_ID2_MODEL_MAKE(11, 2)
+#define GPU_ID2_PRODUCT_LTUX              GPU_ID2_MODEL_MAKE(11, 3)
 
-/* Helper macro to create a GPU_ID assuming valid values for id, major,
- * minor, status
+/**
+ * GPU_ID_MAKE - Helper macro to generate GPU_ID using id, major, minor, status
+ *
+ * @id: Product Major of GPU ID
+ * @major: Version major of GPU ID
+ * @minor: Version minor of GPU ID
+ * @status: Version status of GPU ID
  */
-#define GPU_ID_MAKE(id, major, minor, status) \
-		((((__u32)id) << GPU_ID_VERSION_PRODUCT_ID_SHIFT) | \
-		(((__u32)major) << GPU_ID_VERSION_MAJOR_SHIFT) |   \
-		(((__u32)minor) << GPU_ID_VERSION_MINOR_SHIFT) |   \
-		(((__u32)status) << GPU_ID_VERSION_STATUS_SHIFT))
+#define GPU_ID_MAKE(id, major, minor, status)                                                      \
+	((((__u32)id) << KBASE_GPU_ID_VERSION_PRODUCT_ID_SHIFT) |                                  \
+	 (((__u32)major) << KBASE_GPU_ID_VERSION_MAJOR_SHIFT) |                                    \
+	 (((__u32)minor) << KBASE_GPU_ID_VERSION_MINOR_SHIFT) |                                    \
+	 (((__u32)status) << KBASE_GPU_ID_VERSION_STATUS_SHIFT))
 
 #endif /* _UAPI_KBASE_GPU_ID_H_ */

@@ -241,7 +241,7 @@ void dsim_reg_set_cmd_transfer_mode(u32 id, u32 lp);
 void dsim_reg_set_dphy_freq_hopping(u32 id, u32 p, u32 m, u32 k, u32 en);
 
 /* DSIM SFR dump */
-void __dsim_dump(u32 id, struct dsim_regs *regs);
+void __dsim_dump(struct drm_printer *p, u32 id, struct dsim_regs *regs);
 
 /* For dphy diagnosis */
 u32 diag_dsim_dphy_reg_read_mask(u32 id, u16 offset, u32 mask);

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * cal_9845/hdr_regs.c
+ *
  * Copyright (c) 2020 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *

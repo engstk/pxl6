@@ -17,6 +17,9 @@
 #define AOC_MIC_RECORD_GAIN_IN_DB_MIN -40
 #define AOC_MIC_RECORD_GAIN_IN_DB_MAX 30
 
+#define MMAP_MIC_RECORD_GAIN_IN_DB_MIN -300
+#define MMAP_MIC_RECORD_GAIN_IN_DB_MAX 0
+
 #define COMPRE_OFFLOAD_GAIN_MIN 0
 #define COMPRE_OFFLOAD_GAIN_MAX 8388608 /* 2^23 = 8388608 */
 
@@ -72,6 +75,11 @@ static int snd_aoc_ctl_info(struct snd_kcontrol *kcontrol,
 		uinfo->value.integer.min = 0;
 		uinfo->value.integer.max = 1;
 	} else if (kcontrol->private_value == BUILDIN_MIC_CAPTURE_LIST) {
+		uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+		uinfo->count = NUM_OF_BUILTIN_MIC;
+		uinfo->value.integer.min = -1;
+		uinfo->value.integer.max = NUM_OF_BUILTIN_MIC - 1;
+	} else if (kcontrol->private_value == BUILDIN_US_MIC_CAPTURE_LIST) {
 		uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 		uinfo->count = NUM_OF_BUILTIN_MIC;
 		uinfo->value.integer.min = -1;
@@ -169,6 +177,42 @@ snd_aoc_buildin_mic_capture_list_ctl_put(struct snd_kcontrol *kcontrol,
 	for (i = 0; i < NUM_OF_BUILTIN_MIC; i++)
 		chip->buildin_mic_id_list[i] =
 			ucontrol->value.integer.value[i]; // geting power state;
+
+	mutex_unlock(&chip->audio_mutex);
+	return 0;
+}
+
+static int
+snd_aoc_buildin_us_mic_capture_list_ctl_get(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	for (i = 0; i < NUM_OF_BUILTIN_MIC; i++)
+		ucontrol->value.integer.value[i] =
+			chip->buildin_us_mic_id_list[i];
+
+	mutex_unlock(&chip->audio_mutex);
+	return 0;
+}
+
+static int
+snd_aoc_buildin_us_mic_capture_list_ctl_put(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	int i;
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	for (i = 0; i < NUM_OF_BUILTIN_MIC; i++)
+		chip->buildin_us_mic_id_list[i] =
+			ucontrol->value.integer.value[i];
 
 	mutex_unlock(&chip->audio_mutex);
 	return 0;
@@ -464,6 +508,41 @@ static int mic_record_gain_ctl_get(struct snd_kcontrol *kcontrol,
 	err = aoc_mic_record_gain_get(chip, &ucontrol->value.integer.value[0]);
 	if (err < 0)
 		pr_err("ERR:%d mic record gain get fail\n", err);
+
+	mutex_unlock(&chip->audio_mutex);
+	return err;
+}
+
+static int mmap_record_gain_ctl_set(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+	int val, err = 0;
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	val = ucontrol->value.integer.value[0];
+	err = aoc_mmap_record_gain_set(chip, val);
+	if (err < 0)
+		pr_err("ERR:%d mmap record gain set to %d fail\n", err, val);
+
+	mutex_unlock(&chip->audio_mutex);
+	return err;
+}
+
+static int mmap_record_gain_ctl_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+	int err = 0;
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	err = aoc_mmap_record_gain_get(chip, &ucontrol->value.integer.value[0]);
+	if (err < 0)
+		pr_err("ERR:%d mmap record gain get fail\n", err);
 
 	mutex_unlock(&chip->audio_mutex);
 	return err;
@@ -861,6 +940,75 @@ static int audio_capture_mic_source_set(struct snd_kcontrol *kcontrol,
 
 	mutex_unlock(&chip->audio_mutex);
 
+	return err;
+}
+
+static int eraser_aec_ref_source_get(struct snd_kcontrol *kcontrol,
+				     struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	ucontrol->value.integer.value[0] = chip->eraser_aec_ref_source;
+
+	mutex_unlock(&chip->audio_mutex);
+	return 0;
+}
+
+static int eraser_aec_ref_source_set(struct snd_kcontrol *kcontrol,
+				     struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+	int err;
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	if (ucontrol->value.integer.value[0] < NUM_AEC_REF_SOURCE) {
+		chip->eraser_aec_ref_source = ucontrol->value.integer.value[0];
+		err = aoc_eraser_aec_reference_set(chip, chip->eraser_aec_ref_source);
+		if (err < 0)
+			pr_err("ERR:%d in Eraser aec ref source set\n", err);
+	} else {
+		err = -EINVAL;
+		pr_err("ERR:%d invalid ft aec ref source\n", err);
+	}
+
+	mutex_unlock(&chip->audio_mutex);
+	return err;
+}
+
+static int ft_aec_ref_source_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	ucontrol->value.integer.value[0] = chip->ft_aec_ref_source;
+
+	mutex_unlock(&chip->audio_mutex);
+	return 0;
+}
+
+static int ft_aec_ref_source_set(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+	int err = 0;
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	if (ucontrol->value.integer.value[0] < NUM_AEC_REF_SOURCE)
+		chip->ft_aec_ref_source = ucontrol->value.integer.value[0];
+	else {
+		err = -EINVAL;
+		pr_err("ERR:%d invalid ft aec ref source\n", err);
+	}
+
+	mutex_unlock(&chip->audio_mutex);
 	return err;
 }
 
@@ -1449,6 +1597,25 @@ static int a2dp_encoder_parameters_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int us_record_ctl_get(struct snd_kcontrol *kcontrol,
+			     struct snd_ctl_elem_value *ucontrol)
+{
+	return 0;
+}
+
+static int us_record_ctl_set(struct snd_kcontrol *kcontrol,
+			     struct snd_ctl_elem_value *ucontrol)
+{
+	struct aoc_chip *chip = snd_kcontrol_chip(kcontrol);
+
+	if (mutex_lock_interruptible(&chip->audio_mutex))
+		return -EINTR;
+
+	aoc_audio_us_record(chip, ucontrol->value.integer.value[0]);
+	mutex_unlock(&chip->audio_mutex);
+	return 0;
+}
+
 /* TODO: this has to be consistent to enum APMicProcessIndex in aoc-interface.h */
 static const char *builtin_mic_process_mode_texts[] = { "Raw", "Spatial" };
 static SOC_ENUM_SINGLE_DECL(builtin_mic_process_mode_enum, 1, 0,
@@ -1457,7 +1624,9 @@ static SOC_ENUM_SINGLE_DECL(builtin_mic_process_mode_enum, 1, 0,
 /* TODO: this has to be consistent to BT/USB Mode enum in aoc_alsa.h */
 static const char *bt_mode_texts[] = { "Unconfigured", "SCO",
 				       "ESCO",	       "A2DP_RAW",
-				       "A2DP_ENC_SBC", "A2DP_ENC_AAC" };
+				       "A2DP_ENC_SBC", "A2DP_ENC_AAC",
+				       "A2DP_ENC_LC3", "BLE_ENC_LC3",
+				       "BLE_CONVERSATION" };
 static SOC_ENUM_SINGLE_DECL(bt_mode_enum, 1, SINK_BT, bt_mode_texts);
 
 /* TODO: seek better way to create a series of controls  */
@@ -1507,6 +1676,15 @@ static const char *voice_call_mic_source_texts[] = { "Default", "Builtin_MIC", "
 static SOC_ENUM_SINGLE_DECL(voice_call_mic_source_enum, 1, 0,
 			    voice_call_mic_source_texts);
 
+/* AEC reference source */
+static const char *eraser_aec_ref_source_texts[NUM_AEC_REF_SOURCE] = { "Default", "SPEAKER", "USB",
+								       "BT" };
+static SOC_ENUM_SINGLE_DECL(eraser_aec_ref_source_enum, 1, 0, eraser_aec_ref_source_texts);
+
+static const char *ft_aec_ref_source_texts[NUM_AEC_REF_SOURCE] = { "Default", "SPEAKER", "USB",
+								   "BT" };
+static SOC_ENUM_SINGLE_DECL(ft_aec_ref_source_enum, 1, 0, ft_aec_ref_source_texts);
+
 static struct snd_kcontrol_new snd_aoc_ctl[] = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -1551,6 +1729,17 @@ static struct snd_kcontrol_new snd_aoc_ctl[] = {
 		.info = snd_aoc_ctl_info,
 		.get = snd_aoc_buildin_mic_capture_list_ctl_get,
 		.put = snd_aoc_buildin_mic_capture_list_ctl_put,
+		.count = 1,
+	},
+	{
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "BUILDIN US MIC ID CAPTURE LIST",
+		.index = 0,
+		.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,
+		.private_value = BUILDIN_US_MIC_CAPTURE_LIST,
+		.info = snd_aoc_ctl_info,
+		.get = snd_aoc_buildin_us_mic_capture_list_ctl_get,
+		.put = snd_aoc_buildin_us_mic_capture_list_ctl_put,
 		.count = 1,
 	},
 	{
@@ -1663,6 +1852,12 @@ static struct snd_kcontrol_new snd_aoc_ctl[] = {
 	SOC_ENUM_EXT("Audio Capture Mic Source", audio_capture_mic_source_enum,
 		     audio_capture_mic_source_get, audio_capture_mic_source_set),
 
+	SOC_ENUM_EXT("Eraser AEC Reference Source", eraser_aec_ref_source_enum,
+		     eraser_aec_ref_source_get, eraser_aec_ref_source_set),
+
+	SOC_ENUM_EXT("FT AEC Reference Source", ft_aec_ref_source_enum,
+		     ft_aec_ref_source_get, ft_aec_ref_source_set),
+
 	SOC_ENUM_EXT("Voice Call Mic Source", voice_call_mic_source_enum,
 		     voice_call_mic_source_get, voice_call_mic_source_set),
 	SOC_SINGLE_EXT("Voice Call Mic Mute", SND_SOC_NOPM, 0, 1, 0,
@@ -1727,6 +1922,9 @@ static struct snd_kcontrol_new snd_aoc_ctl[] = {
 	SOC_SINGLE_EXT("Incall Playback1 Mic Channel", SND_SOC_NOPM, 1, 2, 0, incall_playback_mic_channel_ctl_get,
 		       incall_playback_mic_channel_ctl_set),
 
+	/* UltraSonic Record enable */
+	SOC_SINGLE_EXT("US Record Enable", SND_SOC_NOPM, 0, 1, 0,
+		       us_record_ctl_get, us_record_ctl_set),
 
 
 	/* LVM enable 1/0 for comp offload */
@@ -1776,6 +1974,12 @@ static struct snd_kcontrol_new snd_aoc_ctl[] = {
 					  AOC_MIC_RECORD_GAIN_IN_DB_MIN,
 					  AOC_MIC_RECORD_GAIN_IN_DB_MAX, 1, mic_record_gain_ctl_get,
 					  mic_record_gain_ctl_set, NULL),
+
+	SOC_SINGLE_RANGE_EXT_TLV_modified("Mmap Record Gain", SND_SOC_NOPM, 0,
+					  MMAP_MIC_RECORD_GAIN_IN_DB_MIN,
+					  MMAP_MIC_RECORD_GAIN_IN_DB_MAX, 1,
+					  mmap_record_gain_ctl_get,
+					  mmap_record_gain_ctl_set, NULL),
 
 	SOC_SINGLE_EXT("Compress Offload Volume", SND_SOC_NOPM, 0, 100, 0, compr_offload_volume_get,
 		       compr_offload_volume_set),

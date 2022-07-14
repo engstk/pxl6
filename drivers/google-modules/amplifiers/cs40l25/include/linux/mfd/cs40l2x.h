@@ -1436,7 +1436,7 @@ struct cs40l2x_private {
 	bool xm_append;
 	char wt_file[CS40L2X_WT_FILE_NAME_LEN_MAX];
 	char wt_date[CS40L2X_WT_FILE_DATE_LEN_MAX];
-	char pwle_str[CS40L2X_PWLE_TOTAL_VALS];
+	char pwle_str[CS40L2X_MAX_WLEN];
 	bool exc_available;
 	struct cs40l2x_dblk_desc pre_dblks[CS40L2X_MAX_A2H_LEVELS];
 	struct cs40l2x_dblk_desc a2h_dblks[CS40L2X_MAX_A2H_LEVELS];

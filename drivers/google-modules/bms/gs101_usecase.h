@@ -14,9 +14,13 @@ struct max77759_usecase_data {
 	int bst_sel;		/* 5V or 7.5V */
 	int ext_bst_ctl;	/* MW VENDOR_EXTBST_CTRL */
 	int otg_enable;		/* enter/exit from OTG cases */
+	bool rx_otg_en;		/* enable WLC_RX -> WLC_RX + OTG case */
+	bool ext_otg_only;	/* use external OTG only */
+	int pogo_ovp_en;	/* pogo ovp */
 
 	int ls2_en;		/* OVP LS2, rtx case */
 	int sw_en;		/* OVP SW Enable, rtx+otg case */
+	int dc_sw_gpio;		/* WLC-DC switch enable */
 
 	int vin_is_valid;	/* MAX20339 STATUS1.vinvalid */
 	int lsw1_is_open;	/* MAX20339 STATUS2.lsw1open */
@@ -39,6 +43,9 @@ struct max77759_usecase_data {
 	struct i2c_client *client;
 	bool init_done;
 	int use_case;
+
+	bool dcin_is_dock;
+	bool wlctx_bst_en_first;
 };
 
 enum gsu_usecases {
@@ -62,6 +69,8 @@ enum gsu_usecases {
 	GSU_MODE_USB_OTG_WLC_TX	= 12,	/* 7-2, 1060, */
 
 	GSU_MODE_USB_WLC_RX	= 13,
+
+	GSU_MODE_DOCK		= 14,
 };
 
 extern int gs101_wlc_en(struct max77759_usecase_data *uc_data, bool wlc_on);

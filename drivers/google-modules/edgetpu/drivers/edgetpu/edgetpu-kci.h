@@ -207,8 +207,8 @@ struct edgetpu_kci_device_group_detail {
 };
 
 struct edgetpu_kci_open_device_detail {
-	/* The ID of mailbox to be opened. */
-	u16 mailbox_id;
+	/* The bit map of mailboxes to be opened. */
+	u16 mailbox_map;
 	/*
 	 * Virtual context ID @mailbox_id is associated to.
 	 * For device groups with @mailbox_detachable attribute the mailbox attached to the group
@@ -363,25 +363,29 @@ void edgetpu_kci_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s);
 /* Send shutdown request to firmware */
 int edgetpu_kci_shutdown(struct edgetpu_kci *kci);
 
-/* Request dump of inaccessible segments from firmware */
+/* Request dump of inaccessible segments from firmware.
+ *
+ * @init_buffer flag is used to indicate that the req is only sent to set the dump buffer address
+ * and size in FW.
+ */
 int edgetpu_kci_get_debug_dump(struct edgetpu_kci *kci, tpu_addr_t tpu_addr,
-			       size_t size);
+			       size_t size, bool init_buffer);
 
 /*
- * Inform the firmware to prepare to serve the VII of @mailbox_id.
+ * Inform the firmware to prepare to serve VII mailboxes included in @mailbox_map.
  *
  * You usually shouldn't call this directly - consider using
- * edgetpu_mailbox_activate() instead.
+ * edgetpu_mailbox_activate() or edgetpu_mailbox_activate_bulk() instead.
  */
-int edgetpu_kci_open_device(struct edgetpu_kci *kci, u32 mailbox_id, s16 vcid, bool first_open);
+int edgetpu_kci_open_device(struct edgetpu_kci *kci, u32 mailbox_map, s16 vcid, bool first_open);
 
 /*
- * Inform the firmware the VII with @mailbox_id is closed.
+ * Inform the firmware that the VII mailboxes included in @mailbox_map are closed.
  *
  * You usually shouldn't call this directly - consider using
- * edgetpu_mailbox_deactivate() instead.
+ * edgetpu_mailbox_deactivate() or edgetpu_mailbox_deactivate_bulk() instead.
  */
-int edgetpu_kci_close_device(struct edgetpu_kci *kci, u32 mailbox_id);
+int edgetpu_kci_close_device(struct edgetpu_kci *kci, u32 mailbox_map);
 
 /* Cancel work queues or wait until they're done */
 void edgetpu_kci_cancel_work_queues(struct edgetpu_kci *kci);

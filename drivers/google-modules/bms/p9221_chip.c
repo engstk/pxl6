@@ -18,6 +18,16 @@
 #include <linux/alarmtimer.h>
 #include <misc/logbuffer.h>
 #include "p9221_charger.h"
+#include "google_bms.h"
+
+#define P9XXX_NUM_GPIOS                 16
+#define P9XXX_MIN_GPIO                  0
+#define P9XXX_MAX_GPIO                  15
+#define P9XXX_GPIO_CPOUT_EN             1
+#define P9412_GPIO_CPOUT21_EN           2
+#define P9XXX_GPIO_CPOUT_CTL_EN         3
+#define P9XXX_GPIO_DC_SW_EN             4
+#define P9XXX_GPIO_VBUS_EN              15
 
 /* Simple Chip Specific Accessors */
 /*
@@ -707,7 +717,16 @@ static int p9412_chip_tx_mode(struct p9221_charger_data *chgr, bool enable)
 	int ret;
 
 	logbuffer_log(chgr->rtx_log, "%s(%d)", __func__, enable);
+
 	if (enable) {
+		if (chgr->pdata->apbst_en) {
+			ret = chgr->reg_write_8(chgr, P9412_APBSTPING_REG,
+						P9412_APBSTPING_7V);
+			logbuffer_log(chgr->rtx_log,
+				"configure Ext-Boost Vout to 7V.(%d)\n", ret);
+			if (ret < 0)
+				return ret;
+		}
 		ret = chgr->reg_write_8(chgr, P9412_TX_CMD_REG,
 					P9412_TX_CMD_TX_MODE_EN);
 		if (ret) {
@@ -715,19 +734,24 @@ static int p9412_chip_tx_mode(struct p9221_charger_data *chgr, bool enable)
 				 "tx_cmd_reg write failed (%d)\n", ret);
 			return ret;
 		}
-
 		ret = p9382_wait_for_mode(chgr, P9XXX_SYS_OP_MODE_TX_MODE);
 		if (ret)
 			logbuffer_log(chgr->rtx_log,
 				      "error waiting for tx_mode (%d)", ret);
 	} else {
-		ret = chgr->chip_set_cmd(chgr, P9221R5_COM_RENEGOTIATE);
+		ret = chgr->chip_set_cmd(chgr, P9412_CMD_TXMODE_EXIT);
 		if (ret == 0) {
 			ret = p9382_wait_for_mode(chgr, 0);
 			if (ret < 0)
 				pr_err("cannot exit rTX mode (%d)\n", ret);
 		}
+		if (chgr->pdata->apbst_en) {
+			ret = chgr->reg_write_8(chgr, P9412_APBSTPING_REG, 0);
+			logbuffer_log(chgr->rtx_log,
+				"configure Ext-Boost back to 5V.(%d)\n", ret);
+		}
 	}
+
 	return ret;
 }
 
@@ -790,7 +814,11 @@ static int p9221_send_ccreset(struct p9221_charger_data *chgr)
 {
 	int ret;
 
-	dev_info(&chgr->client->dev, "Send CC reset\n");
+	dev_info(&chgr->client->dev, "%s CC reset\n",
+		 chgr->is_mfg_google? "Send" : "Ignore");
+
+	if (chgr->is_mfg_google == false)
+		return 0;
 
 	mutex_lock(&chgr->cmd_lock);
 
@@ -807,7 +835,11 @@ static int p9412_send_ccreset(struct p9221_charger_data *chgr)
 {
 	int ret = 0;
 
-	dev_info(&chgr->client->dev, "Send CC reset\n");
+	dev_info(&chgr->client->dev, "%s CC reset\n",
+		 chgr->is_mfg_google? "Send" : "Ignore");
+
+	if (chgr->is_mfg_google == false)
+		return 0;
 
 	mutex_lock(&chgr->cmd_lock);
 
@@ -939,6 +971,9 @@ static int p9xxx_send_txid(struct p9221_charger_data *chgr)
 
 	/* TODO: write txid to bit(23, 0) */
 	memset(&chgr->tx_buf[1], 0x12, FAST_SERIAL_ID_SIZE - 1);
+
+        /* write phone type to bit(23, 17) */
+        chgr->tx_buf[3] = chgr->pdata->phone_type << 1;
 
 	/* write accessory type to bit(31, 24) */
 	chgr->tx_buf[4] = TX_ACCESSORY_TYPE;
@@ -1231,51 +1266,56 @@ static int p9221_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 	return -ENOTSUPP;
 }
 
+#define MAX77759_CHGR_MODE_ALL_OFF		0
 /* b/202795383 remove load current before enable P9412 CD mode */
 static int p9412_prop_mode_capdiv_enable(struct p9221_charger_data *chgr)
 {
-	union power_supply_propval dc_icl = { .intval = 0 };
-	int ret, rc;
+	int ret, i;
 
-	if (chgr->dc_psy) {
-		rc = power_supply_get_property(chgr->dc_psy,
-					       POWER_SUPPLY_PROP_CURRENT_MAX,
-					       &dc_icl);
-		if (rc == 0 && dc_icl.intval) {
-			union power_supply_propval prop = { .intval = 0 };
 
-			rc = power_supply_set_property(chgr->dc_psy,
-						       POWER_SUPPLY_PROP_CURRENT_MAX,
-						       &prop);
-			if (rc != 0) {
-				dev_err(&chgr->client->dev,
-					"CAP_DIV: cannot reduce load %d->0 (%d)\n",
-					dc_icl.intval, rc);
-			}
+	/* TODO: need to become a fake GPIO in the max77759 charger */
+	if (!chgr->chg_mode_votable)
+		chgr->chg_mode_votable =
+			gvotable_election_get_handle(GBMS_MODE_VOTABLE);
+	if (chgr->chg_mode_votable)
+		gvotable_cast_long_vote(chgr->chg_mode_votable,
+					P9221_WLC_VOTER,
+					MAX77759_CHGR_MODE_ALL_OFF, true);
+
+	/* total 2 seconds wait and early exit when WLC offline */
+	for (i = 0; i < 20; i += 1) {
+		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+		if (!chgr->online) {
+			ret = -ENODEV;
+			goto error_exit;
 		}
-
 	}
 
 	ret = p9412_capdiv_en(chgr, CDMODE_CAP_DIV_MODE);
 
-	if (chgr->dc_psy && dc_icl.intval) {
-		rc = power_supply_set_property(chgr->dc_psy,
-					       POWER_SUPPLY_PROP_CURRENT_MAX,
-					       &dc_icl);
-		if (rc != 0) {
-			dev_err(&chgr->client->dev,
-				"CAP_DIV: cannot restore load 0->%d (%d)\n",
-				dc_icl.intval, rc);
+	/* total 1 seconds wait and early exit when WLC offline */
+	for (i = 0; i < 10; i += 1) {
+		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+		if (!chgr->online) {
+			ret = -ENODEV;
+			goto error_exit;
 		}
 	}
+
+error_exit:
+	if (chgr->chg_mode_votable)
+		gvotable_cast_long_vote(chgr->chg_mode_votable,
+					P9221_WLC_VOTER,
+					MAX77759_CHGR_MODE_ALL_OFF, false);
 
 	return ret;
 }
 
 static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 {
-	int ret, loops;
+	int ret, loops, i;
 	u8 val8, cdmode, txpwr, pwr_stp, mode_sts, err_sts, prop_cur_pwr, prop_req_pwr;
+	u32 val = 0;
 
 	if (p9xxx_is_capdiv_en(chgr))
 		goto err_exit;
@@ -1309,6 +1349,19 @@ static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 	}
 
 	/*
+	 * Step 0: clear data type buffer:
+	 * write 0 to 0x800 and 0x801
+	 */
+	ret = chgr->reg_write_n(chgr,
+				P9412_COM_PACKET_TYPE_ADDR,
+				&val, 4);
+	if (ret) {
+		dev_err(&chgr->client->dev,
+			"Failed to clear data type buffer: %d\n", ret);
+		goto err_exit;
+	}
+
+	/*
 	 * Step 1: clear all interrupts:
 	 * write 0xFFFF to 0x3A then write 0x20 to 0x4E
 	 */
@@ -1328,9 +1381,47 @@ static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 
 	msleep(50);
 
+enable_capdiv:
+	if (chgr->pdata->has_sw_ramp) {
+		dev_dbg(&chgr->client->dev, "%s: voter=%s, icl=%d\n",
+			__func__, P9221_HPP_VOTER, P9XXX_CDMODE_ENABLE_ICL_UA);
+		ret = p9xxx_sw_ramp_icl(chgr, P9XXX_CDMODE_ENABLE_ICL_UA);
+		if (ret < 0)
+			return ret;
+
+		ret = gvotable_cast_int_vote(chgr->dc_icl_votable, P9221_HPP_VOTER,
+					     P9XXX_CDMODE_ENABLE_ICL_UA, true);
+		if (ret == 0)
+			ret = gvotable_cast_int_vote(chgr->dc_icl_votable,
+						     P9221_RAMP_VOTER, 0, false);
+		if (ret < 0)
+			dev_err(&chgr->client->dev, "%s: cannot setup sw ramp (%d)\n",
+				__func__, ret);
+
+	}
+
 	/*
-	 * Step 2: Enable Proprietary Mode: write 0x01 to 0x4F (0x4E bit8)
+	 * Step 2: enable Cap Divider configuration:
+	 * write 0x02 to 0x101 then write 0x40 to 0x4E
 	 */
+	ret = p9412_prop_mode_capdiv_enable(chgr);
+	if (ret) {
+		dev_err(&chgr->client->dev, "PROP_MODE: fail to enable Cap Div mode\n");
+		goto err_exit;
+	}
+
+	for (i = 0; i < 30; i += 1) {
+		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+		if (!chgr->online)
+			goto err_exit;
+	}
+
+	/*
+	 * Step 3: Enable Proprietary Mode: write 0x01 to 0x4F (0x4E bit8)
+	 */
+	if (val8 == P9XXX_SYS_OP_MODE_PROPRIETARY)
+		goto request_pwr;
+
 	ret = chgr->chip_set_cmd(chgr, PROP_MODE_EN_CMD);
 	if (ret) {
 		dev_err(&chgr->client->dev,
@@ -1341,7 +1432,7 @@ static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 	msleep(50);
 
 	/*
-	 * Step 3: wait for PropModeStat interrupt, register 0x37[4]
+	 * Step 4: wait for PropModeStat interrupt, register 0x37[4]
 	 */
 	/* 60 * 50 = 3 secs */
 	for (loops = 60 ; loops ; loops--) {
@@ -1355,8 +1446,9 @@ static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 	if (!chgr->prop_mode_en)
 		goto err_exit;
 
+request_pwr:
 	/*
-	 * Step 4: Read TX potential power register (0xC4)
+	 * Step 5: Read TX potential power register (0xC4)
 	 * [TX max power capability] in 0.5W units
 	 */
 	ret = chgr->reg_read_8(chgr, P9412_PROP_TX_POTEN_PWR_REG, &txpwr);
@@ -1368,19 +1460,6 @@ static int p9412_prop_mode_enable(struct p9221_charger_data *chgr, int req_pwr)
 		chgr->prop_mode_en = false;
 		goto err_exit;
 	}
-
-enable_capdiv:
-	/*
-	 * Step 5: enable Cap Divider configuration:
-	 * write 0x02 to 0x101 then write 0x40 to 0x4E
-	 */
-	ret = p9412_prop_mode_capdiv_enable(chgr);
-	if (ret) {
-		dev_err(&chgr->client->dev, "PROP_MODE: fail to enable Cap Div mode\n");
-		chgr->prop_mode_en = false;
-		goto err_exit;
-	} else
-		chgr->prop_mode_en = true;
 
 	/*
 	 * Step 6: Request xx W Neg power by writing 0xC5,
@@ -1404,7 +1483,11 @@ enable_capdiv:
 		goto err_exit;
 	}
 
-	msleep(50);
+	for (i = 0; i < 30; i += 1) {
+		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+		if (!chgr->online)
+			chgr->prop_mode_en = false;
+	}
 
 err_exit:
         /* check status */
@@ -1428,6 +1511,17 @@ err_exit:
 			 "req_pwr=%02x,prop_cur_pwr=%02x",
 			 chgr->prop_mode_en, val8, mode_sts, err_sts,
 			 cdmode, pwr_stp, prop_req_pwr, prop_cur_pwr);
+	}
+
+
+	if (!chgr->prop_mode_en) {
+		int rc;
+
+		rc = gvotable_cast_int_vote(chgr->dc_icl_votable, P9221_HPP_VOTER,
+					    P9XXX_CDMODE_ENABLE_ICL_UA, false);
+		if (rc <0)
+			dev_err(&chgr->client->dev, "%s: cannot remove HPP voter (%d)\n",
+				__func__, ret);
 	}
 
 	return chgr->prop_mode_en;
@@ -1747,15 +1841,6 @@ int p9221_chip_init_funcs(struct p9221_charger_data *chgr, u16 chip_id)
 	return 0;
 }
 
-
-#define P9XXX_NUM_GPIOS			16
-#define P9XXX_MIN_GPIO			0
-#define P9XXX_MAX_GPIO			15
-#define P9XXX_GPIO_CPOUT_EN		1
-#define P9412_GPIO_CPOUT21_EN		2
-#define P9XXX_GPIO_CPOUT_CTL_EN		3
-#define P9XXX_GPIO_VBUS_EN		15
-
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int p9xxx_gpio_get_direction(struct gpio_chip *chip,
 				    unsigned int offset)
@@ -1794,7 +1879,8 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 	switch (offset) {
 	case P9XXX_GPIO_CPOUT_EN:
 		/* take offline (if online) and set/reset QI_EN_L */
-		ret = vote(charger->wlc_disable_votable, CPOUT_EN_VOTER, !value, 0);
+		ret = gvotable_cast_bool_vote(charger->wlc_disable_votable,
+					      CPOUT_EN_VOTER, !value);
 		break;
 	case P9412_GPIO_CPOUT21_EN:
 		/* TODO: no-op for FW38+ */
@@ -1811,9 +1897,15 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 			ret = charger->chip_set_vout_max(charger, P9412_BPP_VOUT_DFLT);
 		break;
 	case P9XXX_GPIO_VBUS_EN:
-		if (charger->pdata->qi_vbus_en >= 0)
-			gpio_direction_output(charger->pdata->qi_vbus_en, !!value);
+		if (charger->pdata->wlc_en < 0)
+			break;
+		value = (!!value) ^ charger->pdata->wlc_en_act_low;
+		gpio_direction_output(charger->pdata->wlc_en, value);
 		break;
+	case P9XXX_GPIO_DC_SW_EN:
+		if (charger->pdata->dc_switch_gpio < 0)
+			break;
+		gpio_set_value_cansleep(charger->pdata->dc_switch_gpio, value);
 	default:
 		ret = -EINVAL;
 		break;

@@ -14,9 +14,14 @@
 #include <linux/types.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-domain-pool.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mapping.h"
 #include "edgetpu-mmu.h"
+
+#if !defined(EDGETPU_NUM_PREALLOCATED_DOMAINS)
+#define EDGETPU_NUM_PREALLOCATED_DOMAINS 0
+#endif
 
 struct edgetpu_iommu {
 	struct iommu_group *iommu_group;
@@ -26,13 +31,20 @@ struct edgetpu_iommu {
 	 */
 	struct iommu_domain *domains[EDGETPU_NCONTEXTS];
 	/*
-	 * Records all domains currently allocated, to support IOMMU (un)mapping
+	 * Records IDs for all domains currently allocated, to support IOMMU (un)mapping
 	 * when the domain is not attached.
 	 */
-	struct idr domain_pool;
-	struct mutex pool_lock;		/* protects access of @domain_pool */
+	struct idr domain_id_pool;
+	struct mutex pool_lock;		/* protects access of @domain_id_pool */
 	bool context_0_default;		/* is context 0 domain the default? */
 	bool aux_enabled;
+	/*
+	 * Holds a pool of pre-allocated IOMMU domains if the chip config specifies this is
+	 * required.
+	 * The implementation will fall back to dynamically allocated domains otherwise.
+	 */
+	struct edgetpu_domain_pool domain_pool;
+
 };
 
 struct edgetpu_iommu_map_params {
@@ -57,7 +69,7 @@ static struct iommu_domain *get_domain_by_token(struct edgetpu_iommu *etiommu,
 	struct iommu_domain *domain;
 
 	mutex_lock(&etiommu->pool_lock);
-	domain = idr_find(&etiommu->domain_pool, token);
+	domain = idr_find(&etiommu->domain_id_pool, token);
 	mutex_unlock(&etiommu->pool_lock);
 	return domain;
 }
@@ -131,8 +143,9 @@ static int edgetpu_unregister_iommu_device_fault_handler(struct edgetpu_dev *etd
 static int edgetpu_idr_free_domain_callback(int id, void *p, void *data)
 {
 	struct iommu_domain *domain = p;
+	struct edgetpu_iommu *etiommu = data;
 
-	iommu_domain_free(domain);
+	edgetpu_domain_pool_free(&etiommu->domain_pool, domain);
 	return 0;
 }
 
@@ -181,7 +194,7 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 	if (!etiommu->aux_enabled)
 		return -EINVAL;
 
-	domain = iommu_domain_alloc(etdev->dev->bus);
+	domain = edgetpu_domain_pool_alloc(&etiommu->domain_pool);
 	if (!domain) {
 		etdev_warn(etdev, "iommu domain alloc failed");
 		return -EINVAL;
@@ -189,7 +202,7 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 	ret = iommu_aux_attach_device(domain, etdev->dev);
 	if (ret) {
 		etdev_warn(etdev, "Attach IOMMU aux failed: %d", ret);
-		iommu_domain_free(domain);
+		edgetpu_domain_pool_free(&etiommu->domain_pool, domain);
 		return ret;
 	}
 	pasid = iommu_aux_get_pasid(domain, etdev->dev);
@@ -198,7 +211,7 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 		etdev_warn(etdev, "Invalid PASID %d returned from iommu\n",
 			   pasid);
 		iommu_aux_detach_device(domain, etdev->dev);
-		iommu_domain_free(domain);
+		edgetpu_domain_pool_free(&etiommu->domain_pool, domain);
 		return -EINVAL;
 	}
 out:
@@ -215,7 +228,9 @@ int edgetpu_mmu_attach(struct edgetpu_dev *etdev, void *mmu_info)
 	etiommu = kzalloc(sizeof(*etiommu), GFP_KERNEL);
 	if (!etiommu)
 		return -ENOMEM;
-	idr_init(&etiommu->domain_pool);
+	ret = edgetpu_domain_pool_init(etdev, &etiommu->domain_pool,
+				       EDGETPU_NUM_PREALLOCATED_DOMAINS);
+	idr_init(&etiommu->domain_id_pool);
 	mutex_init(&etiommu->pool_lock);
 	etiommu->iommu_group = iommu_group_get(etdev->dev);
 	if (etiommu->iommu_group)
@@ -278,11 +293,12 @@ void edgetpu_mmu_detach(struct edgetpu_dev *etdev)
 
 	/* free the domain if the context 0 domain is not default */
 	if (!etiommu->context_0_default && etiommu->domains[0])
-		iommu_domain_free(etiommu->domains[0]);
+		edgetpu_domain_pool_free(&etiommu->domain_pool, etiommu->domains[0]);
 
-	idr_for_each(&etiommu->domain_pool, edgetpu_idr_free_domain_callback,
-		     NULL);
-	idr_destroy(&etiommu->domain_pool);
+	idr_for_each(&etiommu->domain_id_pool, edgetpu_idr_free_domain_callback,
+		     etiommu);
+	idr_destroy(&etiommu->domain_id_pool);
+	edgetpu_domain_pool_destroy(&etiommu->domain_pool);
 	kfree(etiommu);
 	etdev->mmu_cookie = NULL;
 }
@@ -354,12 +370,15 @@ int edgetpu_mmu_map(struct edgetpu_dev *etdev, struct edgetpu_mapping *map,
 	 * Per-context mappings are mirrored to their specific domains here
 	 */
 	if (params.domain != default_domain) {
-		if (!iommu_map_sg(params.domain, iova, map->sgt.sgl,
-				  map->sgt.orig_nents, params.prot)) {
+		ssize_t mapped = (ssize_t)iommu_map_sg(params.domain, iova, map->sgt.sgl,
+						       map->sgt.orig_nents, params.prot);
+
+		/* iommu_map_sg returns 0 on failure before 5.15, returns -errno afterwards */
+		if (mapped <= 0) {
 			/* Undo the mapping in the default domain */
 			dma_unmap_sg_attrs(etdev->dev, map->sgt.sgl, map->sgt.orig_nents, map->dir,
 					   DMA_ATTR_SKIP_CPU_SYNC);
-			return -ENOMEM;
+			return mapped == 0 ? -ENOMEM : (int)mapped;
 		}
 	}
 
@@ -608,26 +627,26 @@ struct edgetpu_iommu_domain *edgetpu_mmu_alloc_domain(struct edgetpu_dev *etdev)
 
 	if (!etiommu->aux_enabled)
 		return &invalid_etdomain;
-	domain = iommu_domain_alloc(etdev->dev->bus);
+	domain = edgetpu_domain_pool_alloc(&etiommu->domain_pool);
 	if (!domain) {
-		etdev_warn(etdev, "iommu domain alloc failed");
+		etdev_warn(etdev, "iommu domain allocation failed");
 		return NULL;
 	}
 
 	etdomain = kzalloc(sizeof(*etdomain), GFP_KERNEL);
 	if (!etdomain) {
-		iommu_domain_free(domain);
+		edgetpu_domain_pool_free(&etiommu->domain_pool, domain);
 		return NULL;
 	}
 
 	mutex_lock(&etiommu->pool_lock);
-	token = idr_alloc(&etiommu->domain_pool, domain, 0,
+	token = idr_alloc(&etiommu->domain_id_pool, domain, 0,
 			  EDGETPU_DOMAIN_TOKEN_END, GFP_KERNEL);
 	mutex_unlock(&etiommu->pool_lock);
 	if (token < 0) {
 		etdev_warn(etdev, "alloc iommu domain token failed: %d", token);
 		kfree(etdomain);
-		iommu_domain_free(domain);
+		edgetpu_domain_pool_free(&etiommu->domain_pool, domain);
 		return NULL;
 	}
 
@@ -647,9 +666,9 @@ void edgetpu_mmu_free_domain(struct edgetpu_dev *etdev,
 		edgetpu_mmu_detach_domain(etdev, etdomain);
 	}
 	mutex_lock(&etiommu->pool_lock);
-	idr_remove(&etiommu->domain_pool, etdomain->token);
+	idr_remove(&etiommu->domain_id_pool, etdomain->token);
 	mutex_unlock(&etiommu->pool_lock);
-	iommu_domain_free(etdomain->iommu_domain);
+	edgetpu_domain_pool_free(&etiommu->domain_pool, etdomain->iommu_domain);
 	kfree(etdomain);
 }
 
