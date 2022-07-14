@@ -239,7 +239,7 @@ int kbase_dummy_job_wa_execute(struct kbase_device *kbdev, u64 cores)
 	return failed ? -EFAULT : 0;
 }
 
-static ssize_t show_dummy_job_wa_info(struct device * const dev,
+static ssize_t dummy_job_wa_info_show(struct device * const dev,
 		struct device_attribute * const attr, char * const buf)
 {
 	struct kbase_device *const kbdev = dev_get_drvdata(dev);
@@ -254,7 +254,7 @@ static ssize_t show_dummy_job_wa_info(struct device * const dev,
 	return err;
 }
 
-static DEVICE_ATTR(dummy_job_wa_info, 0444, show_dummy_job_wa_info, NULL);
+static DEVICE_ATTR_RO(dummy_job_wa_info);
 
 static bool wa_blob_load_needed(struct kbase_device *kbdev)
 {
@@ -277,6 +277,11 @@ int kbase_dummy_job_wa_load(struct kbase_device *kbdev)
 	u32 blob_offset;
 	int err;
 	struct kbase_context *kctx;
+
+	/* Calls to this function are inherently asynchronous, with respect to
+	 * MMU operations.
+	 */
+	const enum kbase_caller_mmu_sync_info mmu_sync_info = CALLER_MMU_ASYNC;
 
 	lockdep_assert_held(&kbdev->fw_load_lock);
 
@@ -372,8 +377,8 @@ int kbase_dummy_job_wa_load(struct kbase_device *kbdev)
 		nr_pages = PFN_UP(blob->size);
 		flags = blob->map_flags | BASE_MEM_FLAG_MAP_FIXED;
 
-		va_region = kbase_mem_alloc(kctx, nr_pages, nr_pages,
-					    0, &flags, &gpu_va);
+		va_region = kbase_mem_alloc(kctx, nr_pages, nr_pages, 0, &flags,
+					    &gpu_va, mmu_sync_info);
 
 		if (!va_region) {
 			dev_err(kbdev->dev, "Failed to allocate for blob\n");

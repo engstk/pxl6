@@ -120,6 +120,7 @@ struct exynos_drm_plane_state {
 	struct drm_property_blob *oetf_lut;
 	struct drm_property_blob *gm;
 	struct drm_property_blob *tm;
+	struct drm_property_blob *block;
 };
 
 static inline struct exynos_drm_plane_state *
@@ -155,6 +156,7 @@ struct exynos_drm_plane {
 		struct drm_property *gm;
 		struct drm_property *tm;
 		struct drm_property *colormap;
+		struct drm_property *block;
 	} props;
 };
 
@@ -234,6 +236,7 @@ struct exynos_drm_crtc_state {
 	uint32_t color_mode;
 	uint32_t in_bpc;
 	uint32_t force_bpc; /* crtc(DECON) bpc mode */
+	uint64_t expected_present_time;
 	struct exynos_dqe_state dqe;
 	struct drm_property_blob *cgc_lut;
 	struct drm_property_blob *disp_dither;
@@ -242,6 +245,7 @@ struct exynos_drm_crtc_state {
 	struct drm_property_blob *gamma_matrix;
 	struct drm_property_blob *histogram_roi;
 	struct drm_property_blob *histogram_weights;
+	struct drm_gem_object *cgc_gem;
 	enum exynos_drm_writeback_type wb_type;
 	u8 seamless_mode_changed : 1;
 	/**
@@ -310,9 +314,13 @@ struct exynos_drm_crtc {
 		struct drm_property *histogram_roi;
 		struct drm_property *histogram_weights;
 		struct drm_property *histogram_threshold;
+		struct drm_property *histogram_pos;
 		struct drm_property *partial;
+		struct drm_property *cgc_lut_fd;
+		struct drm_property *expected_present_time;
 	} props;
 	u8 active_state;
+	u32 rcd_plane_mask;
 };
 
 struct drm_exynos_file_private {

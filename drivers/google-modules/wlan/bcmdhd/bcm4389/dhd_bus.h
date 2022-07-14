@@ -4,7 +4,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -104,6 +104,7 @@ extern int dhd_bus_iovar_op(dhd_pub_t *dhdp, const char *name,
 
 /* Add bus dump output to a buffer */
 extern void dhd_bus_dump(dhd_pub_t *dhdp, struct bcmstrbuf *strbuf);
+extern void dhd_bus_dump_flowring(dhd_pub_t *dhdp, struct bcmstrbuf *strbuf);
 
 /* Clear any bus counters */
 extern void dhd_bus_clearcounts(dhd_pub_t *dhdp);
@@ -219,7 +220,8 @@ extern void dhd_bus_flow_ring_delete_response(struct dhd_bus *bus, uint16 flowid
 extern int dhd_bus_flow_ring_flush_request(struct dhd_bus *bus, void *flow_ring_node);
 extern void dhd_bus_flow_ring_flush_response(struct dhd_bus *bus, uint16 flowid, uint32 status);
 extern uint32 dhd_bus_max_h2d_queues(struct dhd_bus *bus);
-extern int dhd_bus_schedule_queue(struct dhd_bus *bus, uint16 flow_id, bool txs);
+extern int dhd_bus_schedule_queue(struct dhd_bus *bus, uint16 flow_id, bool txs,
+		uint32 bound, bool *is_qempty);
 
 #ifdef IDLE_TX_FLOW_MGMT
 extern void dhd_bus_flow_ring_resume_response(struct dhd_bus *bus, uint16 flowid, int32 status);
@@ -325,6 +327,10 @@ extern void dhd_bus_rx_bt_log(struct dhd_bus *bus, void* pkt);
 #ifdef DHD_WAKE_STATUS
 extern wake_counts_t* dhd_bus_get_wakecount(dhd_pub_t *dhd);
 extern int dhd_bus_get_bus_wake(dhd_pub_t * dhd);
+extern int dhd_bus_set_get_bus_wake(dhd_pub_t * dhd, int set);
+#if defined(BCMPCIE)
+extern int dhd_bus_set_get_bus_wake_pkt_dump(dhd_pub_t *dhd, int wake_pkt_dump);
+#endif /* BCMPCIE */
 #endif /* DHD_WAKE_STATUS */
 
 #ifdef BT_OVER_SDIO
@@ -354,6 +360,7 @@ extern void dhdpcie_advertise_bus_cleanup(dhd_pub_t  *dhdp);
 extern void dhd_msgbuf_iovar_timeout_dump(dhd_pub_t *dhd);
 extern void dhdpcie_induce_cbp_hang(dhd_pub_t *dhd);
 extern void dhdpcie_busbusy_wait(dhd_pub_t *dhdp);
+extern int dhd_dump_flowrings(dhd_pub_t *dhdp, char *buf, int buflen);
 #endif /* BCMPCIE */
 
 extern bool dhd_bus_force_bt_quiesce_enabled(struct dhd_bus *bus);

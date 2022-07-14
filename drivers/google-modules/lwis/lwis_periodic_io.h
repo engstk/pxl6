@@ -81,6 +81,6 @@ int lwis_periodic_io_client_flush(struct lwis_client *client);
 int lwis_periodic_io_client_cleanup(struct lwis_client *client);
 int lwis_periodic_io_submit(struct lwis_client *client, struct lwis_periodic_io *periodic_io);
 int lwis_periodic_io_cancel(struct lwis_client *client, int64_t id);
-void lwis_periodic_io_clean(struct lwis_periodic_io *periodic_io);
+void lwis_periodic_io_free(struct lwis_device *lwis_dev, struct lwis_periodic_io *periodic_io);
 
 #endif /* LWIS_PERIODIC_IO_H_ */

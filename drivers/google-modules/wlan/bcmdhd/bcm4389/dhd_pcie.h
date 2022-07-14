@@ -1,7 +1,7 @@
 /*
  * Linux DHD Bus Module for PCIE
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -156,7 +156,7 @@ typedef struct _dhd_ds_trace_t {
 
 #define PCIE_FASTLPO_ENABLED(buscorerev) \
 	((buscorerev == 66) || (buscorerev == 67) || (buscorerev == 68) || \
-	(buscorerev == 70) || (buscorerev == 72))
+	(buscorerev == 70) || (buscorerev == 72) || (buscorerev == 76))
 
 /*
  * HW JIRA - CRWLPCIEGEN2-672
@@ -250,8 +250,6 @@ typedef struct dhd_bus {
 #if !defined(NDIS)
 	struct pci_dev  *rc_dev;	/* pci RC device handle */
 	struct pci_dev  *dev;		/* pci device handle */
-	uint32 aspm_enab_during_suspend;	/* aspm enab flag during suspend */
-	uint32 l1ss_enab_during_suspend;	/* l1ss enab flag during suspend */
 #endif /* !defined(NDIS) */
 #ifdef DHD_EFI
 	void *pcie_dev;
@@ -440,6 +438,7 @@ typedef struct dhd_bus {
 	uint64 last_oob_irq_disable_time;
 #endif /* BCMPCIE_OOB_HOST_WAKE */
 	uint64 isr_entry_time;
+	uint64 prev_isr_entry_time;
 	uint64 isr_exit_time;
 	uint64 isr_sched_dpc_time;
 	uint64 rpm_sched_dpc_time;
@@ -459,6 +458,16 @@ typedef struct dhd_bus {
 	uint64 last_resume_start_time;
 	uint64 last_resume_end_time;
 	uint64 last_non_ours_irq_time;
+	uint64 dpc_time_usec;
+	uint64  *dpc_time_histo;
+	uint64 ctrl_cpl_post_time_usec;
+	uint64  *ctrl_cpl_post_time_histo;
+	uint64 tx_post_time_usec;
+	uint64  *tx_post_time_histo;
+	uint64 tx_cpl_time_usec;
+	uint64  *tx_cpl_time_histo;
+	uint64 rx_cpl_post_time_usec;
+	uint64  *rx_cpl_post_time_histo;
 	bool  hwa_enabled;
 	bool  idma_enabled;
 	bool  ifrm_enabled;
@@ -544,7 +553,8 @@ typedef struct dhd_bus {
 #ifdef BCMSLTGT
 	int xtalfreq;		/* Xtal frequency used for htclkratio calculation */
 	uint32 ilp_tick;	/* ILP ticks per second read from pmutimer */
-	uint32 xtal_ratio;	/* xtal ticks per 4 ILP ticks read from pmu_xtalfreq */
+	uint32 alp_to_ilp_ratio;	/* ALP ticks per ILP ticks read from pmu_xtalfreq */
+	uint32 xtal_to_alp_ratio;	/* xtal to ALP ratio which can change from chip to chip */
 #endif /* BCMSLTGT */
 	uint16 hp2p_txcpl_max_items;
 	uint16 hp2p_rxcpl_max_items;
@@ -563,7 +573,14 @@ typedef struct dhd_bus {
 	bool lpm_keep_in_reset; /* during LPM keep in FLR, if FLR force is enabled */
 	bool lpm_mem_kill; /* kill WLAN memories in LPM */
 	bool lpm_force_flr; /* Force F0 FLR on WLAN  when in LPM */
+	uint32 lpbk_xfer_data_pattern_type; /*  data Pattern type DMA lpbk */
 } dhd_bus_t;
+
+#define LPBK_DMA_XFER_DTPTRN_DEFAULT	0
+#define LPBK_DMA_XFER_DTPTRN_0x00	1
+#define LPBK_DMA_XFER_DTPTRN_0xFF	2
+#define LPBK_DMA_XFER_DTPTRN_0x55	3
+#define LPBK_DMA_XFER_DTPTRN_0xAA	4
 
 #define LPM_MODE_LPM_ALL	0x1
 #define LPM_MODE_NO_MEMKILL	0x010
@@ -836,9 +853,8 @@ extern int dhdpcie_send_mb_data(dhd_bus_t *bus, uint32 h2d_mb_data);
 #ifdef DHD_WAKE_STATUS
 int bcmpcie_get_total_wake(struct dhd_bus *bus);
 int bcmpcie_set_get_wake(struct dhd_bus *bus, int flag);
-#if defined(EWP_EDL)
-int bcmpcie_get_edl_wake(struct dhd_bus *bus);
-#endif /* EWP_EDL */
+int bcmpcie_get_wake(struct dhd_bus *bus);
+int bcmpcie_set_get_wake_pkt_dump(struct dhd_bus *bus, int wake_pkt_dump);
 #endif /* DHD_WAKE_STATUS */
 #ifdef DHD_MMIO_TRACE
 extern void dhd_dump_bus_mmio_trace(dhd_bus_t *bus, struct bcmstrbuf *strbuf);
@@ -857,6 +873,9 @@ extern enum dhd_bus_ds_state dhdpcie_bus_get_pcie_inband_dw_state(dhd_bus_t *bus
 extern const char * dhd_convert_inb_state_names(enum dhd_bus_ds_state inbstate);
 extern const char * dhd_convert_dsval(uint32 val, bool d2h);
 extern int dhd_bus_inb_set_device_wake(struct dhd_bus *bus, bool val);
+#ifdef PCIE_INB_DSACK_EXT_WAIT
+extern void dhd_bus_ds_ack_debug_dump(struct dhd_bus *bus);
+#endif /* PCIE_INB_DSACK_EXT_WAIT */
 extern void dhd_bus_inb_ack_pending_ds_req(dhd_bus_t *bus);
 #endif /* PCIE_INB_DW */
 extern void dhdpcie_bus_enab_pcie_dw(dhd_bus_t *bus, uint8 dw_option);
@@ -947,4 +966,7 @@ extern void dhd_deinit_dongle_ds_lock(dhd_bus_t *bus);
 
 extern bool dhd_check_htput_chip(dhd_bus_t *bus);
 
+#if defined(DEVICE_TX_STUCK_DETECT) && defined(ASSOC_CHECK_SR)
+void dhd_assoc_check_sr(dhd_pub_t *dhd, bool state);
+#endif /* DEVICE_TX_STUCK_DETECT && ASSOC_CHECK_SR */
 #endif /* dhd_pcie_h */

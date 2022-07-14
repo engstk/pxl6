@@ -30,6 +30,11 @@
 #include "dw3000_testmode.h"
 #include "dw3000_testmode_nl.h"
 
+int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
+		       int sfd_selector, int phr_rate, int data_rate);
+int set_channel(struct mcps802154_llhw *llhw, u8 page, u8 channel,
+		u8 preamble_code);
+
 static const struct nla_policy dw3000_tm_policy[DW3000_TM_ATTR_MAX + 1] = {
 	[DW3000_TM_ATTR_CMD] = { .type = NLA_U32 },
 	[DW3000_TM_ATTR_RX_GOOD_CNT] = { .type = NLA_U32 },
@@ -43,6 +48,13 @@ static const struct nla_policy dw3000_tm_policy[DW3000_TM_ATTR_MAX + 1] = {
 	[DW3000_TM_ATTR_CONTTX_FRAME_LENGHT] = { .type = NLA_U32 },
 	[DW3000_TM_ATTR_CONTTX_RATE] = { .type = NLA_U32 },
 	[DW3000_TM_ATTR_CONTTX_DURATION] = { .type = NLA_S32 },
+	[DW3000_TM_ATTR_PSR] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_SFD] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_PHR_RATE] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_DATA_RATE] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_PAGE] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_CHANNEL] = { .type = NLA_U32 },
+	[DW3000_TM_ATTR_PREAMBLE_CODE] = { .type = NLA_U32 },
 };
 
 struct do_tm_cmd_params {
@@ -308,6 +320,65 @@ static int do_tm_cmd_stop_cont_tx(struct dw3000 *dw, const void *in, void *out)
 	return dw3000_testmode_continuous_tx_stop(dw);
 }
 
+static int do_tm_cmd_set_hrp_params(struct dw3000 *dw, const void *in,
+				    void *out)
+{
+	const struct do_tm_cmd_params *params = in;
+	u32 psr;
+	u32 sfd;
+	u32 phr_rate;
+	u32 data_rate;
+
+	/* Verify the psr attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_PSR])
+		return -EINVAL;
+	psr = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_PSR]);
+
+	/* Verify the sfd attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_SFD])
+		return -EINVAL;
+	sfd = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_SFD]);
+
+	/* Verify the phr_rate attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_PHR_RATE])
+		return -EINVAL;
+	phr_rate = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_PHR_RATE]);
+
+	/* Verify the data_rate attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_DATA_RATE])
+		return -EINVAL;
+	data_rate = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_DATA_RATE]);
+
+	return set_hrp_uwb_params(params->llhw, 0, psr, sfd, phr_rate,
+				  data_rate);
+}
+
+static int do_tm_cmd_set_channel(struct dw3000 *dw, const void *in, void *out)
+{
+	const struct do_tm_cmd_params *params = in;
+	u32 page;
+	u32 channel;
+	u32 preamble_code;
+
+	/* Verify the page attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_PAGE])
+		return -EINVAL;
+	page = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_PAGE]);
+
+	/* Verify the channel attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_CHANNEL])
+		return -EINVAL;
+	channel = nla_get_u32(params->nl_attr[DW3000_TM_ATTR_CHANNEL]);
+
+	/* Verify the preamble_code attribute exists */
+	if (!params->nl_attr[DW3000_TM_ATTR_PREAMBLE_CODE])
+		return -EINVAL;
+	preamble_code =
+		nla_get_u32(params->nl_attr[DW3000_TM_ATTR_PREAMBLE_CODE]);
+
+	return set_channel(params->llhw, page, channel, preamble_code);
+}
+
 int dw3000_tm_cmd(struct mcps802154_llhw *llhw, void *data, int len)
 {
 	struct dw3000 *dw = llhw->priv;
@@ -327,12 +398,15 @@ int dw3000_tm_cmd(struct mcps802154_llhw *llhw, void *data, int len)
 		[DW3000_TM_CMD_START_CONTINUOUS_TX] = do_tm_cmd_start_cont_tx,
 		[DW3000_TM_CMD_STOP_CONTINUOUS_TX] = do_tm_cmd_stop_cont_tx,
 		[DW3000_TM_CMD_DEEP_SLEEP] = do_tm_cmd_deep_sleep,
+		[DW3000_TM_CMD_SET_HRP_PARAMS] = do_tm_cmd_set_hrp_params,
+		[DW3000_TM_CMD_SET_CHANNEL] = do_tm_cmd_set_channel,
 	};
 	u32 tm_cmd;
 	int ret;
 
 	ret = nla_parse(attr, DW3000_TM_ATTR_MAX, data, len, dw3000_tm_policy,
 			NULL);
+
 	if (ret)
 		return ret;
 

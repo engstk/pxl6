@@ -298,7 +298,7 @@ uint64_t edgetpu_firmware_get_build_time(struct edgetpu_firmware *et_fw);
  */
 bool edgetpu_firmware_verify_signature(struct edgetpu_dev *etdev,
 				       const char *name,
-				       void **image_data, size_t *image_size);
+				       const void **image_data, size_t *image_size);
 
 
 #endif /* __EDGETPU_FIRMWARE_H__ */

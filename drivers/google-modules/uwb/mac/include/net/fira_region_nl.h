@@ -51,6 +51,10 @@
  *	Get session state.
  * @FIRA_CALL_SESSION_GET_COUNT:
  *	Get count of active and inactive sessions.
+ * @FIRA_CALL_SET_CONTROLEE:
+ *	Set controlees to a session.
+ * @FIRA_CALL_GET_CONTROLEES:
+ *	Get the list of controlees.
  * @FIRA_CALL_MAX: Internal use.
  */
 enum fira_call {
@@ -66,7 +70,8 @@ enum fira_call {
 	FIRA_CALL_SESSION_GET_PARAMS,
 	FIRA_CALL_SESSION_GET_STATE,
 	FIRA_CALL_SESSION_GET_COUNT,
-	FIRA_CALL_SESSION_STATE_NOTIFICATION,
+	FIRA_CALL_SET_CONTROLEE,
+	FIRA_CALL_GET_CONTROLEES,
 	FIRA_CALL_MAX,
 };
 
@@ -248,6 +253,12 @@ enum fira_capability_attrs {
  *	Controlees information.
  * @FIRA_CALL_ATTR_RANGING_DATA:
  *	Ranging data.
+ * @FIRA_CALL_ATTR_CAPABILITIES:
+ *	Capabilities.
+ * @FIRA_CALL_ATTR_SESSION_STATE:
+ *	Session state.
+ * @FIRA_CALL_ATTR_SESSION_COUNT:
+ *	Sessions count.
  *
  * @FIRA_CALL_ATTR_UNSPEC: Invalid command.
  * @__FIRA_CALL_ATTR_AFTER_LAST: Internal use.
@@ -275,7 +286,7 @@ enum fira_call_attrs {
  * @FIRA_SESSION_PARAM_ATTR_DEVICE_ROLE:
  *	Responder (0) or initiator (1)
  * @FIRA_SESSION_PARAM_ATTR_RANGING_ROUND_USAGE:
- *	OWR (0, unused, not in FiRa 1.1), SS-TWR (1) or DS-TWR (2, default)
+ *	SS-TWR (1) or DS-TWR (2, default)
  * @FIRA_SESSION_PARAM_ATTR_MULTI_NODE_MODE:
  *	Unicast (0), one to many (1) or many to many (2, unused)
  * @FIRA_SESSION_PARAM_ATTR_SHORT_ADDR:
@@ -293,6 +304,8 @@ enum fira_call_attrs {
  * @FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDE_LENGTH:
  *	Value of block striding, default 0, can be changed when the
  *	session is active [controller only]
+ * @FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS:
+ *      Unlimited (0, default) or limit of measurements (1-65535)
  * @FIRA_SESSION_PARAM_ATTR_MAX_RR_RETRY:
  *	Number of failed ranging round attempts before stopping the session,
  *	or disabled (0, default) [controller only]
@@ -302,8 +315,6 @@ enum fira_call_attrs {
  *	Priority value, higher has more priority (1-100, default 50)
  * @FIRA_SESSION_PARAM_ATTR_RESULT_REPORT_PHASE:
  *	Disabled (0) or enabled (1, default) report phase [controller only]
- * @FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS:
- *      Number of measurements
  * @FIRA_SESSION_PARAM_ATTR_MR_AT_INITIATOR:
  *	Measurement report available at responder (0, default)
  *	or at initiator (1) [controller only]
@@ -335,24 +346,8 @@ enum fira_call_attrs {
  *	CRC16 (0, default) or CRC32 (1, not supported)
  * @FIRA_SESSION_PARAM_ATTR_TX_ADAPTIVE_PAYLOAD_POWER:
  *	Disable adaptive payload power for TX (0, default) or enable (1)
- * @FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_SELECTION:
- *	Reception antenna selection bitmask,
- *	bit 0 selects first antenna pair, etc. 0 for single RX (default)
- * @FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_PAIR_AZIMUTH:
- *	Index of the antenna pair used for azimuth angle measure,
- *	or 0xff if none (default)
- * @FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_PAIR_ELEVATION:
- *	Index of the antenna pair used for elevation angle measure,
- *	or 0xff if none (default)
- * @FIRA_SESSION_PARAM_ATTR_TX_ANTENNA_SELECTION:
- *	Tx antenna selection bitmask, bit 0 selects antenna 0, etc. Default to 1,
- *	switch between ranging rounds
- * @FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_SWITCH:
- *	If several antenna pairs are selected, switch pairs between round (0, default),
- *	use azimuth pair for POLL and elevation pair for FINAL messages when using
- *	DS-TWR as a responder (1),
- *	or, when controller, request two rangings per peer, use azimuth for first
- *	ranging and elevation for second ranging (2)
+ * @FIRA_SESSION_PARAM_ATTR_MEASUREMENT_SEQUENCE:
+ * 	Sequence of measurement steps. Configures antenna flexibility.
  * @FIRA_SESSION_PARAM_ATTR_STS_CONFIG:
  *	Static STS (0, default), dynamic STS (1) or dynamic STS for controlee
  *	individual keys (2)
@@ -403,6 +398,7 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_ROUND_DURATION_SLOTS,
 	FIRA_SESSION_PARAM_ATTR_BLOCK_STRIDE_LENGTH,
 	/* Behaviour */
+	FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS,
 	FIRA_SESSION_PARAM_ATTR_MAX_RR_RETRY,
 	FIRA_SESSION_PARAM_ATTR_ROUND_HOPPING,
 	FIRA_SESSION_PARAM_ATTR_PRIORITY,
@@ -422,12 +418,8 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_BPRF_PHR_DATA_RATE,
 	FIRA_SESSION_PARAM_ATTR_MAC_FCS_TYPE,
 	FIRA_SESSION_PARAM_ATTR_TX_ADAPTIVE_PAYLOAD_POWER,
-	/* Antenna */
-	FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_SELECTION,
-	FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_PAIR_AZIMUTH,
-	FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_PAIR_ELEVATION,
-	FIRA_SESSION_PARAM_ATTR_TX_ANTENNA_SELECTION,
-	FIRA_SESSION_PARAM_ATTR_RX_ANTENNA_SWITCH,
+	/* Measurement Sequence */
+	FIRA_SESSION_PARAM_ATTR_MEASUREMENT_SEQUENCE,
 	/* STS and crypto */
 	FIRA_SESSION_PARAM_ATTR_STS_CONFIG,
 	FIRA_SESSION_PARAM_ATTR_SUB_SESSION_ID,
@@ -446,14 +438,12 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_DATA_VENDOR_OUI,
 	FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD,
 
-	FIRA_SESSION_PARAM_ATTR_MAX_NUMBER_OF_MEASUREMENTS,
-
 	__FIRA_SESSION_PARAM_ATTR_AFTER_LAST,
 	FIRA_SESSION_PARAM_ATTR_MAX = __FIRA_SESSION_PARAM_ATTR_AFTER_LAST - 1
 };
 
 /**
- * enum fira_call_controlee_attrs - Fira session parameters attributes.
+ * enum fira_call_controlee_attrs - Fira controlee parameters attributes.
  *
  * @FIRA_CALL_CONTROLEE_ATTR_SHORT_ADDR:
  *	Controlee short address.
@@ -600,8 +590,8 @@ enum fira_ranging_data_measurements_attrs {
  * enum fira_ranging_data_measurements_aoa_attrs - Fira ranging AoA measurements
  * attributes.
  *
- * @FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_RX_ANTENNA_PAIR:
- *	Antenna pair index.
+ * @FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_RX_ANTENNA_SET:
+ *	Antenna set index.
  * @FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AOA_2PI:
  *	Estimation of reception angle.
  * @FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AOA_FOM:
@@ -615,7 +605,7 @@ enum fira_ranging_data_measurements_attrs {
  */
 enum fira_ranging_data_measurements_aoa_attrs {
 	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_UNSPEC,
-	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_RX_ANTENNA_PAIR,
+	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_RX_ANTENNA_SET,
 	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AOA_2PI,
 	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AOA_FOM,
 	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_PDOA_2PI,
@@ -623,6 +613,71 @@ enum fira_ranging_data_measurements_aoa_attrs {
 	__FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AFTER_LAST,
 	FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_MAX =
 		__FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_AFTER_LAST - 1
+};
+
+/**
+ * enum fira_session_param_meas_seq_step_attrs - Fira measurement sequence
+ * step attributes.
+ *
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_MEASUREMENT_TYPE:
+ *	The type of measurement to perform during the step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_N_MEASUREMENTS:
+ *	The number of times this type of measurement shall be performed
+ * 	during the step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SET_NONRANGING:
+ *	The antenna set to use to receive the non-rfames during the step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SETS_RANGING:
+ *	The antenna set to use to receive the rframes frame during the step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_TX_ANT_SET_NONRANGING:
+ *	The antenna set to use to transmit the non-rframes during the step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_TX_ANT_SET_RANGING:
+ *	The antenna set to use to transmit the rframes during the step.
+ *
+ *
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_UNSPEC: Invalid command.
+ * @__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_AFTER_LAST: Internal use.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_MAX: Internal use.
+ */
+enum fira_session_param_meas_seq_step_attrs {
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_UNSPEC,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_MEASUREMENT_TYPE,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_N_MEASUREMENTS,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SET_NONRANGING,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SETS_RANGING,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_TX_ANT_SET_NONRANGING,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_TX_ANT_SET_RANGING,
+
+	__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_AFTER_LAST,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_MAX =
+		__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_AFTER_LAST - 1
+};
+
+/**
+ * enum fira_session_params_meas_seq_step_sets_attrs - Attributes of the
+ * Fira RX antenna sets to use during a step.
+ *
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_0:
+ *	Antenna set used to receive all rframes for range, azimuth and elevation
+ * 	steps or initial rframe for azimuth_elevation step.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_1:
+ *	Antenna set used to receive final rframes for azimuth_elevation step.
+ *
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_UNSPEC:
+ * 	Invalid command.
+ * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_MAX:
+ * 	Internal use.
+ * @__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_AFTER_LAST:
+ * 	Internal use.
+ */
+enum fira_session_params_meas_seq_step_sets_attrs {
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_UNSPEC,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_0,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_1,
+
+	__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_AFTER_LAST,
+	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_MAX =
+		__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_AFTER_LAST -
+		1
 };
 
 #endif /* FIRA_REGION_NL_H */

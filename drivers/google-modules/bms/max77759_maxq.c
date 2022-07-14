@@ -62,7 +62,7 @@
 #define MAXQ_AP_DATAOUT0			0x81
 #define MAXQ_AP_DATAOUT32			0xA1
 #define MAXQ_AP_DATAIN0				0xB1
-#define MAXQ_REPLY_TIMEOUT_MS			50
+#define MAXQ_REPLY_TIMEOUT_MS			200
 
 #define RSBM_ADDR				0
 #define RSBR_ADDR				4

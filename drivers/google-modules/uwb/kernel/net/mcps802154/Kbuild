@@ -1,4 +1,6 @@
-obj-m := mcps802154.o mcps802154_region_fira.o mcps802154_region_nfcc_coex.o
+obj-m := mcps802154.o mcps802154_region_fira.o \
+	 mcps802154_region_nfcc_coex.o \
+	 mcps802154_region_pctt.o \
 
 ccflags-$(CONFIG_MCPS802154_TESTMODE) += -DCONFIG_MCPS802154_TESTMODE
 
@@ -38,7 +40,6 @@ mcps802154_region_fira-y := \
 	fira_frame.o \
 	fira_region.o \
 	fira_region_call.o \
-	utils_fixed_point.o \
 	fira_session.o \
 	fira_trace.o
 
@@ -49,6 +50,14 @@ mcps802154_region_nfcc_coex-y := \
 	nfcc_coex_session.o \
 	nfcc_coex_trace.o
 
+mcps802154_region_pctt-y := \
+	pctt_access.o \
+	pctt_region.o \
+	pctt_region_call.o \
+	pctt_session.o \
+	pctt_trace.o
+
 CFLAGS_trace.o := -I$(src) -I$(srctree)/$(src)
 CFLAGS_fira_trace.o := -I$(src) -I$(srctree)/$(src)
+CFLAGS_pctt_trace.o := -I$(src) -I$(srctree)/$(src)
 CFLAGS_nfcc_coex_trace.o := -I$(src) -I$(srctree)/$(src)

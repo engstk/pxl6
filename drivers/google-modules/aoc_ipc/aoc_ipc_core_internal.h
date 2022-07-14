@@ -79,6 +79,8 @@ struct aoc_ipc_memory_region {
 	u32 slots;
 	u32 tx;
 	u32 rx;
+	u32 wp;
+	u32 rp;
 } __attribute__((packed, aligned(4)));
 
 enum REGION_COMM {
@@ -135,6 +137,7 @@ void *aoc_service_ring_base(aoc_service *service, void *base,
 			    aoc_direction dir);
 size_t aoc_service_ring_size(aoc_service *service, aoc_direction dir);
 size_t aoc_service_ring_read_offset(aoc_service *service, aoc_direction dir);
+size_t aoc_service_ring_write_offset(aoc_service *service, aoc_direction dir);
 
 #ifdef __cplusplus
 }

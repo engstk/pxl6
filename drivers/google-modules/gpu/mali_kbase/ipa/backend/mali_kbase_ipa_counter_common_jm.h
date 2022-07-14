@@ -30,7 +30,7 @@
 #define KBASE_IPA_MAX_GROUP_DEF_NUM  16
 
 /* Number of bytes per hardware counter in a vinstr_buffer. */
-#define KBASE_IPA_NR_BYTES_PER_CNT    4
+#define KBASE_IPA_NR_BYTES_PER_CNT (sizeof(u64))
 
 /* Number of hardware counters per block in a vinstr_buffer. */
 #define KBASE_IPA_NR_CNT_PER_BLOCK   64
@@ -94,7 +94,10 @@ struct kbase_ipa_model_vinstr_data {
 struct kbase_ipa_group {
 	const char *name;
 	s32 default_value;
-	s64 (*op)(struct kbase_ipa_model_vinstr_data *, s32, u32);
+	s64 (*op)(
+		struct kbase_ipa_model_vinstr_data *model_data,
+		s32 coeff,
+		u32 counter_block_offset);
 	u32 counter_block_offset;
 };
 

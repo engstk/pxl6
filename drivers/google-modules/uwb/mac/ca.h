@@ -31,11 +31,6 @@
 struct mcps802154_local;
 
 /**
- * MCPS802154_CA_QUEUE_SIZE - number of buffers in the queue.
- */
-#define MCPS802154_CA_QUEUE_SIZE 2
-
-/**
  * struct mcps802154_ca - CA private data.
  */
 struct mcps802154_ca {
@@ -49,6 +44,14 @@ struct mcps802154_ca {
 	 */
 	struct mcps802154_scheduler *scheduler;
 	/**
+	 * @regions: List of regions currently available in the schedule.
+	 */
+	struct list_head regions;
+	/**
+	 * @n_regions: current number of opened regions.
+	 */
+	int n_regions;
+	/**
 	 * @held: Whether access is currently held and cannot change.
 	 */
 	bool held;
@@ -56,19 +59,6 @@ struct mcps802154_ca {
 	 * @reset: Whether the schedule was invalidated and need to be changed.
 	 */
 	bool reset;
-	/**
-	 * @queue: Queue of frames to be transmitted.
-	 */
-	struct sk_buff_head queue;
-	/**
-	 * @n_queued: Number of queued frames. This also includes frame being
-	 * transmitted which is no longer in &mcps802154_ca.queue.
-	 */
-	atomic_t n_queued;
-	/**
-	 * @retries: Number of retries done on the current tx frame.
-	 */
-	int retries;
 	/**
 	 * @idle_access: Access used to wait when there is nothing to do.
 	 */
@@ -144,6 +134,25 @@ int mcps802154_ca_set_scheduler(struct mcps802154_local *local,
 				struct netlink_ext_ack *extack);
 
 /**
+ * mcps802154_ca_set_region() - Set scheduler's region.
+ * @local: MCPS private data.
+ * @scheduler_name: Scheduler name.
+ * @region_id: Identifier of the region, scheduler specific.
+ * @region_name: Name of region to attach to the scheduler.
+ * @params_attr: Nested attribute containing region parameters.
+ * @extack: Extended ACK report structure.
+ *
+ * FSM mutex should be locked.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_ca_set_region(struct mcps802154_local *local,
+			     const char *scheduler_name, u32 region_id,
+			     const char *region_name,
+			     const struct nlattr *params_attr,
+			     struct netlink_ext_ack *extack);
+
+/**
  * mcps802154_ca_scheduler_set_parameters() - Set the scheduler parameters.
  * @local: MCPS private data.
  * @name: Scheduler name.
@@ -158,25 +167,6 @@ int mcps802154_ca_scheduler_set_parameters(struct mcps802154_local *local,
 					   const char *name,
 					   const struct nlattr *params_attr,
 					   struct netlink_ext_ack *extack);
-
-/**
- * mcps802154_ca_scheduler_set_region_parameters() - Set region's scheduler
- * parameters.
- * @local: MCPS private data.
- * @scheduler_name: Scheduler name.
- * @region_id: Identifier of the region, scheduler specific.
- * @region_name: Name of region to attach to the scheduler.
- * @params_attr: Nested attribute containing region parameters.
- * @extack: Extended ACK report structure.
- *
- * FSM mutex should be locked.
- *
- * Return: 0 or error.
- */
-int mcps802154_ca_scheduler_set_region_parameters(
-	struct mcps802154_local *local, const char *scheduler_name,
-	u32 region_id, const char *region_name,
-	const struct nlattr *params_attr, struct netlink_ext_ack *extack);
 
 /**
  * mcps802154_ca_scheduler_call() - Call scheduler specific procedure.
@@ -196,7 +186,26 @@ int mcps802154_ca_scheduler_call(struct mcps802154_local *local,
 				 const struct genl_info *info);
 
 /**
- * mcps802154_ca_scheduler_call_region() - Call region specific procedure.
+ * mcps802154_ca_set_region_parameters() - Set the region parameters.
+ * @local: MCPS private data.
+ * @scheduler_name: Scheduler name.
+ * @region_id: Identifier of the region, scheduler specific.
+ * @region_name: Name of the region to call.
+ * @params_attr: Nested attribute containing region parameters.
+ * @extack: Extended ACK report structure.
+ *
+ * FSM mutex should be locked.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_ca_set_region_parameters(struct mcps802154_local *local,
+					const char *scheduler_name,
+					u32 region_id, const char *region_name,
+					const struct nlattr *params_attr,
+					struct netlink_ext_ack *extack);
+
+/**
+ * mcps802154_ca_call_region() - Call region specific procedure.
  * @local: MCPS private data.
  * @scheduler_name: Scheduler name.
  * @region_id: Identifier of the region, scheduler specific.
@@ -209,12 +218,21 @@ int mcps802154_ca_scheduler_call(struct mcps802154_local *local,
  *
  * Return: 0 or error.
  */
-int mcps802154_ca_scheduler_call_region(struct mcps802154_local *local,
-					const char *scheduler_name,
-					u32 region_id, const char *region_name,
-					u32 call_id,
-					const struct nlattr *params_attr,
-					const struct genl_info *info);
+int mcps802154_ca_call_region(struct mcps802154_local *local,
+			      const char *scheduler_name, u32 region_id,
+			      const char *region_name, u32 call_id,
+			      const struct nlattr *params_attr,
+			      const struct genl_info *info);
+
+/**
+ * mcps802154_ca_xmit_skb() - Transmit the buffer through the first region
+ * that accepts it.
+ * @local: MCPS private data.
+ * @skb: Buffer to be transmitted.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_ca_xmit_skb(struct mcps802154_local *local, struct sk_buff *skb);
 
 /**
  * mcps802154_ca_get_access() - Compute and return access.

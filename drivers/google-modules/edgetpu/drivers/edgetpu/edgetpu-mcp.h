@@ -9,7 +9,9 @@
 
 #include <linux/init.h>
 #include <linux/mutex.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -38,6 +40,11 @@ struct edgetpu_mcp {
 	 * One should check with !IS_ERR_OR_NULL(etdevs[i]) before accessing.
 	 */
 	struct edgetpu_dev **etdevs;
+
+	/* MCP-wide fatal errors pending runtime notification */
+	uint errors_pending_mask;
+	spinlock_t errors_pending_lock;
+	struct work_struct errors_pending_work;	/* for notify via kworker */
 };
 
 #ifdef EDGETPU_HAS_MCP
@@ -97,6 +104,15 @@ void edgetpu_mcp_probe_fail(struct edgetpu_dev *etdev);
  */
 int edgetpu_mcp_each(bool stop_on_err, void *data,
 		     int (*callback)(struct edgetpu_mcp *, void *));
+
+/*
+ * Invoke @callback on each device for the specified @mcp.
+ *
+ * @data can be any value, it will be directly passed to @callback.
+ */
+void edgetpu_mcp_foreach_etdev(struct edgetpu_mcp *mcp,
+			       void (*callback)(struct edgetpu_dev *, void *),
+			       void *data);
 
 /*
  * Returns the MCP object @etdev belongs to.

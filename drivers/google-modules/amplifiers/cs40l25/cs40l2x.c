@@ -275,6 +275,19 @@ void cs40l2x_set_state(struct cs40l2x_private *cs40l2x, bool state)
 }
 EXPORT_SYMBOL(cs40l2x_set_state);
 
+ssize_t strscpy_pad(char *dest, const char *src, size_t count)
+{
+	ssize_t written;
+
+	written = strscpy(dest, src, count);
+	if (written < 0 || written == count - 1)
+		return written;
+
+	memset(dest + written + 1, 0, count - written - 1);
+
+	return written;
+}
+
 static void cs40l2x_set_gpio_event(struct cs40l2x_private *cs40l2x, bool value)
 {
 	if (cs40l2x->gpio_event != value) {
@@ -1131,7 +1144,8 @@ static int cs40l2x_convert_and_save_comp_data(struct cs40l2x_private *cs40l2x,
 
 	if (comp_size > (cs40l2x->comp_bytes / CS40L2X_WT_NUM_VIRT_SLOTS)) {
 		dev_err(cs40l2x->dev, "Waveform size exceeds available space\n");
-		return -ENOSPC;
+		ret = -ENOSPC;
+		goto err_free;
 	}
 
 	if (over_write)
@@ -1703,15 +1717,16 @@ static int cs40l2x_save_packed_pwle_data(struct cs40l2x_private *cs40l2x,
 	char *zero_pad_data;
 	int ret;
 
-	zero_pad_data = kzalloc(CS40L2X_PWLE_BYTES_MAX, GFP_KERNEL);
+	zero_pad_data = kzalloc(CS40L2X_MAX_WLEN, GFP_KERNEL);
 	if (!zero_pad_data)
 		return -ENOMEM;
 
 	ret = cs40l2x_write_pwle(cs40l2x, zero_pad_data,
-				 CS40L2X_PWLE_BYTES_MAX, pwle);
+				 CS40L2X_MAX_WLEN, pwle);
 
 	if (ret > (cs40l2x->comp_bytes / CS40L2X_WT_NUM_VIRT_SLOTS)) {
 		dev_err(cs40l2x->dev, "PWLE size exceeds available space\n");
+		kfree(zero_pad_data);
 		return -ENOSPC;
 	}
 
@@ -1864,10 +1879,12 @@ static int cs40l2x_pwle_frequency_entry(struct cs40l2x_private *cs40l2x,
 		return ret;
 	}
 
-	if (cs40l2x->ext_freq_min_fw)
+	if (cs40l2x->ext_freq_min_fw) {
 		section->frequency = (val / (1000 / 4));
-	else
+		section->flags |= WT_T12_FLAG_EXT_FREQ;
+	} else {
 		section->frequency = (val / (1000 / 8)) - 400;
+	}
 
 	return ret;
 }
@@ -1913,8 +1930,12 @@ static ssize_t cs40l2x_pwle_store(struct device *dev,
 	bool a = false, v = false;
 	int ret;
 
+	if (count > CS40L2X_MAX_WLEN - 1) {
+		dev_err(dev, "PWLE string too large: %lu\n", count);
+		return -E2BIG;
+	}
 
-	pwle_str = kzalloc(count, GFP_KERNEL);
+	pwle_str = kzalloc(count + 1, GFP_KERNEL);
 	if (!pwle_str)
 		return -ENOMEM;
 
@@ -1938,7 +1959,9 @@ static ssize_t cs40l2x_pwle_store(struct device *dev,
 
 	section = pwle->sections;
 
-	strlcpy(pwle_str, buf, count);
+	ret = strscpy(pwle_str, buf, count + 1);
+	if (ret == -E2BIG)
+		goto err_exit;
 
 	cur = pwle_str;
 
@@ -1951,6 +1974,13 @@ static ssize_t cs40l2x_pwle_store(struct device *dev,
 		}
 
 		type = strsep(&token, ":");
+		if (!type || !token) {
+			dev_err(cs40l2x->dev,
+				"Malformed PWLE. : not found\n");
+			ret = -EINVAL;
+			goto err_exit;
+		}
+
 		token = strim(token);
 
 		if (type[0] == 'S') {
@@ -2131,7 +2161,11 @@ static ssize_t cs40l2x_pwle_store(struct device *dev,
 
 	pwle->nsections = num_segs;
 
-	strlcpy(cs40l2x->pwle_str, buf, count);
+	ret = strscpy_pad(cs40l2x->pwle_str, buf, CS40L2X_MAX_WLEN);
+	if (ret == -E2BIG) {
+		goto err_exit;
+        }
+
 	cs40l2x->pwle_str_size = count;
 
 	pwle->wlength *= pwle->repeat + 1;
@@ -6438,10 +6472,86 @@ err_mutex:
 	return count;
 }
 
+static ssize_t cs40l2x_pwle_ramp_down_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	struct cs40l2x_private *cs40l2x = cs40l2x_get_private(dev);
+	int ret;
+	unsigned int reg, val;
+
+	pm_runtime_get_sync(cs40l2x->dev);
+	mutex_lock(&cs40l2x->lock);
+
+	reg = cs40l2x_dsp_reg(cs40l2x, "RAMPDOWN_COEFF",
+			      CS40L2X_XM_UNPACKED_TYPE,
+				cs40l2x->fw_desc->id);
+	if (!reg) {
+		ret = -EPERM;
+		goto err_mutex;
+	}
+
+	ret = regmap_read(cs40l2x->regmap, reg, &val);
+	if (ret)
+		goto err_mutex;
+
+	/* Q0.24 format */
+	ret = snprintf(buf, PAGE_SIZE, "%u\n", val);
+
+err_mutex:
+	mutex_unlock(&cs40l2x->lock);
+	pm_runtime_mark_last_busy(cs40l2x->dev);
+	pm_runtime_put_autosuspend(cs40l2x->dev);
+
+	return ret;
+}
+
+static ssize_t cs40l2x_pwle_ramp_down_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf,
+					  size_t count)
+{
+	struct cs40l2x_private *cs40l2x = cs40l2x_get_private(dev);
+	int ret;
+	unsigned int reg, val;
+
+	ret = kstrtou32(buf, 10, &val);
+	if (ret)
+		return -EINVAL;
+
+	pm_runtime_get_sync(cs40l2x->dev);
+	mutex_lock(&cs40l2x->lock);
+
+	reg = cs40l2x_dsp_reg(cs40l2x, "RAMPDOWN_COEFF",
+			      CS40L2X_XM_UNPACKED_TYPE,
+				cs40l2x->fw_desc->id);
+	if (!reg) {
+		ret = -EPERM;
+		goto err_mutex;
+	}
+
+	/* Q0.24 format */
+	/* Zero value means that PWLE Ramp down is off */
+	ret = regmap_write(cs40l2x->regmap, reg, val);
+	if (ret)
+		goto err_mutex;
+
+	ret = count;
+
+err_mutex:
+	mutex_unlock(&cs40l2x->lock);
+	pm_runtime_mark_last_busy(cs40l2x->dev);
+	pm_runtime_put_autosuspend(cs40l2x->dev);
+
+	return ret;
+}
+
 static DEVICE_ATTR(cp_trigger_index, 0660, cs40l2x_cp_trigger_index_show,
 		cs40l2x_cp_trigger_index_store);
 static DEVICE_ATTR(cp_trigger_queue, 0660, cs40l2x_cp_trigger_queue_show,
 		cs40l2x_cp_trigger_queue_store);
+static DEVICE_ATTR(pwle_ramp_down, 0660, cs40l2x_pwle_ramp_down_show,
+		cs40l2x_pwle_ramp_down_store);
 static DEVICE_ATTR(cp_trigger_duration, 0660, cs40l2x_cp_trigger_duration_show,
 		NULL);
 static DEVICE_ATTR(cp_trigger_q_sub, 0660, cs40l2x_cp_trigger_q_sub_show,
@@ -6656,6 +6766,7 @@ static struct attribute *cs40l2x_dev_attrs[] = {
 	&dev_attr_virtual_pwle_indexes.attr,
 	&dev_attr_available_pwle_segments.attr,
 	&dev_attr_boost_ipk.attr,
+	&dev_attr_pwle_ramp_down.attr,
 	NULL,
 };
 
@@ -6791,8 +6902,8 @@ static void cs40l2x_vibe_mode_worker(struct work_struct *work)
 		if (ret)
 			goto err_exit;
 
-		ret = regmap_write(regmap, CS40L2X_DSP_VIRT1_MBOX_5,
-					CS40L2X_A2H_I2S_START);
+		ret = cs40l2x_ack_write(cs40l2x, CS40L2X_MBOX_USER_CONTROL,
+					CS40L2X_A2H_I2S_START, CS40L2X_USER_CTRL_SUCCESS);
 		if (ret)
 			goto err_exit;
 
@@ -9244,15 +9355,15 @@ int cs40l2x_coeff_file_parse(struct cs40l2x_private *cs40l2x,
 		if (!strncmp(cs40l2x->wt_file,
 				CS40L2X_WT_FILE_NAME_MISSING,
 				CS40L2X_WT_FILE_NAME_LEN_MAX))
-			strlcpy(cs40l2x->wt_file,
+			strscpy(cs40l2x->wt_file,
 					CS40L2X_WT_FILE_NAME_DEFAULT,
 					CS40L2X_WT_FILE_NAME_LEN_MAX);
 
 		if (*wt_date != '\0')
-			strlcpy(cs40l2x->wt_date, wt_date,
+			strscpy(cs40l2x->wt_date, wt_date,
 					CS40L2X_WT_FILE_DATE_LEN_MAX);
 		else
-			strlcpy(cs40l2x->wt_date,
+			strscpy(cs40l2x->wt_date,
 					CS40L2X_WT_FILE_DATE_MISSING,
 					CS40L2X_WT_FILE_DATE_LEN_MAX);
 
@@ -9726,7 +9837,7 @@ static int cs40l2x_wavetable_swap(struct cs40l2x_private *cs40l2x,
 	if (ret1)
 		return ret1;
 
-	strlcpy(cs40l2x->wt_file, wt_file, CS40L2X_WT_FILE_NAME_LEN_MAX);
+	strscpy(cs40l2x->wt_file, wt_file, CS40L2X_WT_FILE_NAME_LEN_MAX);
 
 	ret1 = regmap_write(regmap,
 			cs40l2x_dsp_reg(cs40l2x, "NUMBEROFWAVES",
@@ -11465,10 +11576,10 @@ static int cs40l2x_i2c_probe(struct i2c_client *i2c_client,
 
 	cs40l2x->autosuspend_delay = CS40L2X_AUTOSUSPEND_DELAY_MS;
 
-	strlcpy(cs40l2x->wt_file,
+	strscpy(cs40l2x->wt_file,
 			CS40L2X_WT_FILE_NAME_MISSING,
 			CS40L2X_WT_FILE_NAME_LEN_MAX);
-	strlcpy(cs40l2x->wt_date,
+	strscpy(cs40l2x->wt_date,
 			CS40L2X_WT_FILE_DATE_MISSING,
 			CS40L2X_WT_FILE_DATE_LEN_MAX);
 

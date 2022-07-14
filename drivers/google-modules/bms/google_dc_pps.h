@@ -87,6 +87,15 @@ struct pd_pps_data {
 	struct logbuffer *log;
 };
 
+/* TODO: device dependent */
+#define PD_SNK_MAX_MV			9000
+/* TODO: device dependent */
+#define PD_SNK_MIN_MV			5000
+
+struct tcpm_port;
+struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy);
+
+
 /* */
 #define pps_is_disabled(x) (((x) == PPS_NOTSUPP) || ((x) == PPS_DISABLED))
 
@@ -143,13 +152,9 @@ void pps_log(struct pd_pps_data *pps, const char *fmt, ...);
 /* probe */
 struct power_supply *pps_get_tcpm_psy(struct device_node *node, size_t size);
 
-
-
 int pps_request_pdo(struct pd_pps_data *pps_data, unsigned int ta_idx,
 		    unsigned int ta_max_vol, unsigned int ta_max_cur);
 
-/* might just need to be in google_charger */
-int chg_update_capability(struct power_supply *tcpm_psy, unsigned int nr_pdo,
-			  u32 pps_cap);
+
 
 #endif /* __GOOGLE_DC_PPS_H_ */

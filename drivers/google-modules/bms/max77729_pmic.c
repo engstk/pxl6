@@ -34,6 +34,7 @@
 #include "max77759.h"
 #include "max77759_maxq.h"
 #include "gbms_storage.h"
+#include "google_bms.h"
 
 
 enum max77729_pmic_register {
@@ -715,6 +716,46 @@ static int max777x9_pmic_debug_reg_write(void *d, u64 val)
 DEFINE_SIMPLE_ATTRIBUTE(debug_reg_rw_fops, max777x9_pmic_debug_reg_read,
 			max777x9_pmic_debug_reg_write, "%02llx\n");
 
+static ssize_t max777x9_pmic_debug_show_reg_all(struct file *filp, char __user *buf,
+						size_t count, loff_t *ppos)
+{
+	struct max77729_pmic_data *data = (struct max77729_pmic_data *)filp->private_data;
+	u32 reg_address;
+	u8 reg = 0;
+	char *tmp;
+	int ret = 0, len = 0;
+
+	if (!data->regmap) {
+		pr_err("Failed to read, no regmap\n");
+		return -EIO;
+	}
+
+	tmp = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	for (reg_address = 0; reg_address <= 0xFF; reg_address++) {
+		/* reasonable registers */
+		if (!max77729_pmic_is_reg(data->dev, reg_address))
+			continue;
+
+		ret = max77729_pmic_rd8(data, reg_address, &reg);
+		if (ret < 0)
+			continue;
+
+		len += scnprintf(tmp + len, PAGE_SIZE - len, "%02x: %02x\n", reg_address, reg);
+	}
+
+	if (len > 0)
+		len = simple_read_from_buffer(buf, count,  ppos, tmp, strlen(tmp));
+
+	kfree(tmp);
+
+	return len;
+}
+
+BATTERY_DEBUG_ATTRIBUTE(debug_all_reg_fops, max777x9_pmic_debug_show_reg_all, NULL);
+
 static int max77759_pmic_storage_iter(int index, gbms_tag_t *tag, void *ptr)
 {
 	if (index < 0 || index > (GBMS_TAG_RRS7 - GBMS_TAG_RRS0))
@@ -805,6 +846,7 @@ static int dbg_init_fs(struct max77729_pmic_data *data)
 
 	debugfs_create_u32("address", 0600, data->de, &data->debug_reg_address);
 	debugfs_create_file("data", 0600, data->de, data, &debug_reg_rw_fops);
+	debugfs_create_file("registers", 0444, data->de, data, &debug_all_reg_fops);
 
 	return 0;
 }

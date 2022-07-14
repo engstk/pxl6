@@ -25,7 +25,8 @@
 #define STATUS_IDLE	1
 #define STATUS_BUSY	0
 
-#define NITROUS_AUTOSUSPEND_DELAY   	1000 /* autosleep delay 1000 ms */
+#define NITROUS_TX_AUTOSUSPEND_DELAY   	100 /* autosleep delay 100 ms after TX */
+#define NITROUS_RX_AUTOSUSPEND_DELAY   	1000 /* autosleep delay 1000 ms after RX */
 #define TIMESYNC_TIMESTAMP_MAX_QUEUE	16
 #define TIMESYNC_NOT_SUPPORTED		0
 #define TIMESYNC_SUPPORTED 		1
@@ -78,8 +79,11 @@ struct nitrous_lpm_proc {
 static inline void nitrous_wake_controller(struct nitrous_bt_lpm *lpm, bool wake)
 {
 	int assert_level = (wake == lpm->wake_polarity);
+	struct timespec64 ts;
+	ktime_get_real_ts64(&ts);
 	dev_dbg(lpm->dev, "DEV_WAKE: %s", (assert_level ? "Assert" : "Dessert"));
-	logbuffer_log(lpm->log, "DEV_WAKE: %s", (assert_level ? "Assert" : "Dessert"));
+	logbuffer_log(lpm->log, "DEV_WAKE: %s  %ptTt.%03ld",
+		(assert_level ? "Assert" : "Dessert"), &ts, ts.tv_nsec / NSEC_PER_MSEC);
 	gpiod_set_value_cansleep(lpm->gpio_dev_wake, assert_level);
 }
 
@@ -87,7 +91,7 @@ static inline void nitrous_wake_controller(struct nitrous_bt_lpm *lpm, bool wake
  * Called before UART driver starts transmitting data out. UART and BT resources
  * are requested to allow a transmission.
  */
-static void nitrous_prepare_uart_tx_locked(struct nitrous_bt_lpm *lpm)
+static void nitrous_prepare_uart_tx_locked(struct nitrous_bt_lpm *lpm, bool assert)
 {
 	int ret;
 
@@ -97,22 +101,26 @@ static void nitrous_prepare_uart_tx_locked(struct nitrous_bt_lpm *lpm)
 		return;
 	}
 
-	ret = pm_runtime_get_sync(lpm->dev);
+	if (assert && !lpm->uart_tx_dev_pm_resumed) {
+		ret = pm_runtime_get_sync(lpm->dev);
+		lpm->uart_tx_dev_pm_resumed = true;
+		/* Shall be resumed here */
+		logbuffer_log(lpm->log, "uart_tx_locked");
 
-	/* Shall be resumed here */
-	logbuffer_log(lpm->log, "uart_tx_locked");
-
-	if (lpm->is_suspended) {
-		/* This shouldn't happen. If it does, it will result in a BT crash */
-		/* TODO (mullerf): Does this happen? If yes, why? */
-		dev_err(lpm->dev,"Tx in device suspended. ret: %d, uc:%d\n",
-			ret, atomic_read(&lpm->dev->power.usage_count));
-		logbuffer_log(lpm->log,"Tx in device suspended. ret: %d, uc:%d",
-			ret, atomic_read(&lpm->dev->power.usage_count));
+		if (lpm->is_suspended) {
+			/* This shouldn't happen. If it does, it will result in a BT crash */
+			/* TODO (mullerf): Does this happen? If yes, why? */
+			dev_err(lpm->dev,"Tx in device suspended. ret: %d, uc:%d\n",
+				ret, atomic_read(&lpm->dev->power.usage_count));
+			logbuffer_log(lpm->log,"Tx in device suspended. ret: %d, uc:%d",
+				ret, atomic_read(&lpm->dev->power.usage_count));
+		}
+	} else if (!assert && lpm->uart_tx_dev_pm_resumed) {
+		logbuffer_log(lpm->log, "uart_tx_unlocked");
+		pm_runtime_mark_last_busy(lpm->dev);
+		pm_runtime_put_autosuspend(lpm->dev);
+		lpm->uart_tx_dev_pm_resumed = false;
 	}
-
-	pm_runtime_mark_last_busy(lpm->dev);
-	pm_runtime_put_autosuspend(lpm->dev);
 }
 
 /*
@@ -126,6 +134,7 @@ static irqreturn_t nitrous_host_wake_isr(int irq, void *data)
 {
 	struct nitrous_bt_lpm *lpm = data;
 	int host_wake;
+	struct timespec64 ts;
 
 	host_wake = gpiod_get_value(lpm->gpio_host_wake);
 	dev_dbg(lpm->dev, "Host wake IRQ: %u\n", host_wake);
@@ -136,15 +145,18 @@ static irqreturn_t nitrous_host_wake_isr(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
+	ktime_get_real_ts64(&ts);
 	/* Check whether host_wake is ACTIVE (== 1) */
 	if (host_wake == 1) {
-		logbuffer_log(lpm->log, "host_wake_isr asserted");
+		logbuffer_log(lpm->log, "host_wake_isr asserted %ptTt.%03ld",
+			&ts, ts.tv_nsec / NSEC_PER_MSEC);
 		pm_stay_awake(lpm->dev);
 		exynos_update_ip_idle_status(lpm->idle_bt_rx_ip_index, STATUS_BUSY);
 	} else {
-		logbuffer_log(lpm->log, "host_wake_isr de-asserted");
+		logbuffer_log(lpm->log, "host_wake_isr de-asserted %ptTt.%03ld",
+			&ts, ts.tv_nsec / NSEC_PER_MSEC);
 		exynos_update_ip_idle_status(lpm->idle_bt_rx_ip_index, STATUS_IDLE);
-		pm_wakeup_dev_event(lpm->dev, NITROUS_AUTOSUSPEND_DELAY, false);
+		pm_wakeup_dev_event(lpm->dev, NITROUS_RX_AUTOSUSPEND_DELAY, false);
 	}
 
 	return IRQ_HANDLED;
@@ -196,7 +208,7 @@ static int nitrous_lpm_runtime_enable(struct nitrous_bt_lpm *lpm)
 
 	device_init_wakeup(lpm->dev, true);
 	pm_runtime_enable(lpm->dev);
-	pm_runtime_set_autosuspend_delay(lpm->dev, NITROUS_AUTOSUSPEND_DELAY);
+	pm_runtime_set_autosuspend_delay(lpm->dev, NITROUS_TX_AUTOSUSPEND_DELAY);
 	pm_runtime_use_autosuspend(lpm->dev);
 
 	/* When LPM is enabled, we resume the device right away.
@@ -316,10 +328,19 @@ static ssize_t nitrous_proc_write(struct file *file, const char *buf,
 			logbuffer_log(lpm->log, "PROC_BTWRITE: not enabled");
 			return count;
 		}
-		dev_dbg(lpm->dev, "LPM waking up for Tx\n");
-		ktime_get_real_ts64(&ts);
-		logbuffer_log(lpm->log, "PROC_BTWRITE: waking up %ptTt", &ts);
-		nitrous_prepare_uart_tx_locked(lpm);
+		if (lbuf[0] == '1') {
+			dev_dbg(lpm->dev, "LPM waking up for Tx\n");
+			ktime_get_real_ts64(&ts);
+			logbuffer_log(lpm->log, "PROC_BTWRITE: waking up %ptTt.%03ld",
+				&ts, ts.tv_nsec / NSEC_PER_MSEC);
+			nitrous_prepare_uart_tx_locked(lpm, true);
+		} else if (lbuf[0] == '0') {
+			dev_dbg(lpm->dev, "LPM Tx done\n");
+			ktime_get_real_ts64(&ts);
+			logbuffer_log(lpm->log, "PROC_BTWRITE: Tx done %ptTt.%03ld",
+				&ts, ts.tv_nsec / NSEC_PER_MSEC);
+			nitrous_prepare_uart_tx_locked(lpm, false);
+		}
 		break;
 	default:
 		return 0;
@@ -507,10 +528,9 @@ static void toggle_timesync(struct nitrous_bt_lpm *lpm, bool enable) {
 static int nitrous_rfkill_set_power(void *data, bool blocked)
 {
 	struct nitrous_bt_lpm *lpm = data;
+	struct timespec64 ts;
 
 	if (!lpm) {
-		dev_err(lpm->dev, "rfkill: lpm is NULL\n");
-		logbuffer_log(lpm->log, "rfkill: lpm is NULL");
 		return -EINVAL;
 	}
 
@@ -528,10 +548,10 @@ static int nitrous_rfkill_set_power(void *data, bool blocked)
 
 	/* Reset to make sure LPM is disabled */
 	nitrous_lpm_runtime_disable(lpm);
-
+	ktime_get_real_ts64(&ts);
 	if (!blocked) {
 		/* Power up the BT chip. delay between consecutive toggles. */
-		logbuffer_log(lpm->log, "Power up BT chip");
+		logbuffer_log(lpm->log, "Power up BT chip %ptTt", &ts);
 		dev_dbg(lpm->dev, "REG_ON: Low");
 		gpiod_set_value_cansleep(lpm->gpio_power, false);
 		msleep(30);
@@ -549,7 +569,7 @@ static int nitrous_rfkill_set_power(void *data, bool blocked)
 		gpiod_set_value_cansleep(lpm->gpio_dev_wake, false);
 
 		/* Power down the BT chip */
-		logbuffer_log(lpm->log, "Power down BT chip");
+		logbuffer_log(lpm->log, "Power down BT chip %ptTt", &ts);
 		dev_dbg(lpm->dev, "REG_ON: Low");
 		gpiod_set_value_cansleep(lpm->gpio_power, false);
 		exynos_update_ip_idle_status(lpm->idle_bt_tx_ip_index, STATUS_IDLE);
@@ -702,8 +722,6 @@ static int nitrous_remove(struct platform_device *pdev)
 	struct nitrous_bt_lpm *lpm = platform_get_drvdata(pdev);
 
 	if (!lpm) {
-		dev_err(lpm->dev, "LPM is NULL\n");
-		logbuffer_log(lpm->log, "remove: LPM is NULL");
 		return -EINVAL;
 	}
 
@@ -723,7 +741,7 @@ static int nitrous_suspend_device(struct device *dev)
 	struct nitrous_bt_lpm *lpm = dev_get_drvdata(dev);
 
 	dev_dbg(lpm->dev, "suspend_device from %s\n",
-		 (lpm->is_suspended ? "asleep" : "awake"));
+		(lpm->is_suspended ? "asleep" : "awake"));
 	logbuffer_log(lpm->log, "suspend_device from %s",
 		(lpm->is_suspended ? "asleep" : "awake"));
 
@@ -739,7 +757,7 @@ static int nitrous_resume_device(struct device *dev)
 	struct nitrous_bt_lpm *lpm = dev_get_drvdata(dev);
 
 	dev_dbg(lpm->dev, "resume_device from %s\n",
-		 (lpm->is_suspended ? "asleep" : "awake"));
+		(lpm->is_suspended ? "asleep" : "awake"));
 	logbuffer_log(lpm->log, "resume_device from %s",
 		(lpm->is_suspended ? "asleep" : "awake"));
 
@@ -753,12 +771,14 @@ static int nitrous_resume_device(struct device *dev)
 static int nitrous_suspend(struct device *dev)
 {
 	struct nitrous_bt_lpm *lpm = dev_get_drvdata(dev);
+	struct timespec64 ts;
 
 	if (lpm->rfkill_blocked)
 		return 0;
 
-	dev_dbg(lpm->dev, "nitrous_suspend\n");
-	logbuffer_log(lpm->log, "nitrous_suspend");
+	ktime_get_real_ts64(&ts);
+	dev_dbg(lpm->dev, "nitrous_suspend %ptTt\n", &ts);
+	logbuffer_log(lpm->log, "nitrous_suspend %ptTt", &ts);
 
 	if (device_may_wakeup(dev) && lpm->lpm_enabled) {
 		pm_runtime_force_suspend(lpm->dev);
@@ -774,12 +794,14 @@ static int nitrous_suspend(struct device *dev)
 static int nitrous_resume(struct device *dev)
 {
 	struct nitrous_bt_lpm *lpm = dev_get_drvdata(dev);
+	struct timespec64 ts;
 
 	if (lpm->rfkill_blocked)
 		return 0;
 
-	dev_dbg(lpm->dev, "nitrous_resume\n");
-	logbuffer_log(lpm->log, "nitrous_resume");
+	ktime_get_real_ts64(&ts);
+	dev_dbg(lpm->dev, "nitrous_resume %ptTt\n", &ts);
+	logbuffer_log(lpm->log, "nitrous_resume %ptTt", &ts);
 
 	if (device_may_wakeup(dev) && lpm->lpm_enabled) {
 		disable_irq_wake(lpm->irq_host_wake);

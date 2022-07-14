@@ -1049,3 +1049,7 @@ int edgetpu_sync_fence_debugfs_show(struct seq_file *s, void *unused)
 	spin_unlock_irq(&etfence_list_lock);
 	return 0;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,16,0)
+MODULE_IMPORT_NS(DMA_BUF);
+#endif

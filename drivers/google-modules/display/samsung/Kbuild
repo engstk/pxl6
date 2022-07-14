@@ -5,12 +5,17 @@
 
 ccflags-y := -I$(srctree)/$(src)/cal_common
 
-ccflags-$(CONFIG_SOC_GS101) += -I$(srctree)/$(src)/cal_9845
-exynos-drm-$(CONFIG_SOC_GS101) += cal_9845/decon_reg.o
-exynos-drm-$(CONFIG_SOC_GS101) += cal_9845/dsim_reg.o
-exynos-drm-$(CONFIG_SOC_GS101) += cal_9845/dpp_reg.o
-exynos-drm-$(CONFIG_SOC_GS101) += cal_9845/dqe_reg.o
-exynos-drm-$(CONFIG_SOC_GS101) += cal_9845/hdr_reg.o
+ccflags-y += -I$(srctree)/$(src)/cal_9845
+exynos-drm-y += cal_9845/decon_reg.o
+exynos-drm-y += cal_9845/dsim_reg.o
+exynos-drm-y += cal_9845/dpp_reg.o
+exynos-drm-y += cal_9845/dqe_reg.o
+exynos-drm-y += cal_9845/hdr_reg.o
+
+ccflags-$(CONFIG_SOC_GS201) += -I$(srctree)/$(src)/cal_9855
+exynos-drm-$(CONFIG_SOC_GS201) += cal_9855/decon_reg.o
+exynos-drm-$(CONFIG_SOC_GS201) += cal_9855/dpp_reg.o
+exynos-drm-$(CONFIG_SOC_GS201) += cal_9855/dqe_reg.o
 
 exynos-drm-y += exynos_drm_drv.o
 exynos-drm-y += exynos_drm_crtc.o

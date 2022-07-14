@@ -270,13 +270,13 @@ int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
  * device time unit (RDEV only).
  * @llhw: Low-level device pointer.
  * @tx_timestamp_dtu: TX timestamp in device time unit.
- * @ant_id: Antenna used to transmit.
+ * @ant_set_id: Antennas set id used to transmit.
  *
  * Return: RMARKER timestamp in ranging count time unit.
  */
 u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
 						u32 tx_timestamp_dtu,
-						int ant_id);
+						int ant_set_id);
 
 /**
  * mcps802154_difference_timestamp_rctu() - Compute the difference between two
@@ -290,6 +290,16 @@ u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
 s64 mcps802154_difference_timestamp_rctu(struct mcps802154_llhw *llhw,
 					 u64 timestamp_a_rctu,
 					 u64 timestamp_b_rctu);
+
+/**
+ * mcps802154_compute_frame_duration_dtu() - Compute the duration of a frame.
+ * @llhw: Low-level device pointer.
+ * @payload_bytes: Payload length (header and checksum included).
+ *
+ * Return: The duration in device time unit.
+ */
+int mcps802154_compute_frame_duration_dtu(struct mcps802154_llhw *llhw,
+					  int payload_bytes);
 
 /**
  * mcps802154_vendor_cmd() - Run a driver vendor specific command.

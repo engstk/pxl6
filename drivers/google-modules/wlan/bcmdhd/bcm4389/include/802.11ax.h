@@ -2,7 +2,7 @@
  * Basic types and constants relating to 802.11ax/HE STA
  * This is a portion of 802.11ax definition. The rest are in 802.11.h.
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -441,6 +441,12 @@ typedef uint8 he_phy_cap_t[HE_PHY_CAP_INFO_SIZE];
 #define HE_MCS_CODE_SIZE	2u	/* num bits */
 #define HE_MCS_CODE_MASK	0x3u	/* mask for 1-stream */
 
+/* Whenever SSID is not known and short ssid is included in the
+* 6g probe request SSID element contains one octet value
+* 128 in the SSID element
+*/
+#define WLC_SSID_VAL_IN_SHORT_SSID	128u
+
 /* Defines for The Max HE MCS For n SS subfield (where n = 1, ..., 8) */
 #define HE_MCS_MAP_NSS_MAX	8u	/* Max number of streams possible */
 #define HE_MCS_NSS_SET_MASK	0xffffu /* Field is to be 16 bits long */
@@ -647,10 +653,12 @@ typedef BWL_PRE_PACKED_STRUCT struct he_op_ie {
 #define HE_6G_OP_CTL_REG_INFO(ctl) \
 	((ctl & HE_6G_CTL_REG_INFO_MASK) >> HE_6G_CTL_REG_INFO_SHIFT)
 
-#define HE_6G_OP_REG_INFO_LOW_PWR 0u   /* INDOOR Low Power */
-#define HE_6G_OP_REG_INFO_STD_PWR 1u   /* Standard Power */
-#define HE_6G_OP_REG_INFO_VLP_PWR 2u   /* Very low Power (Not yet defined in spec) */
-#define HE_6G_OP_REG_INFO_CAT_MAX 2u   /* Category reserved */
+#define HE_6G_OP_REG_INFO_LOW_PWR	0u	/* INDOOR Low Power */
+#define HE_6G_OP_REG_INFO_STD_PWR	1u	/* Standard Power */
+#define HE_6G_OP_REG_INFO_VLP_PWR	2u	/* Very low Power */
+#define HE_6G_OP_REG_INFO_INDR_ENAB	3u	/* Indoor Enabled */
+#define HE_6G_OP_REG_INFO_INDR_STD_PWR	4u	/* Indoor Standard Power */
+#define HE_6G_OP_REG_INFO_CAT_MAX	5u	/* Category reserved */
 
 #define HE_6G_CTL_DUP_BCN_SHIFT     0x02u
 #define HE_6G_OP_CTL_DUP_BCN(ctl) \

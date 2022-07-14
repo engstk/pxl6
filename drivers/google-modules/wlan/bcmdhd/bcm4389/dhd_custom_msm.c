@@ -1,7 +1,7 @@
 /*
  * Platform Dependent file for Qualcomm MSM/APQ
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -105,6 +105,11 @@ typedef struct dhd_plat_info {
 
 static dhd_pcie_event_cb_t g_pfn = NULL;
 
+char* dhd_get_device_dt_name(void)
+{
+	return DHD_DT_COMPAT_ENTRY;
+}
+
 uint32 dhd_plat_get_info_size(void)
 {
 	return sizeof(dhd_plat_info_t);
@@ -173,6 +178,11 @@ dhd_wifi_init_gpio(void)
 		return -ENODEV;
 	}
 
+	if (!of_device_is_available(root_node)) {
+		printk(KERN_ERR "%s: brcm wlan device status is disable\n", __FUNCTION__);
+		return -ENXIO;
+	}
+
 	/* ========== WLAN_PWR_EN ============ */
 	wlan_reg_on = of_get_named_gpio(root_node, WIFI_WL_REG_ON_PROPNAME, 0);
 	printk(KERN_INFO "%s: gpio_wlan_power : %d\n", __FUNCTION__, wlan_reg_on);
@@ -219,11 +229,6 @@ dhd_wifi_init_gpio(void)
 	gpio_direction_input(wlan_host_wake_up);
 	wlan_host_wake_irq = gpio_to_irq(wlan_host_wake_up);
 #endif /* CONFIG_BCMDHD_OOB_HOST_WAKE */
-
-#ifdef CONFIG_BCMDHD_PCIE
-	printk(KERN_INFO "%s: Call msm_pcie_enumerate\n", __FUNCTION__);
-	msm_pcie_enumerate(MSM_PCIE_CH_NUM);
-#endif /* CONFIG_BCMDHD_PCIE */
 
 	return 0;
 }

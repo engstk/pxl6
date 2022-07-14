@@ -15,7 +15,11 @@
 #define EDGETPU_NUM_P2P_MAILBOXES 0
 #define EDGETPU_NUM_EXT_MAILBOXES 0
 
-#define ABROLHOS_TZ_MAILBOX_ID			8
+/*
+ * The TZ mailbox is not managed by the kernel, but we still need to tell firmware to enable it,
+ * so its index is placed after the kernel managed mailboxes.
+ */
+#define EDGETPU_TZ_MAILBOX_ID	8
 
 #define ABROLHOS_CSR_MBOX2_CONTEXT_ENABLE 0xe0000
 #define ABROLHOS_CSR_MBOX2_CMD_QUEUE_DOORBELL_SET 0xe1000

@@ -1,7 +1,7 @@
 /*
  * DHD debug ring API and structures - implementation
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -98,8 +98,11 @@ dhd_dbg_ring_init(dhd_pub_t *dhdp, dhd_dbg_ring_t *ring, uint16 id, uint8 *name,
 	unsigned long flags = 0;
 
 	if (allocd_buf == NULL) {
-		/* DEBUG_DUMP RINGs need to be delayed allocation */
-		if (id != DEBUG_DUMP_RING1_ID && id != DEBUG_DUMP_RING2_ID) {
+		/* for DEBUG_DUMP and MEM_DUMP, buffer can be NULL
+		 * since act as delayed allocation or fake rings
+		 */
+		if (id != DEBUG_DUMP_RING1_ID && id != DEBUG_DUMP_RING2_ID &&
+				id != MEM_DUMP_RING_ID) {
 			return BCME_NOMEM;
 		}
 		buf = NULL;
@@ -356,7 +359,7 @@ dhd_dbg_ring_push(dhd_dbg_ring_t *ring, dhd_dbg_ring_entry_t *hdr, void *data)
 	w_entry = (dhd_dbg_ring_entry_t *)((uint8 *)ring->ring_buf + ring->wp);
 	/* header */
 	ret = memcpy_s(w_entry, avail_size, hdr, DBG_RING_ENTRY_SIZE);
-	if (unlikely(ret)) {
+	if (ret) {
 		DHD_ERROR((" memcpy_s() error : %d, destsz: %d, n: %d\n",
 			ret, avail_size, (int)DBG_RING_ENTRY_SIZE));
 		return BCME_ERROR;
@@ -366,7 +369,7 @@ dhd_dbg_ring_push(dhd_dbg_ring_t *ring, dhd_dbg_ring_entry_t *hdr, void *data)
 	avail_size -= DBG_RING_ENTRY_SIZE;
 	ret = memcpy_s((char *)w_entry + DBG_RING_ENTRY_SIZE,
 		avail_size, data, w_entry->len);
-	if (unlikely(ret)) {
+	if (ret) {
 		DHD_ERROR((" memcpy_s() error : %d, destsz: %d, n: %d\n",
 			ret, avail_size, w_entry->len));
 		return BCME_ERROR;

@@ -28,7 +28,6 @@
 
 #include "dw3000.h"
 
-
 #if (KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE)
 #define PM_QOS_RESUME_LATENCY_NO_CONSTRAINT S32_MAX
 #endif

@@ -196,7 +196,8 @@ static inline void cal_set_write_protected(struct cal_regs_desc *regs_desc,
 
 #define cal_mask(val, mask)	(((val) & (mask)) >> (ffs(mask) - 1))
 
-void dpu_print_hex_dump(void __iomem *regs, const void *buf, size_t len);
+void dpu_print_hex_dump(struct drm_printer *p, void __iomem *regs,
+			const void *buf, size_t len);
 
 /* log messages */
 #define cal_msg(func, _id, fmt, ...)	\
@@ -207,7 +208,7 @@ void dpu_print_hex_dump(void __iomem *regs, const void *buf, size_t len);
 
 #define cal_log_debug(id, fmt, ...)		\
 	cal_msg(pr_debug, id, fmt, ##__VA_ARGS__)
-#define cal_log_warn(id, fmt, ...)	cal_msg(pr_info, id, fmt, ##__VA_ARGS__)
+#define cal_log_warn(id, fmt, ...)	cal_msg(pr_warn, id, fmt, ##__VA_ARGS__)
 #define cal_log_info(id, fmt, ...)	cal_msg(pr_info, id, fmt, ##__VA_ARGS__)
 #define cal_log_err(id, fmt, ...)	cal_msg(pr_err, id, fmt, ##__VA_ARGS__)
 #define cal_info_ratelimited(id, fmt, ...)	\

@@ -307,6 +307,10 @@ int hold_m3(struct fts_ts_info *info)
 		    info->board->dchip_id[1] == ALIX_DCHIP_ID_1) {
 			cmd[0] = 0x70;
 			address = ADDR_GPIO_CONFIG_REG3;
+		} else if (info->board->dchip_id[0] == SALIXP_DCHIP_ID_0 &&
+			   info->board->dchip_id[1] == SALIXP_DCHIP_ID_1){
+			cmd[0] = 0x07;
+			address = ADDR_GPIO_CONFIG_REG3;
 		} else {
 			cmd[0] = 0x07;
 			address = ADDR_GPIO_CONFIG_REG2;
@@ -703,18 +707,34 @@ int flash_erase_page_by_page(struct fts_ts_info *info, ErasePage keep_cx,
 	u8 flash_panel_start_page = FLASH_PANEL_PAGE_START;
 	u8 flash_panel_end_page = FLASH_PANEL_PAGE_END;
 
-	u8 cmd1[6] = { FTS_CMD_HW_REG_W,      0x20,	 0x00,	    0x00,
-		       FLASH_ERASE_CODE0 + 1, 0x00 };
-	u8 cmd[6] = { FTS_CMD_HW_REG_W, 0x20, 0x00, 0x00, FLASH_ERASE_CODE0,
-		      0xA0 };
-	u8 cmd2[9] = { FTS_CMD_HW_REG_W, 0x20,		   0x00,
-		       0x01,		 0x28,
-		       0xFF,
-		       0xFF,		 0xFF,		   0xFF };
-	u8 mask[4] = { 0 };
+	u8 cmd1[9] = { FTS_CMD_HW_REG_W, 0x20, 0x00, 0x00,
+		       FLASH_ERASE_CODE0 + 1, 0x00, 0xFF, 0x1C, 0x90};
+
+	u8 cmd[6] = { FTS_CMD_HW_REG_W, 0x20, 0x00, 0x00, FLASH_ERASE_CODE0, 0xA0 };
+
+	u8 cmd2[11] = { FTS_CMD_HW_REG_W, 0x20, 0x00, 0x01, 0x28, 0xFF,
+			0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+	u8 mask[6] = { 0 };
+
+	u8 cmd1_length;
+	u8 cmd2_length;
+	u8 mask_cnt;
 	char buff[(2 + 1) * 4 + 1];
 	int buff_len = sizeof(buff);
 	int index = 0;
+
+	if (info->board->dchip_id[0] == SALIXP_DCHIP_ID_0 &&
+	    info->board->dchip_id[1] == SALIXP_DCHIP_ID_1) {
+		cmd[5] = 0x80;
+		cmd1_length = 9;
+		cmd2_length = 11;
+		mask_cnt = 6;
+	} else {
+		cmd1_length = 6;
+		cmd2_length = 9;
+		mask_cnt = 4;
+	}
 
 	if ((fw->fw_code_size == 0) ||
 	(fw->panel_config_size == 0) ||
@@ -744,17 +764,17 @@ int flash_erase_page_by_page(struct fts_ts_info *info, ErasePage keep_cx,
 	for (i = flash_cx_start_page; i <= flash_cx_end_page && keep_cx >=
 	     SKIP_PANEL_CX_INIT; i++) {
 		dev_info(info->dev, "Skipping erase CX page %d!\n", i);
-		fromIDtoMask(i, mask, 4);
+		fromIDtoMask(i, mask, mask_cnt);
 	}
 
 
 	for (i = flash_panel_start_page; i <= flash_panel_end_page && keep_cx >=
 	     SKIP_PANEL_INIT; i++) {
 		dev_info(info->dev, "Skipping erase Panel Init page %d!\n", i);
-		fromIDtoMask(i, mask, 4);
+		fromIDtoMask(i, mask, mask_cnt);
 	}
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < mask_cnt; i++) {
 		cmd2[5 + i] = cmd2[5 + i] & (~mask[i]);
 		index += scnprintf(buff + index, buff_len - index,
 					"%02X ", cmd2[5 + i]);
@@ -762,13 +782,13 @@ int flash_erase_page_by_page(struct fts_ts_info *info, ErasePage keep_cx,
 	dev_info(info->dev, "Setting the page mask = %s\n", buff);
 
 	dev_info(info->dev, "Writing page mask...\n");
-	if (fts_write(info, cmd2, ARRAY_SIZE(cmd2)) < OK) {
+	if (fts_write(info, cmd2, cmd2_length) < OK) {
 		dev_err(info->dev, "flash_erase_page_by_page: Page mask ERROR %08X\n",
 			ERROR_BUS_W);
 		return ERROR_BUS_W;
 	}
 
-	if (fts_write(info, cmd1, ARRAY_SIZE(cmd1)) < OK) {
+	if (fts_write(info, cmd1, cmd1_length) < OK) {
 		dev_err(info->dev, "flash_erase_page_by_page: Disable info ERROR %08X\n",
 			ERROR_BUS_W);
 		return ERROR_BUS_W;
@@ -806,6 +826,13 @@ int start_flash_dma(struct fts_ts_info *info)
 	u8 cmd[12] = { FLASH_CMD_WRITE_REGISTER, 0x20, 0x00, 0x00,
 		      0x6B, 0x00, 0x40, 0x42, 0x0F, 0x00, 0x00,
 			FLASH_DMA_CODE1 };
+
+	if (info->board->dchip_id[0] == SALIXP_DCHIP_ID_0 &&
+	    info->board->dchip_id[1] == SALIXP_DCHIP_ID_1) {
+		cmd[6] = 0xFF;
+		cmd[7] = 0x1C;
+		cmd[8] = 0x10;
+	}
 
 	/* write the command to erase the flash */
 

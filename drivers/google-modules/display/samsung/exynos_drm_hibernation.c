@@ -54,12 +54,18 @@ static inline bool is_hibernaton_blocked(struct exynos_hibernation *hiber)
 		(hiber->decon->state != DECON_STATE_ON);
 }
 
+static inline bool is_dqe_dimming_in_progress(struct decon_device *decon)
+{
+	return (decon->dqe &&
+		dqe_reg_dimming_in_progress(decon->id));
+}
+
 static bool exynos_hibernation_check(struct exynos_hibernation *hiber)
 {
 	pr_debug("%s +\n", __func__);
 
 	return (!is_camera_operating(hiber) &&
-		!dqe_reg_dimming_in_progress());
+		!is_dqe_dimming_in_progress(hiber->decon));
 }
 
 static inline void hibernation_unblock(struct exynos_hibernation *hiber)

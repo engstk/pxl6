@@ -27,20 +27,50 @@
 #include "fira_trace.h"
 
 #include <asm/unaligned.h>
-#include <linux/bitops.h>
 #include <linux/string.h>
 #include <linux/ieee802154.h>
+#include <linux/math64.h>
+#include <linux/limits.h>
 #include <net/mcps802154_frame.h>
 
 #include "warn_return.h"
-#include "utils_fixed_point.h"
-
-#define FIRA_FRAME_MAX_SIZE 127
 
 #define FIRA_STS_FOM_THRESHOLD 153
 
 static struct mcps802154_access *
 fira_access_controlee(struct fira_local *local, struct fira_session *session);
+
+/**
+ * sat_fp() - Saturate the range of fixed-point
+ * @x: fixed-point value on s32.
+ *
+ * Return: value saturate to s16 range
+ */
+static s16 sat_fp(s32 x)
+{
+	if (x > S16_MAX)
+		return S16_MAX;
+	else if (x < S16_MIN)
+		return S16_MIN;
+	else
+		return x;
+}
+
+/**
+ * map_q11_to_2pi() - Map a Fixed Point angle to an signed 16 bit interger
+ * @x: angle as Q11 fixed_point value in range [-PI, PI]
+ *
+ * Return: the angle mapped to [INT16_MIN, INT16_MAX]
+ */
+static s16 map_q11_to_2pi(s16 x)
+{
+	const s16 pi = 6434; /* Same as round(M_PI * (1 << 11)). */
+
+	s32 temp = (s32)x * S16_MAX;
+	temp /= pi;
+
+	return sat_fp(temp);
+}
 
 /**
  * fira_access_setup_frame() - Fill an access frame from a FiRa slot.
@@ -62,6 +92,9 @@ static void fira_access_setup_frame(struct fira_local *local,
 	const struct fira_session_params *params = &session->params;
 	struct mcps802154_sts_params *sts_params_for_access = NULL;
 	int rframe_config = session->params.rframe_config;
+
+	const struct fira_measurement_sequence_step *current_ms_step =
+		fira_session_get_current_meas_seq_step(session);
 
 	bool is_rframe = slot->message_id <= FIRA_MESSAGE_ID_RFRAME_MAX;
 	bool is_last_rframe = slot->message_id == FIRA_MESSAGE_ID_RANGING_FINAL;
@@ -100,7 +133,8 @@ static void fira_access_setup_frame(struct fira_local *local,
 				&local->ranging_info[slot->ranging_index];
 			ranging_info->timestamps_rctu[slot->message_id] =
 				mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
-					local->llhw, frame_dtu, slot->tx_ant);
+					local->llhw, frame_dtu,
+					slot->tx_ant_set);
 
 			flags |= MCPS802154_TX_FRAME_RANGING;
 			if (rframe_config == FIRA_RFRAME_CONFIG_SP3)
@@ -109,13 +143,15 @@ static void fira_access_setup_frame(struct fira_local *local,
 				flags |= MCPS802154_TX_FRAME_SP1;
 			if (!is_last_rframe)
 				flags |= MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK;
+		} else if (is_first_frame) {
+			flags |= MCPS802154_TX_FRAME_RANGING_ROUND;
 		}
 		*frame = (struct mcps802154_access_frame){
 			.is_tx = true,
 			.tx_frame_info = {
 				.timestamp_dtu = frame_dtu,
 				.flags = flags,
-				.ant_id = slot->tx_ant,
+				.ant_set_id = slot->tx_ant_set,
 			},
 			.sts_params = sts_params_for_access,
 		};
@@ -133,21 +169,27 @@ static void fira_access_setup_frame(struct fira_local *local,
 				flags |= MCPS802154_RX_INFO_KEEP_RANGING_CLOCK;
 			request = MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
 				  MCPS802154_RX_FRAME_INFO_RANGING_STS_FOM;
-			if (params->aoa_result_req) {
+			if (current_ms_step->type !=
+			    FIRA_MEASUREMENT_TYPE_RANGE) {
 				flags |= MCPS802154_RX_INFO_RANGING_PDOA;
 				request |=
 					MCPS802154_RX_FRAME_INFO_RANGING_PDOA |
 					MCPS802154_RX_FRAME_INFO_RANGING_PDOA_FOM;
 			}
+			if (params->ranging_round_usage ==
+				    FIRA_RANGING_ROUND_USAGE_SSTWR &&
+			    session->params.device_type ==
+				    FIRA_DEVICE_TYPE_CONTROLEE)
+				request |=
+					MCPS802154_RX_FRAME_INFO_RANGING_OFFSET;
 		}
-
 		*frame = (struct mcps802154_access_frame){
 			.is_tx = false,
 			.rx = {
 				.info = {
 					.timestamp_dtu = frame_dtu,
 					.flags = flags,
-					.ant_pair_id = slot->rx_ant_pair,
+					.ant_set_id = slot->rx_ant_set,
 				},
 				.frame_info_flags_request = request,
 			},
@@ -184,7 +226,6 @@ static void fira_rx_frame_ranging(struct fira_local *local,
 				  const struct mcps802154_rx_frame_info *info)
 {
 	const struct fira_session *session = local->current_session;
-	const struct fira_session_params *params = &session->params;
 	struct fira_ranging_info *ranging_info =
 		&local->ranging_info[slot->ranging_index];
 	struct mcps802154_ie_get_context ie_get = {};
@@ -214,22 +255,50 @@ static void fira_rx_frame_ranging(struct fira_local *local,
 			info->flags & MCPS802154_RX_FRAME_INFO_RANGING_PDOA_FOM;
 		s16 local_pdoa_q11 = info->ranging_pdoa_rad_q11;
 		s16 local_aoa_q11 = info->ranging_aoa_rad_q11;
+		const struct fira_measurement_sequence_step *current_step =
+			fira_session_get_current_meas_seq_step(session);
 
-		if (params->rx_antenna_pair_azimuth == slot->rx_ant_pair) {
-			local_aoa = &ranging_info->local_aoa_azimuth;
-		} else if (params->rx_antenna_pair_elevation ==
-			   slot->rx_ant_pair) {
-			local_aoa = &ranging_info->local_aoa_elevation;
-		} else {
+		switch (current_step->type) {
+		case FIRA_MEASUREMENT_TYPE_AOA:
 			local_aoa = &ranging_info->local_aoa;
+			break;
+		case FIRA_MEASUREMENT_TYPE_AOA_AZIMUTH:
+			local_aoa = &ranging_info->local_aoa_azimuth;
+			break;
+		case FIRA_MEASUREMENT_TYPE_AOA_ELEVATION:
+			local_aoa = &ranging_info->local_aoa_elevation;
+			break;
+		case FIRA_MEASUREMENT_TYPE_AOA_AZIMUTH_ELEVATION:
+			local_aoa = (slot->message_id ==
+				     FIRA_MESSAGE_ID_RANGING_FINAL) ?
+					    &ranging_info->local_aoa_elevation :
+					    &ranging_info->local_aoa_azimuth;
+			break;
+		default: /* LCOV_EXCL_START */
+			local_aoa = NULL;
+			/* LCOV_EXCL_STOP */
 		}
 
-		local_aoa->present = true;
-		local_aoa->rx_ant_pair = slot->rx_ant_pair;
-		local_aoa->pdoa_2pi = map_q11_to_2pi(local_pdoa_q11);
-		local_aoa->aoa_2pi = map_q11_to_2pi(local_aoa_q11);
-		if (pdoa_fom_info_present)
-			local_aoa->aoa_fom = info->ranging_pdoa_fom;
+		/* LCOV_EXCL_START */
+		if (local_aoa) {
+			/* LCOV_EXCL_STOP */
+			local_aoa->present = true;
+			local_aoa->rx_ant_set = slot->rx_ant_set;
+			local_aoa->pdoa_2pi = map_q11_to_2pi(local_pdoa_q11);
+			local_aoa->aoa_2pi = map_q11_to_2pi(local_aoa_q11);
+			/* LCOV_EXCL_START */
+			/* FoM is always expected when PDoA present */
+			if (pdoa_fom_info_present)
+				/* LCOV_EXCL_STOP */
+				local_aoa->aoa_fom = info->ranging_pdoa_fom;
+		}
+	}
+
+	if (info->flags & MCPS802154_RX_FRAME_INFO_RANGING_OFFSET) {
+		ranging_info->clock_offset_q26 =
+			div64_s64((s64)info->ranging_offset_rctu << 26,
+				  info->ranging_tracking_interval_rctu);
+		ranging_info->clock_offset_present = true;
 	}
 
 	if (skb) {
@@ -273,7 +342,7 @@ static void fira_rx_frame_control(struct fira_local *local,
 		goto failed;
 	if (allow_resync_session) {
 		session = local->current_session = allow_resync_session;
-		fira_session_prepare(local, session);
+		fira_session_prepare(session);
 		fira_access_controlee(local, session);
 	}
 
@@ -281,7 +350,7 @@ static void fira_rx_frame_control(struct fira_local *local,
 					      &stop_ranging, &block_stride_len))
 		goto failed;
 
-	fira_session_resync(local, session, sts_index, info->timestamp_dtu);
+	fira_session_resync(session, sts_index, info->timestamp_dtu);
 
 	if (stop_ranging) {
 		session->stop_inband = true;
@@ -371,13 +440,14 @@ static bool fira_do_process_rx_frame(enum mcps802154_rx_error_type error,
 				     struct fira_ranging_info *ranging_info,
 				     u8 slot_index)
 {
-	enum fira_ranging_status status;
+	enum fira_ranging_status status = FIRA_STATUS_RANGING_INTERNAL_ERROR;
 
 	switch (error) {
 	case MCPS802154_RX_ERROR_NONE:
 		return true;
 	case MCPS802154_RX_ERROR_SFD_TIMEOUT:
 	case MCPS802154_RX_ERROR_TIMEOUT:
+	case MCPS802154_RX_ERROR_HPDWARN:
 		status = FIRA_STATUS_RANGING_RX_TIMEOUT;
 		break;
 	case MCPS802154_RX_ERROR_FILTERED:
@@ -431,7 +501,7 @@ static void fira_rx_frame(struct mcps802154_access *access, int frame_idx,
 	if (skb)
 		kfree_skb(skb);
 
-	trace_region_fira_rx_message_type(
+	trace_region_fira_rx_message(
 		session, slot->message_id,
 		local->ranging_info[slot->ranging_index].status);
 
@@ -457,14 +527,12 @@ static struct sk_buff *fira_tx_get_frame(struct mcps802154_access *access,
 	struct sk_buff *skb;
 	int rframe = local->current_session->params.rframe_config;
 
-	trace_region_fira_tx_message_type(local->current_session,
-					  slot->message_id);
+	trace_region_fira_tx_message(local->current_session, slot->message_id);
 	if (rframe == FIRA_RFRAME_CONFIG_SP3 &&
 	    slot->message_id <= FIRA_MESSAGE_ID_RFRAME_MAX)
 		return NULL;
 
-	skb = mcps802154_frame_alloc(local->llhw, FIRA_FRAME_MAX_SIZE,
-				     GFP_KERNEL);
+	skb = mcps802154_frame_alloc(local->llhw, IEEE802154_MTU, GFP_KERNEL);
 	WARN_RETURN_ON(!skb, NULL);
 
 	fira_frame_header_put(local, slot, skb);
@@ -520,7 +588,7 @@ static void fira_tx_return(struct mcps802154_access *access, int frame_idx,
 	}
 }
 
-static void fira_access_done(struct mcps802154_access *access, int error)
+static void fira_access_done(struct mcps802154_access *access, bool error)
 {
 	struct fira_local *local = access_to_local(access);
 	struct fira_session *session = local->current_session;
@@ -594,9 +662,15 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 	struct fira_ranging_info *ri;
 	struct fira_controlees_array *controlees_array =
 		&session->current_controlees;
+	const struct fira_measurement_sequence_data *meas_seq =
+		&session->params.meas_seq;
+	const struct fira_measurement_sequence_step *current_ms_step =
+		&meas_seq->active->steps[meas_seq->current_step];
 	int i, j;
 	u32 frame_dtu;
 	int index = 0;
+	bool double_sided = (session->params.ranging_round_usage ==
+			     FIRA_RANGING_ROUND_USAGE_DSTWR);
 
 	access = &local->access;
 	local->src_short_addr =
@@ -636,7 +710,7 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 	s->index = index++;
 	s->tx_controlee_index = -1;
 	s->ranging_index = 0;
-	s->tx_ant = session->tx_ant;
+	s->tx_ant_set = current_ms_step->tx_ant_set_nonranging;
 	s->message_id = FIRA_MESSAGE_ID_CONTROL;
 	s++;
 
@@ -644,7 +718,7 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 		s->index = index++;
 		s->tx_controlee_index = -1;
 		s->ranging_index = 0;
-		s->tx_ant = session->tx_ant;
+		s->tx_ant_set = current_ms_step->tx_ant_set_ranging;
 		s->message_id = FIRA_MESSAGE_ID_RANGING_INITIATION;
 
 		s++;
@@ -658,21 +732,25 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 			s->index = index++;
 			s->tx_controlee_index = i;
 			s->ranging_index = j++;
-			s->rx_ant_pair = session->rx_ant_pair[0];
+			s->rx_ant_set = fira_session_get_rx_ant_set(
+				session, FIRA_MESSAGE_ID_RANGING_RESPONSE);
 			s->message_id = FIRA_MESSAGE_ID_RANGING_RESPONSE;
 			s++;
 		}
-		s->index = index++;
-		s->tx_controlee_index = -1;
-		s->ranging_index = 0;
-		s->tx_ant = session->tx_ant;
-		s->message_id = FIRA_MESSAGE_ID_RANGING_FINAL;
 
-		s++;
+		if (double_sided) {
+			s->index = index++;
+			s->tx_controlee_index = -1;
+			s->ranging_index = 0;
+			s->tx_ant_set = current_ms_step->tx_ant_set_ranging;
+			s->message_id = FIRA_MESSAGE_ID_RANGING_FINAL;
+			s++;
+		}
+
 		s->index = index++;
 		s->tx_controlee_index = -1;
 		s->ranging_index = 0;
-		s->tx_ant = session->tx_ant;
+		s->tx_ant_set = current_ms_step->tx_ant_set_nonranging;
 		s->message_id = FIRA_MESSAGE_ID_MEASUREMENT_REPORT;
 
 		s++;
@@ -684,7 +762,8 @@ fira_access_controller(struct fira_local *local, struct fira_session *session)
 				s->index = index++;
 				s->tx_controlee_index = i;
 				s->ranging_index = j++;
-				s->rx_ant_pair = session->rx_ant_pair[0];
+				s->rx_ant_set =
+					current_ms_step->rx_ant_set_nonranging;
 				s->message_id = FIRA_MESSAGE_ID_RESULT_REPORT;
 				s++;
 			}
@@ -746,7 +825,8 @@ fira_access_controlee(struct fira_local *local, struct fira_session *session)
 	s->index = 0;
 	s->tx_controlee_index = -1;
 	s->ranging_index = 0;
-	s->rx_ant_pair = session->rx_ant_pair[0];
+	s->rx_ant_set = fira_session_get_current_meas_seq_step(session)
+				->rx_ant_set_nonranging;
 	s->message_id = FIRA_MESSAGE_ID_CONTROL;
 
 	if (session->synchronised)
@@ -766,8 +846,9 @@ fira_access_controlee(struct fira_local *local, struct fira_session *session)
 			.info = {
 				.timestamp_dtu = access->timestamp_dtu,
 				.timeout_dtu = timeout_dtu,
-				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU,
-				.ant_pair_id = s->rx_ant_pair,
+				.flags = MCPS802154_RX_INFO_TIMESTAMP_DTU |
+					MCPS802154_RX_INFO_RANGING_ROUND,
+				.ant_set_id = s->rx_ant_set,
 			},
 			.frame_info_flags_request
 				= MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU,
@@ -802,7 +883,7 @@ struct mcps802154_access *fira_get_access(struct mcps802154_region *region,
 struct mcps802154_access *fira_compute_access(struct fira_local *local,
 					      struct fira_session *session)
 {
-	fira_session_prepare(local, session);
+	fira_session_prepare(session);
 	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER)
 		return fira_access_controller(local, session);
 	else
@@ -818,7 +899,7 @@ void fira_session_get_demand(struct fira_local *local,
 					 session->params.slot_duration_dtu;
 	if (session->params.device_type == FIRA_DEVICE_TYPE_CONTROLLER) {
 		demand->timestamp_dtu = base_timestamp_dtu;
-		demand->duration_dtu =
+		demand->max_duration_dtu =
 			(4 + 2 * session->current_controlees.size) *
 			session->params.slot_duration_dtu;
 	} else {
@@ -826,9 +907,9 @@ void fira_session_get_demand(struct fira_local *local,
 			fira_session_get_block_duration_margin(local, session);
 		demand->timestamp_dtu =
 			base_timestamp_dtu - block_duration_margin_dtu;
-		demand->duration_dtu =
+		demand->max_duration_dtu =
 			session->params.round_duration_slots *
 				session->params.slot_duration_dtu +
-			2 * block_duration_margin_dtu;
+			block_duration_margin_dtu;
 	}
 }

@@ -105,7 +105,7 @@ void *mcps802154_ie_put_header_ie(struct sk_buff *skb, int element_id,
 
 	if (unlikely(len > FIELD_MAX(IEEE802154_HEADER_IE_HEADER_LENGTH)))
 		return NULL;
-	if (unlikely(skb_tailroom(skb) < IEEE802154_IE_HEADER_LEN + len))
+	if (unlikely(skb_availroom(skb) < IEEE802154_IE_HEADER_LEN + len))
 		return NULL;
 
 	if (cb->ie_state == MCPS802154_IE_STATE_INIT)
@@ -139,7 +139,7 @@ void *mcps802154_ie_put_payload_ie(struct sk_buff *skb, int group_id,
 
 	if (unlikely(len > FIELD_MAX(IEEE802154_PAYLOAD_IE_HEADER_LENGTH)))
 		return NULL;
-	if (unlikely(skb_tailroom(skb) <
+	if (unlikely(skb_availroom(skb) <
 		     (need_terminator ? IEEE802154_IE_HEADER_LEN : 0) +
 			     IEEE802154_IE_HEADER_LEN + len))
 		return NULL;

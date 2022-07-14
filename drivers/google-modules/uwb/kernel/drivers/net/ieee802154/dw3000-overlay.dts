@@ -63,7 +63,7 @@
                 interrupt-parent = <&gpio>;
                 interrupts = <25 4>; /*IRQ_TYPE_LEVEL_HIGH*/
                 spi-max-frequency = <20000000>;
-                uwbhal,reset-gpio = <&gpio 24 4>; /* OPEN_DRAIN */
+                reset-gpio = <&gpio 24 4>; /* OPEN_DRAIN */
                 decawave,eui64 = /bits/ 64 <0>;
                 decawave,panid = /bits/ 16 <0>;
                 status = "okay";

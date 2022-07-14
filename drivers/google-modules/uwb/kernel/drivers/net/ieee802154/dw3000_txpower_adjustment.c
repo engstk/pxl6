@@ -332,15 +332,19 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 	u16 lower_limit = 0;
 
 	const u8 *lut = NULL;
-	u8 best_index = 0;
-	u8 best_coarse_gain = 0;
-	u8 ref_coarse_gain = ((u8)ref_tx_power) & TX_POWER_COARSE_GAIN_MASK;
-	u8 ref_fine_gain = ((u8)ref_tx_power >> 2) & TX_POWER_FINE_GAIN_MASK;
-	bool within_margin_flag = false;
-	bool reached_max_fine_gain_flag = false;
-	u8 tx_power_byte = 0;
-	u8 unlock = 0;
-	u8 i = 0;
+	uint8_t ref_tx_power_byte[4]; /* txpwr of each segments (UM 8.2.2.20) */
+	uint8_t adj_tx_power_byte[4];
+	uint8_t adj_tx_power_boost[4];
+	u8 best_index;
+	u8 best_coarse_gain;
+	u8 ref_coarse_gain;
+	u8 ref_fine_gain;
+	bool within_margin_flag;
+	bool reached_max_fine_gain_flag;
+	u8 unlock;
+	u8 i;
+	int k;
+	int ret = 0;
 
 	target_boost = calculate_power_boost(frame_duration_us);
 	if (th_boost) {
@@ -359,122 +363,169 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 		break;
 	}
 
-	i = ref_fine_gain;
-	upper_limit = target_boost + TXPOWER_ADJUSTMENT_MARGIN;
-	lower_limit = (target_boost > TXPOWER_ADJUSTMENT_MARGIN ?
-			       target_boost - TXPOWER_ADJUSTMENT_MARGIN :
-			       0);
-	best_boost_abs = TXPOWER_ADJUSTMENT_MARGIN;
+	for (k = 0; k < 4; k++) {
+		current_boost = 0;
+		best_boost_abs = 0;
+		best_boost = 0;
+		best_index = 0;
+		best_coarse_gain = 0;
+		within_margin_flag = false;
+		reached_max_fine_gain_flag = false;
+		unlock = 0;
+		i = 0;
+		ref_tx_power_byte[k] = (u8)(ref_tx_power >> (k << 3));
+		ref_coarse_gain = ((u8)ref_tx_power_byte[k]) &
+				  TX_POWER_COARSE_GAIN_MASK;
+		ref_fine_gain = ((u8)ref_tx_power_byte[k] >> 2) &
+				TX_POWER_FINE_GAIN_MASK;
+		adj_tx_power_boost[k] = 0;
+		i = ref_fine_gain;
 
-	if (applied_boost)
-		*applied_boost = 0;
-	if (target_boost < TXPOWER_ADJUSTMENT_MARGIN &&
-	    target_boost < lut[i + 1] - TXPOWER_ADJUSTMENT_MARGIN) {
-		return ref_tx_power;
-	}
-
-	/* Increase coarse setting if the required boost is greater than the
-	 * TxPower gain using the increased coarse setting.
-	 * NB : Coarse gain = 0x3 should not be used in CHAN9 */
-	while (ref_coarse_gain < 0x2) {
-		if (lut_coarse_gain[ref_coarse_gain] <
-		    target_boost - current_boost) {
-			current_boost += lut_coarse_gain[ref_coarse_gain];
-			ref_coarse_gain++;
-		} else {
-			break;
-		}
-	}
-
-	/* Increase current_boost until reaching value closest to target_boot */
-	while (current_boost != target_boost) {
-		unlock++;
-		/* Ensure loop does not got "locked" */
-		if (unlock > 2 * LUT_COMP_SIZE) {
-			return ref_tx_power;
+		/* Avoid re-doing the same math four times */
+		if (k > 0 && (ref_tx_power_byte[k] == ref_tx_power_byte[0])) {
+			adj_tx_power_byte[k] = adj_tx_power_byte[0];
+			continue;
 		}
 
-		if (current_boost > lower_limit &&
-		    current_boost < upper_limit) {
-			if (abs((s16)(target_boost - current_boost)) <=
-			    best_boost_abs) {
-				best_boost_abs =
-					abs((s16)target_boost - current_boost);
-				best_boost = current_boost;
-				best_index = i;
-				best_coarse_gain = ref_coarse_gain;
-				within_margin_flag = true;
-			} else if (within_margin_flag) {
-				i = best_index;
-				ref_coarse_gain = best_coarse_gain;
-				break;
-			}
-		} else if (within_margin_flag) {
-			current_boost -= lut[i];
-			i = best_index;
-			break;
+		/* PHR power must be 6dB lower than PSDU */
+		if (k == 1) {
+			uint8_t psdu_boost_err =
+				(target_boost > adj_tx_power_boost[0] ?
+					 target_boost - adj_tx_power_boost[0] :
+					 0);
+			if (psdu_boost_err < 0)
+				psdu_boost_err = 0;
+			target_boost -= psdu_boost_err;
 		}
 
-		/* Corner case: when fine gain setting is very low, it can happend that
-		 * current boost is already larger than target_boost but not within margin.
-		 * Then, just return current solution.
-		 */
-		if (current_boost >= upper_limit &&
-		    !reached_max_fine_gain_flag) {
-			break;
+		upper_limit = target_boost + TXPOWER_ADJUSTMENT_MARGIN;
+		lower_limit =
+			(target_boost > TXPOWER_ADJUSTMENT_MARGIN ?
+				 target_boost - TXPOWER_ADJUSTMENT_MARGIN :
+				 0);
+		best_boost_abs = TXPOWER_ADJUSTMENT_MARGIN;
+
+		if (target_boost < TXPOWER_ADJUSTMENT_MARGIN &&
+		    target_boost < lut[i + 1] - TXPOWER_ADJUSTMENT_MARGIN) {
+			if (k == 0 && applied_boost)
+				*applied_boost = 0;
+			adj_tx_power_byte[k] = ref_tx_power_byte[k];
+			continue;
 		}
 
-		/* Search for max fine gain value */
-		if (i == LUT_COMP_SIZE - 1) {
-			reached_max_fine_gain_flag = true;
-
-			/* return previously found solution */
-			if (within_margin_flag) {
-				i = best_index;
-				ref_coarse_gain = best_coarse_gain;
-				current_boost = best_boost;
-				break;
-			}
-
-			if ((ref_coarse_gain == 0x3) ||
-			    (ref_coarse_gain == 0x2 && channel == 9)) {
-				break;
-			}
-
-			if (current_boost + lut_coarse_gain[ref_coarse_gain] <=
-			    target_boost) {
+		/* Increase coarse setting if the required boost is greater than the
+		 * TxPower gain using the increased coarse setting.
+		 * NB : Coarse gain = 0x3 should not be used in CHAN9 */
+		while (ref_coarse_gain < 0x2) {
+			if (lut_coarse_gain[ref_coarse_gain] <
+			    target_boost - current_boost) {
 				current_boost +=
 					lut_coarse_gain[ref_coarse_gain];
 				ref_coarse_gain++;
-				break;
 			} else {
-				current_boost +=
-					lut_coarse_gain[ref_coarse_gain];
-				ref_coarse_gain++;
+				break;
 			}
 		}
 
-		/* Adjust fine gain */
-		if (!reached_max_fine_gain_flag) {
-			i++;
-			i &= TX_POWER_FINE_GAIN_MASK;
-			current_boost += lut[i];
-		} else {
-			current_boost -= lut[i];
-			i--;
-			i &= TX_POWER_FINE_GAIN_MASK;
-			if (i == 0)
-				reached_max_fine_gain_flag = false;
+		/* Increase current_boost until reaching value closest to target_boost */
+		while (current_boost != target_boost) {
+			unlock++;
+			/* Ensure loop does not got "locked" */
+			if (unlock > 2 * LUT_COMP_SIZE) {
+				ret = -EFAULT;
+				break;
+			}
+
+			if (current_boost > lower_limit &&
+			    current_boost < upper_limit) {
+				if (abs((s16)(target_boost - current_boost)) <=
+				    best_boost_abs) {
+					best_boost_abs = abs((s16)target_boost - current_boost);
+					best_boost = current_boost;
+					best_index = i;
+					best_coarse_gain = ref_coarse_gain;
+					within_margin_flag = true;
+				} else if (within_margin_flag) {
+					i = best_index;
+					ref_coarse_gain = best_coarse_gain;
+					break;
+				}
+			} else if (within_margin_flag) {
+				current_boost -= lut[i];
+				i = best_index;
+				break;
+			}
+
+			/* Corner case: when fine gain setting is very low, it can happened that
+			 * current boost is already larger than target_boost but not within margin.
+			 * Then, just return current solution.
+			 */
+			if (current_boost >= upper_limit &&
+			    !reached_max_fine_gain_flag) {
+				break;
+			}
+
+			/* Search for max fine gain value */
+			if (i == LUT_COMP_SIZE - 1) {
+				reached_max_fine_gain_flag = true;
+
+				/* return previously found solution */
+				if (within_margin_flag) {
+					i = best_index;
+					ref_coarse_gain = best_coarse_gain;
+					current_boost = best_boost;
+					break;
+				}
+
+				if ((ref_coarse_gain == 0x3) ||
+				    (ref_coarse_gain == 0x2 && channel == 9)) {
+					break;
+				}
+
+				if (current_boost +
+					    lut_coarse_gain[ref_coarse_gain] <=
+				    target_boost) {
+					current_boost +=
+						lut_coarse_gain[ref_coarse_gain];
+					ref_coarse_gain++;
+					break;
+				} else {
+					current_boost +=
+						lut_coarse_gain[ref_coarse_gain];
+					ref_coarse_gain++;
+				}
+			}
+
+			/* Adjust fine gain */
+			if (!reached_max_fine_gain_flag) {
+				i++;
+				i &= TX_POWER_FINE_GAIN_MASK;
+				current_boost += lut[i];
+			} else {
+				current_boost -= lut[i];
+				i--;
+				i &= TX_POWER_FINE_GAIN_MASK;
+				if (i == 0)
+					reached_max_fine_gain_flag = false;
+			}
 		}
+
+		if (ret) {
+			adj_tx_power_byte[k] = ref_tx_power_byte[k];
+			current_boost = 0;
+		} else {
+			adj_tx_power_byte[k] = (i << 2) | ref_coarse_gain;
+		}
+
+		adj_tx_power_boost[k] = current_boost;
+
+		if (applied_boost && (k == 0))
+			*applied_boost = current_boost;
 	}
-
-	if (applied_boost)
-		*applied_boost = current_boost;
-
-	tx_power_byte = (i << 2) | ref_coarse_gain;
-	adjusted_tx_power = (u32)tx_power_byte << 24 |
-			    (u32)tx_power_byte << 16 | (u32)tx_power_byte << 8 |
-			    (u32)tx_power_byte;
+	adjusted_tx_power = (u32)adj_tx_power_byte[3] << 24 |
+			    (u32)adj_tx_power_byte[2] << 16 |
+			    (u32)adj_tx_power_byte[1] << 8 |
+			    (u32)adj_tx_power_byte[0];
 
 	return adjusted_tx_power;
 }

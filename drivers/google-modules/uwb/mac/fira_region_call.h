@@ -48,4 +48,12 @@ int fira_session_control(struct fira_local *local, u32 call_id,
 			 const struct nlattr *params,
 			 const struct genl_info *info);
 
+/**
+ * fira_session_get_count() - Get count of active and inactive sessions.
+ * @local: FiRa context.
+ *
+ * Return: 0 or error.
+ */
+int fira_session_get_count(struct fira_local *local);
+
 #endif /* NET_MCPS802154_FIRA_REGION_CALL_H */

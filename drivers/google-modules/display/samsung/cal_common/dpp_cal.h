@@ -14,11 +14,17 @@
 #define __SAMSUNG_DPP_CAL_H__
 
 #include <drm/samsung_drm.h>
+#include <cal_config.h>
 
 #include "../exynos_drm_format.h"
 
+#ifdef CONFIG_SOC_GS201
+/* RDMA + ODMA + RCD */
+#define MAX_DPP_CNT		9
+#else
 /* RDMA + ODMA */
 #define MAX_DPP_CNT		7
+#endif
 
 #define DPP_CSC_IDX_BT601_625			0
 #define DPP_CSC_IDX_BT601_625_UNADJUSTED	2
@@ -51,6 +57,8 @@ enum dpp_attr {
 	DPP_ATTR_ODMA		= 17,
 	DPP_ATTR_DPP		= 18,
 	DPP_ATTR_WBMUX          = 19,
+
+	DPP_ATTR_RCD		= 20,
 };
 
 enum dpp_csc_defs {
@@ -87,6 +95,7 @@ struct dpp_regs {
 	void __iomem *dpp_base_regs;
 	void __iomem *dma_base_regs;
 	void __iomem *hdr_base_regs;
+	void __iomem *rcd_base_regs;
 };
 
 enum dpp_regs_id {
@@ -96,7 +105,11 @@ enum dpp_regs_id {
 	REGS_DPP3_ID,
 	REGS_DPP4_ID,
 	REGS_DPP5_ID,
+	REGS_DPP8_ID,
+	REGS_DPP9_ID,
 	REGS_DPP12_ID,
+	REGS_CGC0_ID,
+	REGS_CGC1_ID,
 	REGS_DPP_ID_MAX
 };
 
@@ -105,6 +118,28 @@ enum dpp_regs_type {
 	REGS_DPP,
 	REGS_DPP_TYPE_MAX
 };
+
+extern struct cal_regs_desc regs_dpp[REGS_DPP_TYPE_MAX][REGS_DPP_ID_MAX];
+
+#define dpp_regs_desc(id)			(&regs_dpp[REGS_DPP][id])
+#define dpp_read(id, offset)			\
+	cal_read(dpp_regs_desc(id), offset)
+#define dpp_write(id, offset, val)		\
+	cal_write(dpp_regs_desc(id), offset, val)
+#define dpp_read_mask(id, offset, mask)	\
+	cal_read_mask(dpp_regs_desc(id), offset, mask)
+#define dpp_write_mask(id, offset, val, mask)	\
+	cal_write_mask(dpp_regs_desc(id), offset, val, mask)
+
+#define dma_regs_desc(id)			(&regs_dpp[REGS_DMA][id])
+#define dma_read(id, offset)			\
+	cal_read(dma_regs_desc(id), offset)
+#define dma_write(id, offset, val)		\
+	cal_write(dma_regs_desc(id), offset, val)
+#define dma_read_mask(id, offset, mask)	\
+	cal_read_mask(dma_regs_desc(id), offset, mask)
+#define dma_write_mask(id, offset, val, mask)	\
+	cal_write_mask(dma_regs_desc(id), offset, val, mask)
 
 struct decon_frame {
 	int x;
@@ -196,8 +231,13 @@ void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 		const unsigned long attr);
 
 /* DPU_DMA, DPP DEBUG */
-void __dpp_dump(u32 id, void __iomem *regs, void __iomem *dma_regs,
+void __dpp_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
 		unsigned long attr);
+
+void __rcd_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
+		unsigned long attr);
+
+void __cgc_dump(struct drm_printer *p, u32 id, void __iomem *dma_regs);
 
 /* DPP hw limitation check */
 int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr);
@@ -206,6 +246,9 @@ int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr);
 u32 dpp_reg_get_irq_and_clear(u32 id);
 u32 idma_reg_get_irq_and_clear(u32 id);
 u32 odma_reg_get_irq_and_clear(u32 id);
+u32 cgc_reg_get_irq_and_clear(u32 id);
+void cgc_reg_set_config(u32 id, bool en, dma_addr_t addr);
+void cgc_reg_set_cgc_start(u32 id);
 
 void dma_reg_get_shd_addr(u32 id, u32 shd_addr[], const unsigned long attr);
 
