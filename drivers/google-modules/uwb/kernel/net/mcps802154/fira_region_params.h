@@ -1,1 +1,0 @@
-../../../mac/fira_region_params.h

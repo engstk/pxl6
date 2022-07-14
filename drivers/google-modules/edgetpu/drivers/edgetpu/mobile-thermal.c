@@ -16,7 +16,6 @@
 #include <linux/slab.h>
 #include <linux/thermal.h>
 #include <linux/version.h>
-#include <soc/google/gs101_tmu.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -61,6 +60,26 @@ static int edgetpu_get_max_state(struct thermal_cooling_device *cdev, unsigned l
 	return 0;
 }
 
+static int edgetpu_set_thermal_policy(struct edgetpu_dev *etdev, unsigned long pwr_state)
+{
+	int ret;
+
+	if (!edgetpu_pm_trylock(etdev->pm))
+		return -EAGAIN;
+
+	if (edgetpu_is_powered(etdev))
+		edgetpu_kci_block_bus_speed_control(etdev, true);
+
+	ret = exynos_acpm_set_policy(TPU_ACPM_DOMAIN, pwr_state);
+
+	if (edgetpu_is_powered(etdev))
+		edgetpu_kci_block_bus_speed_control(etdev, false);
+
+	edgetpu_pm_unlock(etdev->pm);
+
+	return ret;
+}
+
 /*
  * Set cooling state.
  */
@@ -93,9 +112,9 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	if (pwr_state < TPU_ACTIVE_UUD) {
 		dev_warn_ratelimited(dev,
 				     "Setting lowest DVFS state, waiting for FW to shutdown TPU");
-		ret = exynos_acpm_set_policy(TPU_ACPM_DOMAIN, TPU_ACTIVE_UUD);
+		ret = edgetpu_set_thermal_policy(cooling->etdev, TPU_ACTIVE_UUD);
 	} else {
-		ret = exynos_acpm_set_policy(TPU_ACPM_DOMAIN, pwr_state);
+		ret = edgetpu_set_thermal_policy(cooling->etdev, pwr_state);
 	}
 
 	if (ret) {

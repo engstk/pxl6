@@ -1,7 +1,7 @@
 /*
  * log_dump - debugability support for dumping logs to file - header file
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -136,7 +136,8 @@
 #define COOKIE_LOG_HDR "\n-------------------- Cookie List ----------------------------\n"
 #define DHD_PKTID_MAP_LOG_HDR "\n---------------- PKTID MAP log -----------------------\n"
 #define DHD_PKTID_UNMAP_LOG_HDR "\n------------------ PKTID UNMAP log -----------------------\n"
-#define PKTID_LOG_DUMP_FMT "\nIndex(Current=%d) Timestamp Pktaddr(PA) Pktid Size\n"
+#define PKTID_LOG_DUMP_FMT \
+	"\nIndex \t\tTimestamp \tPktaddr(PA) \tPktid \tSize \tPkttype\n(Current=%d)\n"
 
 /* 0: DLD_BUF_TYPE_GENERAL, 1: DLD_BUF_TYPE_PRESERVE
 * 2: DLD_BUF_TYPE_SPECIAL
@@ -404,6 +405,9 @@ extern void copy_debug_dump_time(char *dest, char *src);
 void dhd_get_debug_dump_len(void *handle, struct sk_buff *skb, void *event_info, uint8 event);
 void cfgvendor_log_dump_len(dhd_pub_t *dhdp, log_dump_type_t *type, struct sk_buff *skb);
 #endif
+#ifdef DHD_IOVAR_LOG_FILTER_DUMP
+bool dhd_iovar_log_dump_check(dhd_pub_t *dhd_pub, uint32 cmd, char *msg);
+#endif /* DHD_IOVAR_LOG_FILTER_DUMP */
 #endif /* DHD_LOG_DUMP */
 
 #endif /* !__DHD_LOG_DUMP_H__ */

@@ -25,11 +25,9 @@
 
 #include <linux/module.h>
 #include "dw3000_nfcc_coex.h"
+#include "dw3000.h"
 
 #define TLV_MAX_NB_SLOTS 4
-
-/* Forward declaration. */
-struct dw3000;
 
 /**
  * enum dw3000_nfcc_coex_tlv_type - TLVs types.

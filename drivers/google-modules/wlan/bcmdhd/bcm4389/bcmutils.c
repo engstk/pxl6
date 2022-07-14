@@ -1,7 +1,7 @@
 /*
  * Driver O/S-independent utility routines
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -44,6 +44,9 @@
 
 #ifndef ASSERT
 #define ASSERT(exp)
+#endif
+#ifndef ASSERT_FP
+#define ASSERT_FP(exp)
 #endif
 
 #endif /* !BCMDRIVER */
@@ -1115,6 +1118,15 @@ BCMFASTPATH(pktsetprio)(void *pkt, bool update_vtag)
 		priority = PRIO_8021D_NC;
 		rc = PKTPRIO_DSCP;
 #endif /* EAPOL_PKT_PRIO || DHD_LOSSLESS_ROAMING */
+#if defined(PRIORITIZE_ARP)
+	} else if (eh->ether_type == hton16(ETHER_TYPE_ARP)) {
+		/* Certain Host stacks attempt disconnection on continous ARP timeouts. In
+		 * congested scenarios with traffic, ARP packets may not get chance
+		 * for transmission leading to disconnection. so prioritize it.
+		 */
+		priority = PRIO_8021D_NC;
+		rc = PKTPRIO_DSCP;
+#endif /* PRIORITIZE_ARP */
 #if defined(WLTDLS)
 	} else if (eh->ether_type == hton16(ETHER_TYPE_89_0D)) {
 		/* Bump up the priority for TDLS frames */
@@ -1447,6 +1459,7 @@ _pktlist_trace(pktlist_info_t *pktlist, void *pkt, uint16 bit)
 	pktlist->list[(*idx)].pkt_trace[bit/NBBY] |= (1 << ((bit)%NBBY));
 
 }
+
 void
 pktlist_trace(pktlist_info_t *pktlist, void *pkt, uint16 bit)
 {
@@ -1993,7 +2006,7 @@ bcm_mwbmap_free_cnt(struct bcm_mwbmap * mwbmap_hdl)
 	BCM_MWBMAP_AUDIT(mwbmap_hdl);
 	mwbmap_p = BCM_MWBMAP_PTR(mwbmap_hdl);
 
-	ASSERT(mwbmap_p->ifree >= 0);
+	ASSERT_FP(mwbmap_p->ifree >= 0);
 
 	return (uint32)mwbmap_p->ifree;
 }
@@ -2079,6 +2092,7 @@ bcm_mwbmap_audit(struct bcm_mwbmap * mwbmap_hdl)
 
 	ASSERT((int)free_cnt == mwbmap_p->ifree);
 }
+
 /* END : Multiword bitmap based 64bit to Unique 32bit Id allocator. */
 
 /* Simple 16bit Id allocator using a stack implementation. */
@@ -2361,6 +2375,7 @@ done:
 	/* invoke any other system audits */
 	return (!!insane);
 }
+
 /* END: Simple id16 allocator */
 
 void
@@ -2511,8 +2526,7 @@ BCMPOSTTRAPFN(bcm_bprintf)(struct bcmstrbuf *b, const char *fmt, ...)
 
 #ifndef DONGLEBUILD
 	if (bcm_bprintf_bypass == TRUE) {
-		static const char BCMPOST_TRAP_RODATA(bcm_bprintf_ptstr_1)[] = "%s";
-		printf(bcm_bprintf_ptstr_1, b->buf);
+		printf("%s", b->buf);
 		goto exit;
 	}
 #endif /* !DONGLEBUILD */
@@ -2548,6 +2562,24 @@ bcm_bprhex(struct bcmstrbuf *b, const char *msg, bool newline, const uint8 *buf,
 		bcm_bprintf(b, "%02X", buf[i]);
 	if (newline)
 		bcm_bprintf(b, "\n");
+}
+
+/* print the buffer in hex string format with the most significant byte first */
+void
+bcm_bprhex_msb(struct bcmstrbuf *b, const char *msg, bool newline,
+	const uint8 *buf, uint len)
+{
+	int i;
+
+	if (msg != NULL && msg[0] != '\0') {
+		bcm_bprintf(b, "%s", msg);
+	}
+	for (i = (int)len - 1; i >= 0; i --) {
+		bcm_bprintf(b, "%02X", buf[i]);
+	}
+	if (newline) {
+		bcm_bprintf(b, "\n");
+	}
 }
 
 void
@@ -4478,6 +4510,48 @@ bcm_parse_ordered_tlvs(const  void *buf, uint buflen, uint key)
 	}
 	return NULL;
 }
+
+/**
+ * Return a const tlv buffer pointer and length representing the sub-buffer contained
+ * inside the given 'elt' starting at the given 'body_offset'.
+ * The function assumes that elt is a valid tlv; the elt pointer and data
+ * are all in the range of its parent buffer/length.
+ *
+ * @param elt         pointer to a valid bcm_tlv_t
+ * @param body_offset offset into the data body of elt
+ * @param buffer      on return, pointer to an offset in elt
+ * @param buflen      on return, length of the buffer to the end of elt
+ *
+ * On return, if body_offset is not less than the elt's body length, the *buffer parameter
+ * will be set to NULL and *buflen parameter will be set to zero.  Otherwise,
+ * *buffer will point to the sub-buffer at the body_offset, and *buflen be the remaining
+ * bytes in the body.
+ * E.g. Given a TLV with elt->len == 10, the call
+ * bcm_tlv_sub_buffer(elt, 4, &buffer, &buflen)
+ * will result with buffer = elt->data + 4, and buflen = 6.
+ */
+void
+bcm_tlv_sub_buffer(const bcm_tlv_t *elt, uint body_offset, const uint8 **buffer, uint8 *buflen)
+{
+	if (elt->len > body_offset) {
+		uint8 body_len = elt->len;
+
+#if defined(__COVERITY__)
+		/* The 'body_len' value is tainted in Coverity because it is read from
+		 * the tainted data pointed to by 'elt'. However, bcm_parse_tlvs() verifies
+		 * that the elt pointer is a valid element, so its body length is in the bounds
+		 * of the buffer.
+		 * Clearing the tainted attribute of 'body_len' for Coverity.
+		 */
+		__coverity_tainted_data_sanitize__(body_len);
+#endif /* __COVERITY__ */
+		*buflen = body_len - body_offset;
+		*buffer = elt->data + body_offset;
+	} else {
+		*buflen = 0u;
+		*buffer = NULL;
+	}
+}
 #endif	/* !BCMROMOFFLOAD_EXCLUDE_BCMUTILS_FUNCS */
 
 uint
@@ -4959,6 +5033,61 @@ BCMPOSTTRAPFN(bcm_bitcount)(const uint8 *bitmap, uint length)
 		}
 	}
 	return bitcount;
+}
+
+/* Count 0s or 1s in an octets list from 'from_bit' to 'to_bit' inclusively */
+uint
+bcm_count_bits(const uint8 *buf, uint buf_len, uint from_bit, uint to_bit, bool val_1)
+{
+	uint from;
+	uint to;
+	uint len;
+	uint8 tmp;
+	uint bits;
+
+	/* sanity check */
+	if (to_bit < from_bit) {
+		return 0u;
+	}
+
+	/* byte offset */
+	from = from_bit >> 3u;
+	to = to_bit >> 3u;
+	if (from >= buf_len || to >= buf_len) {
+		return 0u;
+	}
+
+	/* count 1s always */
+	len = to - from + 1u;
+	if (len == 1u) {
+		/* the only octet */
+		ASSERT(from == to);
+		tmp = buf[from];
+		tmp &= (0xffu << (from_bit & 7u));
+		tmp &= ~(0xffu << ((to_bit & 7u) + 1u));
+		bits = bcm_bitcount(&tmp, 1u);
+	} else {
+		ASSERT(len >= 2u);
+		/* the first octet */
+		tmp = buf[from];
+		tmp &= (0xffu << (from_bit & 7u));
+		bits = bcm_bitcount(&tmp, 1u);
+		/* the middle octet(s) */
+		if (len > 2u) {
+			bits += bcm_bitcount(&buf[from + 1u], len - 2u);
+		}
+		/* the last octet */
+		tmp = buf[to];
+		tmp &= ~(0xffu << ((to_bit & 7u) + 1u));
+		bits += bcm_bitcount(&tmp, 1u);
+	}
+
+	/* calc 0s if requested */
+	if (!val_1) {
+		bits = to_bit - from_bit + 1u - bits;
+	}
+
+	return bits;
 }
 
 /*
@@ -5475,6 +5604,7 @@ uint32 sqrt_int(uint32 value)
 
 	return root;
 }
+
 /* GROUP 1 --- end */
 
 /* read/write field in a consecutive bits in an octet array.
@@ -5552,9 +5682,9 @@ getbits(const uint8 *addr, uint size, uint stbit, uint nbits)
 
 	BCM_REFERENCE(size);
 
-	ASSERT(fbyte < size);
-	ASSERT(lbyte < size);
-	ASSERT(nbits <= (sizeof(val) << 3u));
+	ASSERT_FP(fbyte < size);
+	ASSERT_FP(lbyte < size);
+	ASSERT_FP(nbits <= (sizeof(val) << 3u));
 
 	/* all bits are in the same byte */
 	if (fbyte == lbyte) {
@@ -6083,6 +6213,25 @@ prhexstr(const char *prefix, const uint8 *buf, uint len, bool newline)
 			printf("%s", prefix);
 		}
 		for (i = 0; i < len; i ++) {
+			printf("%02X", buf[i]);
+		}
+		if (newline) {
+			printf("\n");
+		}
+	}
+}
+
+/* print the buffer in hex string format with the most significant byte first */
+void
+prhexstr_msb(const char *prefix, const uint8 *buf, uint len, bool newline)
+{
+	if (len > 0) {
+		int i;
+
+		if (prefix != NULL) {
+			printf("%s", prefix);
+		}
+		for (i = (int)len - 1; i >= 0; i --) {
 			printf("%02X", buf[i]);
 		}
 		if (newline) {

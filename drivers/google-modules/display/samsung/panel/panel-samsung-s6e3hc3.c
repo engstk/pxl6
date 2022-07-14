@@ -19,18 +19,6 @@
 #include "panel-samsung-drv.h"
 
 /**
- * enum s6e3hc3_idle_mode - type of idle mode supported per mode
- * @IDLE_MODE_UNSUPPORTED: No idle mode is supported in this mode
- * @IDLE_MODE_AUTO: In this mode the panel can go into idle automatically after last frame update
- * @IDLE_MODE_MANUAL: Manually go into lower idle mode when display enters self refresh state
- */
-enum s6e3hc3_idle_mode {
-	IDLE_MODE_UNSUPPORTED,
-	IDLE_MODE_AUTO,
-	IDLE_MODE_MANUAL,
-};
-
-/**
  * struct s6e3hc3_panel - panel specific runtime info
  *
  * This struct maintains s6e3hc3 panel specific runtime info, any fixed details about panel should
@@ -109,14 +97,6 @@ struct s6e3hc3_mode_data {
 	 * optimizations done while entering idle.
 	 */
 	const struct exynos_dsi_cmd_set *wakeup_mode_cmd_set;
-
-	/**
-	 * @idle_mode:
-	 *
-	 * Indicates whether going into lower refresh rate is allowed while in this mode, and what
-	 * type of idle mode is supported, for more info refer to enum s6e3hc3_idle_mode.
-	 */
-	enum s6e3hc3_idle_mode idle_mode;
 };
 
 static const unsigned char PPS_SETTING[] = {
@@ -277,7 +257,6 @@ static DEFINE_EXYNOS_CMD_SET(s6e3hc3_mode_120_ghbm_manual);
 static const struct s6e3hc3_mode_data s6e3hc3_mode_120 = {
 	.manual_mode_cmd_set = &s6e3hc3_mode_120_manual_cmd_set,
 	.manual_mode_ghbm_cmd_set = &s6e3hc3_mode_120_ghbm_manual_cmd_set,
-	.idle_mode = IDLE_MODE_AUTO,
 };
 
 static const struct exynos_dsi_cmd s6e3hc3_mode_60_common_cmds[] = {
@@ -301,7 +280,6 @@ static DEFINE_EXYNOS_CMD_SET(s6e3hc3_mode_60_wakeup);
 static const struct s6e3hc3_mode_data s6e3hc3_mode_60 = {
 	.common_mode_cmd_set = &s6e3hc3_mode_60_common_cmd_set,
 	.wakeup_mode_cmd_set = &s6e3hc3_mode_60_wakeup_cmd_set,
-	.idle_mode = IDLE_MODE_UNSUPPORTED,
 };
 
 static u8 s6e3hc3_get_te2_option(struct exynos_panel *ctx)
@@ -379,10 +357,9 @@ static inline bool is_auto_mode_preferred(struct exynos_panel *ctx)
 		return false;
 
 	if (ctx->idle_delay_ms) {
-		const ktime_t now = ktime_get();
-		const ktime_t delta = ktime_sub(now, ctx->last_mode_set_ts);
+		const unsigned int delta_ms = panel_get_idle_time_delta(ctx);
 
-		if (ktime_to_ms(delta) < ctx->idle_delay_ms)
+		if (delta_ms < ctx->idle_delay_ms)
 			return false;
 	}
 
@@ -519,7 +496,7 @@ static void s6e3hc3_update_refresh_mode(struct exynos_panel *ctx,
 	if (mdata->common_mode_cmd_set)
 		exynos_panel_send_cmd_set_flags(ctx, mdata->common_mode_cmd_set, flags);
 
-	EXYNOS_DCS_WRITE_TABLE(ctx, unlock_cmd_f0);
+	EXYNOS_DCS_WRITE_TABLE(ctx, lock_cmd_f0);
 
 	/* when mode is explicitly set (manual) panel idle effect would be disabled */
 	ctx->panel_idle_vrefresh = 0;
@@ -528,13 +505,12 @@ static void s6e3hc3_update_refresh_mode(struct exynos_panel *ctx,
 static void s6e3hc3_change_frequency(struct exynos_panel *ctx,
 				     const struct exynos_panel_mode *pmode)
 {
-	const struct s6e3hc3_mode_data *mdata = pmode->priv_data;
 	u32 idle_vrefresh = 0;
 
-	if (unlikely(!ctx || !mdata))
+	if (unlikely(!ctx))
 		return;
 
-	if (mdata->idle_mode == IDLE_MODE_AUTO)
+	if (pmode->idle_mode == IDLE_MODE_ON_INACTIVITY)
 		idle_vrefresh = s6e3hc3_get_min_idle_vrefresh(ctx, pmode);
 
 	s6e3hc3_update_refresh_mode(ctx, pmode, idle_vrefresh);
@@ -557,18 +533,14 @@ static bool s6e3hc3_set_self_refresh(struct exynos_panel *ctx, bool enable)
 	if (pmode->exynos_mode.is_lp_mode)
 		return false;
 
-	mdata = pmode->priv_data;
-	if (unlikely(!mdata))
-		return false;
-
 	idle_vrefresh = s6e3hc3_get_min_idle_vrefresh(ctx, pmode);
 
-	if (mdata->idle_mode != IDLE_MODE_MANUAL) {
+	if (pmode->idle_mode != IDLE_MODE_ON_SELF_REFRESH) {
 		/*
-		 * if idle mode is auto, may need to update the target fps for auto mode,
+		 * if idle mode is on inactivity, may need to update the target fps for auto mode,
 		 * or switch to manual mode if idle should be disabled (idle_vrefresh=0)
 		 */
-		if ((mdata->idle_mode == IDLE_MODE_AUTO) &&
+		if ((pmode->idle_mode == IDLE_MODE_ON_INACTIVITY) &&
 		    (spanel->auto_mode_vrefresh != idle_vrefresh)) {
 			dev_dbg(ctx->dev,
 				"early exit update needed for mode: %s (idle_vrefresh: %d)\n",
@@ -596,6 +568,12 @@ static bool s6e3hc3_set_self_refresh(struct exynos_panel *ctx, bool enable)
 	if (idle_vrefresh) {
 		s6e3hc3_set_early_exit_auto_mode(ctx, idle_vrefresh);
 	} else {
+		mdata = pmode->priv_data;
+		if (unlikely(!mdata)) {
+			dev_err(ctx->dev, "%s: failed to get mode data\n", __func__);
+			EXYNOS_DCS_WRITE_TABLE(ctx, lock_cmd_f0);
+			return false;
+		}
 		/* disable early exit after coming out of idle */
 		s6e3hc3_update_early_exit(ctx, false);
 		spanel->auto_mode_vrefresh = 0;
@@ -618,7 +596,8 @@ static int s6e3hc3_atomic_check(struct exynos_panel *ctx, struct drm_atomic_stat
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
 	struct s6e3hc3_panel *spanel = to_spanel(ctx);
 
-	if (!new_conn_state || !new_conn_state->crtc)
+	if (drm_mode_vrefresh(&ctx->current_mode->mode) == 120 ||
+	    !new_conn_state || !new_conn_state->crtc)
 		return 0;
 
 	new_crtc_state = drm_atomic_get_new_crtc_state(state, new_conn_state->crtc);
@@ -685,6 +664,7 @@ static void s6e3hc3_set_nolp_mode(struct exynos_panel *ctx,
 
 	EXYNOS_DCS_WRITE_TABLE(ctx, display_off);
 	EXYNOS_DCS_WRITE_SEQ(ctx, 0xF0, 0x5A, 0x5A);
+	/* backlight control and dimming */
 	s6e3hc3_write_display_mode(ctx, &pmode->mode);
 	if (ctx->panel_rev == PANEL_REV_PROTO1)
 		EXYNOS_DCS_WRITE_SEQ(ctx, 0x49, 0x02);	/* normal gamma */
@@ -1030,6 +1010,10 @@ static void s6e3hc3_set_dimming_on(struct exynos_panel *ctx,
 	const struct exynos_panel_mode *pmode = ctx->current_mode;
 
 	ctx->dimming_on = dimming_on;
+	if (pmode->exynos_mode.is_lp_mode) {
+		dev_info(ctx->dev,"in lp mode, skip to update");
+		return;
+	}
 	s6e3hc3_write_display_mode(ctx, &pmode->mode);
 }
 
@@ -1129,6 +1113,7 @@ static const struct exynos_panel_mode s6e3hc3_modes[] = {
 		.exynos_mode = {
 			.mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS,
 			.vblank_usec = 120,
+			.te_usec = 8500,
 			.bpc = 8,
 			.dsc = {
 				.enabled = true,
@@ -1143,6 +1128,7 @@ static const struct exynos_panel_mode s6e3hc3_modes[] = {
 			.rising_edge = 0,
 			.falling_edge = 48,
 		},
+		.idle_mode = IDLE_MODE_UNSUPPORTED,
 	},
 	{
 		/* 1440x3120 @ 120Hz */
@@ -1164,6 +1150,7 @@ static const struct exynos_panel_mode s6e3hc3_modes[] = {
 		.exynos_mode = {
 			.mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS,
 			.vblank_usec = 120,
+			.te_usec = 146,
 			.bpc = 8,
 			.dsc = {
 				.enabled = true,
@@ -1178,6 +1165,7 @@ static const struct exynos_panel_mode s6e3hc3_modes[] = {
 			.rising_edge = 0,
 			.falling_edge = 48,
 		},
+		.idle_mode = IDLE_MODE_ON_INACTIVITY,
 	},
 };
 
@@ -1201,6 +1189,7 @@ static const struct exynos_panel_mode s6e3hc3_lp_mode = {
 	.exynos_mode = {
 		.mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS,
 		.vblank_usec = 120,
+		.te_usec = 25200,
 		.bpc = 8,
 		.dsc = {
 			.enabled = true,
@@ -1346,6 +1335,7 @@ const struct exynos_panel_desc samsung_s6e3hc3 = {
 	.lp_cmd_set = &s6e3hc3_lp_cmd_set,
 	.binned_lp = s6e3hc3_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(s6e3hc3_binned_lp),
+	.is_panel_idle_supported = true,
 	.panel_func = &s6e3hc3_drm_funcs,
 	.exynos_panel_func = &s6e3hc3_exynos_funcs,
 };

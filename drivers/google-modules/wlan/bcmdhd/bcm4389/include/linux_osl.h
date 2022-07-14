@@ -1,7 +1,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -185,6 +185,13 @@ extern bool osl_is_flag_set(osl_t *osh, uint32 mask);
 	#define VMALLOCZ(osh, size)	osl_debug_vmallocz((osh), (size), __LINE__, __FILE__)
 	#define VMFREE(osh, addr, size)	\
 	({osl_debug_vmfree((osh), ((void *)addr), (size), __LINE__, __FILE__);(addr) = NULL;})
+	/* From the linux kernel 4.12, kvmalloc introduced which tries basically to
+	 * allocate even large blocks with kmalloc and falls back to vmalloc if fail.
+	 */
+	#define KVMALLOC(osh, size)	osl_debug_kvmalloc((osh), (size), __LINE__, __FILE__)
+	#define KVMALLOCZ(osh, size)	osl_debug_kvmallocz((osh), (size), __LINE__, __FILE__)
+	#define KVMFREE(osh, addr, size)	\
+	({osl_debug_kvmfree((osh), ((void *)addr), (size), __LINE__, __FILE__);(addr) = NULL;})
 	#define MALLOCED(osh)		osl_malloced((osh))
 	#define MEMORY_LEFTOVER(osh) osl_check_memleak(osh)
 	#define MALLOC_DUMP(osh, b)	osl_debug_memdump((osh), (b))
@@ -194,6 +201,10 @@ extern bool osl_is_flag_set(osl_t *osh, uint32 mask);
 	extern void *osl_debug_vmalloc(osl_t *osh, uint size, int line, const char* file);
 	extern void *osl_debug_vmallocz(osl_t *osh, uint size, int line, const char* file);
 	extern void osl_debug_vmfree(osl_t *osh, void *addr, uint size, int line, const char* file);
+	extern void *osl_debug_kvmalloc(osl_t *osh, uint size, int line, const char* file);
+	extern void *osl_debug_kvmallocz(osl_t *osh, uint size, int line, const char* file);
+	extern void osl_debug_kvmfree(osl_t *osh, void *addr, uint size, int line,
+		const char* file);
 	extern uint osl_malloced(osl_t *osh);
 	struct bcmstrbuf;
 	extern int osl_debug_memdump(osl_t *osh, struct bcmstrbuf *b);
@@ -202,22 +213,39 @@ extern bool osl_is_flag_set(osl_t *osh, uint32 mask);
 	#define MALLOC(osh, size)	osl_malloc((osh), (size))
 	#define MALLOCZ(osh, size)	osl_mallocz((osh), (size))
 	#define MALLOC_RA(osh, size, callsite)	osl_mallocz((osh), (size))
-	#define MFREE(osh, addr, size) ({osl_mfree((osh), ((void *)addr), (size));(addr) = NULL;})
+	#define MFREE(osh, addr, size)	\
+	({osl_mfree((osh), ((void *)addr), (size));(addr) = NULL;})
 	#define VMALLOC(osh, size)	osl_vmalloc((osh), (size))
 	#define VMALLOCZ(osh, size)	osl_vmallocz((osh), (size))
-	#define VMFREE(osh, addr, size)	({osl_vmfree((osh), ((void *)addr), (size));(addr) = NULL;})
+	#define VMFREE(osh, addr, size)	\
+	({osl_vmfree((osh), ((void *)addr), (size));(addr) = NULL;})
+	/* From the linux kernel 4.12, kvmalloc introduced which tries basically to
+	 * allocate even large blocks with kmalloc and falls back to vmalloc if fail.
+	 */
+	#define KVMALLOC(osh, size)	osl_kvmalloc((osh), (size))
+	#define KVMALLOCZ(osh, size)	osl_kvmallocz((osh), (size))
+	#define KVMFREE(osh, addr, size)	\
+	({osl_kvmfree((osh), ((void *)addr), (size));(addr) = NULL;})
 	#define MALLOCED(osh)		osl_malloced((osh))
 	#define MEMORY_LEFTOVER(osh) osl_check_memleak(osh)
 	extern void *osl_vmalloc(osl_t *osh, uint size);
 	extern void *osl_vmallocz(osl_t *osh, uint size);
 	extern void osl_vmfree(osl_t *osh, void *addr, uint size);
+	extern void *osl_kvmalloc(osl_t *osh, uint size);
+	extern void *osl_kvmallocz(osl_t *osh, uint size);
+	extern void osl_kvmfree(osl_t *osh, void *addr, uint size);
 	extern uint osl_malloced(osl_t *osh);
 	extern uint osl_check_memleak(osl_t *osh);
 #endif /* BCMDBG_MEM && !BINCMP */
 
+#define DMA_MALLOCZ(osh, size, dmable_size, dmah) osl_dma_mallocz((osh), (size), (dmable_size))
+#define DMA_MFREE(osh, addr, size, dmah) osl_dma_mfree((osh), (addr), (size))
+
 extern void *osl_malloc(osl_t *osh, uint size);
 extern void *osl_mallocz(osl_t *osh, uint size);
+extern void *osl_dma_mallocz(osl_t *osh, uint size, uint *dmable_size);
 extern void osl_mfree(osl_t *osh, void *addr, uint size);
+extern void osl_dma_mfree(osl_t *osh, void *addr, uint size);
 #define MALLOC_NODBG(osh, size)		osl_malloc((osh), (size))
 #define MALLOCZ_NODBG(osh, size)	osl_mallocz((osh), (size))
 #define MFREE_NODBG(osh, addr, size)	({osl_mfree((osh), ((void *)addr), (size));(addr) = NULL;})
@@ -273,6 +301,12 @@ extern void * osl_virt_to_phys(void * va);
 #define OSL_DMADDRWIDTH(osh, addrwidth) ({BCM_REFERENCE(osh); BCM_REFERENCE(addrwidth);})
 
 #define OSL_SMP_WMB()	smp_wmb()
+
+#if defined(__aarch64__)
+#define OSL_ISB()	isb()
+#else
+#define OSL_ISB()	do { /* noop */ } while (0)
+#endif /* __aarch64__ */
 
 /* API for CPU relax */
 extern void osl_cpu_relax(void);
@@ -816,6 +850,7 @@ typedef atomic_t osl_atomic_t;
 #define OSL_ATOMIC_INIT(osh, v)		atomic_set(v, 0)
 #define OSL_ATOMIC_INC(osh, v)		atomic_inc(v)
 #define OSL_ATOMIC_INC_RETURN(osh, v)	atomic_inc_return(v)
+#define OSL_ATOMIC_INC_AND_TEST(osh, v)	atomic_inc_and_test(v)
 #define OSL_ATOMIC_DEC(osh, v)		atomic_dec(v)
 #define OSL_ATOMIC_DEC_RETURN(osh, v)	atomic_dec_return(v)
 #define OSL_ATOMIC_READ(osh, v)		atomic_read(v)

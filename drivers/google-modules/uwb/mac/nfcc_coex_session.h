@@ -105,11 +105,13 @@ void nfcc_coex_session_init(struct nfcc_coex_local *local);
 
 /**
  * nfcc_coex_session_update() - Update session timestamps.
+ * @local: NFCC coex context.
  * @session: Session context.
  * @next_timestamp_dtu: Next start access opportunity.
  * @region_duration_dtu: Region duration, or 0 for endless region.
  */
-void nfcc_coex_session_update(struct nfcc_coex_session *session,
+void nfcc_coex_session_update(struct nfcc_coex_local *local,
+			      struct nfcc_coex_session *session,
 			      u32 next_timestamp_dtu, int region_duration_dtu);
 
 #endif /* NET_MCPS802154_NFCC_COEX_SESSION_H */

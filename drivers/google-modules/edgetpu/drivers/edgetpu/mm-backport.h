@@ -21,6 +21,7 @@
 #define FOLL_LONGTERM 0
 
 #define pin_user_pages_fast get_user_pages_fast
+#define pin_user_pages get_user_pages
 #define unpin_user_page put_page
 
 #ifndef untagged_addr

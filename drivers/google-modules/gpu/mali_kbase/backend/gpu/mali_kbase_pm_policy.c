@@ -36,9 +36,14 @@
 #include <linux/of.h>
 
 static const struct kbase_pm_policy *const all_policy_list[] = {
+#if IS_ENABLED(CONFIG_MALI_NO_MALI)
+	&kbase_pm_always_on_policy_ops,
+	&kbase_pm_coarse_demand_policy_ops,
+#else /* CONFIG_MALI_NO_MALI */
 	&kbase_pm_coarse_demand_policy_ops,
 	&kbase_pm_adaptive_policy_ops,
-	&kbase_pm_always_on_policy_ops
+	&kbase_pm_always_on_policy_ops,
+#endif /* CONFIG_MALI_NO_MALI */
 };
 
 void kbase_pm_policy_init(struct kbase_device *kbdev)
@@ -176,15 +181,14 @@ void kbase_pm_update_dynamic_cores_onoff(struct kbase_device *kbdev)
 
 	shaders_desired = kbdev->pm.backend.pm_current_policy->shaders_needed(kbdev);
 
-	if (shaders_desired && kbase_pm_is_l2_desired(kbdev)) {
+	if (shaders_desired && kbase_pm_is_l2_desired(kbdev))
 		kbase_pm_update_state(kbdev);
-	}
 #endif
 }
 
 void kbase_pm_update_cores_state_nolock(struct kbase_device *kbdev)
 {
-	bool shaders_desired;
+	bool shaders_desired = false;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
@@ -193,6 +197,7 @@ void kbase_pm_update_cores_state_nolock(struct kbase_device *kbdev)
 	if (kbdev->pm.backend.poweroff_wait_in_progress)
 		return;
 
+#if !MALI_USE_CSF
 	if (kbdev->pm.backend.protected_transition_override)
 		/* We are trying to change in/out of protected mode - force all
 		 * cores off so that the L2 powers down
@@ -200,15 +205,8 @@ void kbase_pm_update_cores_state_nolock(struct kbase_device *kbdev)
 		shaders_desired = false;
 	else
 		shaders_desired = kbdev->pm.backend.pm_current_policy->shaders_needed(kbdev);
-
-#if MALI_USE_CSF
-	/* On CSF GPUs, Host driver isn't supposed to do the power management
-	 * for shader cores. CSF firmware will power up the cores appropriately
-	 * and so from Driver's standpoint 'shaders_desired' flag shall always
-	 * remain 0.
-	 */
-	shaders_desired = false;
 #endif
+
 	if (kbdev->pm.backend.shaders_desired != shaders_desired) {
 		KBASE_KTRACE_ADD(kbdev, PM_CORES_CHANGE_DESIRED, NULL, kbdev->pm.backend.shaders_desired);
 
@@ -251,9 +249,8 @@ KBASE_EXPORT_TEST_API(kbase_pm_get_policy);
 #if MALI_USE_CSF
 static int policy_change_wait_for_L2_off(struct kbase_device *kbdev)
 {
-#define WAIT_DURATION_MS (3000)
 	long remaining;
-	long timeout = kbase_csf_timeout_in_jiffies(WAIT_DURATION_MS);
+	long timeout = kbase_csf_timeout_in_jiffies(kbase_get_timeout_ms(kbdev, CSF_PM_TIMEOUT));
 	int err = 0;
 
 	/* Wait for L2 becoming off, by which the MCU is also implicitly off

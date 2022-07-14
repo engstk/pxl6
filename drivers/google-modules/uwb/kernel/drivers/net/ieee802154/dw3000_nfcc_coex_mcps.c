@@ -28,74 +28,7 @@
 #include "dw3000_trc.h"
 #include "dw3000_core.h"
 
-#define DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS 200
-
-/**
- * dw3000_nfcc_coex_update_access_info() - Update access info cache.
- * @dw: Driver context.
- * @buffer: buffer to read.
- */
-static void dw3000_nfcc_coex_update_access_info(
-	struct dw3000 *dw, const struct dw3000_nfcc_coex_buffer *buffer)
-{
-	struct dw3000_vendor_cmd_nfcc_coex_get_access_info *access_info =
-		&dw->nfcc_coex.access_info;
-	struct dw3000_nfcc_coex_rx_msg_info rx_msg_info = {};
-	int r;
-
-	r = dw3000_nfcc_coex_message_check(dw, buffer, &rx_msg_info);
-	if (r) {
-		trace_dw3000_nfcc_coex_warn(dw, "message check failure");
-		goto failure;
-	}
-
-	/* Update access_info. */
-	access_info->stop = !rx_msg_info.next_slot_found;
-	access_info->watchdog_timeout = false;
-	if (rx_msg_info.next_slot_found) {
-		access_info->next_timestamp_dtu =
-			rx_msg_info.next_timestamp_dtu;
-		access_info->next_duration_dtu = rx_msg_info.next_duration_dtu;
-	}
-	return;
-
-failure:
-	/* When buffer content is unexpected then request a stop. */
-	memset(access_info, 0, sizeof(*access_info));
-	access_info->stop = true;
-}
-
-/**
- * dw3000_nfcc_coex_spi_avail_handler() - main spi available handler.
- * @dw: Driver context.
- * @buffer: buffer to read.
- *
- * Return: 0 on success, else an error.
- */
-static int
-dw3000_nfcc_coex_spi_avail_handler(struct dw3000 *dw,
-				   const struct dw3000_nfcc_coex_buffer *buffer)
-{
-	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
-
-	/* Is watchdog timer running? */
-	if (!del_timer(&nfcc_coex->watchdog_timer)) {
-		trace_dw3000_nfcc_coex_warn(
-			dw, "spi available without timer pending");
-		return 0;
-	}
-
-	dw3000_nfcc_coex_update_access_info(dw, buffer);
-
-	if (dw->nfcc_coex.access_info.stop) {
-		int r = dw3000_nfcc_coex_disable(dw);
-		if (r)
-			return r;
-	}
-
-	mcps802154_tx_done(dw->llhw);
-	return 0;
-}
+#define DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS 24000
 
 /**
  * dw3000_nfcc_coex_handle_access() - handle access to provide to NFCC.
@@ -123,12 +56,10 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 		return -EBUSY;
 	}
 
-	if (info->start) {
-		r = dw3000_nfcc_coex_enable(dw, info->chan,
-					    dw3000_nfcc_coex_spi_avail_handler);
-		if (r)
-			return r;
-	}
+	r = dw3000_nfcc_coex_enable(dw, info->chan, info->start);
+	if (r)
+		return r;
+
 	now_dtu = dw3000_get_dtu_time(dw);
 	message_send_timestamp_dtu =
 		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
@@ -147,18 +78,30 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 	/* Send message and so release the SPI close to the nfc_coex_margin. */
 	message_send_timestamp_dtu =
 		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
-	if (idle_duration_dtu > 0)
-		return dw3000_idle(dw, true, message_send_timestamp_dtu,
-				   dw3000_nfcc_coex_idle_timeout,
-				   DW3000_OP_STATE_MAX);
-	else if (dw->current_operational_state == DW3000_OP_STATE_DEEP_SLEEP)
-		return dw3000_deepsleep_wakeup_now(
+	if (idle_duration_dtu > 0) {
+		r = dw3000_idle(dw, true, message_send_timestamp_dtu,
+				dw3000_nfcc_coex_idle_timeout,
+				DW3000_OP_STATE_MAX);
+		goto handle_access_end;
+	} else if (dw->current_operational_state ==
+		   DW3000_OP_STATE_DEEP_SLEEP) {
+		r = dw3000_deepsleep_wakeup_now(
 			dw, dw3000_nfcc_coex_idle_timeout, DW3000_OP_STATE_MAX);
+		goto handle_access_end;
+	}
 
 	r = dw3000_nfcc_coex_configure(dw);
 	if (r)
-		return r;
-	return dw3000_nfcc_coex_message_send(dw);
+		goto handle_access_end;
+	r = dw3000_nfcc_coex_message_send(dw);
+	if (r)
+		goto handle_access_end;
+	return 0;
+
+handle_access_end:
+	if (r)
+		dw3000_nfcc_coex_disable(dw);
+	return r;
 }
 
 /**
@@ -190,6 +133,16 @@ static int dw3000_nfcc_coex_get_access_information(struct dw3000 *dw,
  */
 static int dw3000_nfcc_coex_stop(struct dw3000 *dw)
 {
+	int r;
+
+	/* Cancel the idle timeout, and ignore the deepsleep state. */
+	r = dw3000_idle_cancel_timer(dw);
+	if (r)
+		return r;
+	/* Cancel the watchdog which have a bigger timeout. */
+	r = dw3000_nfcc_coex_cancel_watchdog(dw);
+	if (r)
+		return r;
 	return dw3000_nfcc_coex_disable(dw);
 }
 
@@ -207,6 +160,10 @@ static int dw3000_nfcc_coex_stop(struct dw3000 *dw)
 int dw3000_nfcc_coex_vendor_cmd(struct dw3000 *dw, u32 vendor_id, u32 subcmd,
 				void *data, size_t data_len)
 {
+	/* NFCC needs a D0 chip or above. C0 does not have 2 SPI interfaces. */
+	if (__dw3000_chip_version == DW3000_C0_VERSION)
+		return -EOPNOTSUPP;
+
 	switch (subcmd) {
 	case DW3000_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS:
 		return dw3000_nfcc_coex_handle_access(dw, data, data_len);

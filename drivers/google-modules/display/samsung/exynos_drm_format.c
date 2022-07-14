@@ -20,6 +20,13 @@
 
 static const struct dpu_fmt dpu_formats_list[] = {
 	{
+		.name = "C8",
+		.fmt = DRM_FORMAT_C8,
+		.bpp = 8,
+		.padding = 0,
+		.num_planes = 1,
+		.len_alpha = 0,
+	}, {
 		.name = "ARGB8888",
 		.fmt = DRM_FORMAT_ARGB8888,
 		.dma_fmt = IDMA_IMG_FORMAT_ARGB8888,

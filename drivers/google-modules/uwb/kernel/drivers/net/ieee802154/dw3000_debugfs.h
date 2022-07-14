@@ -48,11 +48,13 @@ struct dw3000_debugfs {
 /** struct dw3000_debugfs_file - debugfs file related structure
  * @chip_reg_priv: register
  * @file: filesystem representation
+ * @fileopened: different from 0 if file already opened
  * @ll: linked list for ressources release
  */
 struct dw3000_debugfs_file {
 	struct dw3000_chip_register_priv chip_reg_priv;
 	struct dentry *file;
+	atomic_t fileopened;
 	struct list_head ll;
 };
 

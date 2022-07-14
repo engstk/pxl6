@@ -239,7 +239,8 @@ static int get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 }
 
 static u64 tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
-					    u32 tx_timestamp_dtu, int ant_id)
+					    u32 tx_timestamp_dtu,
+					    int ant_set_id)
 {
 	if (!started) {
 		pr_err("fake_mcps: %s called and not started\n", __func__);

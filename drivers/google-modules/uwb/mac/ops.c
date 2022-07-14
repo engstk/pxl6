@@ -37,8 +37,11 @@ static int mcps802154_start(struct ieee802154_hw *hw)
 	WARN_ON(local->started);
 
 	mutex_lock(&local->fsm_lock);
-	if ( local->pib.phy_current_channel.channel != local->llhw.hw->phy->current_channel)
-		local->pib.phy_current_channel.channel = local->llhw.hw->phy->current_channel;
+	local->pib.phy_current_channel.page = local->hw->phy->current_page;
+	local->pib.phy_current_channel.channel =
+		local->hw->phy->current_channel;
+	local->pib.phy_current_channel.preamble_code =
+		local->llhw.current_preamble_code;
 	r = llhw_set_channel(local, local->pib.phy_current_channel.page,
 			     local->pib.phy_current_channel.channel,
 			     local->pib.phy_current_channel.preamble_code);
@@ -67,21 +70,12 @@ static int mcps802154_xmit_async(struct ieee802154_hw *hw, struct sk_buff *skb)
 {
 	struct mcps802154_local *local = hw->priv;
 	int r;
-	bool wake_queue = false;
 
 	if (unlikely(!local->started)) {
 		r = -EPIPE;
 	} else {
-		int n_queued;
-
-		skb_queue_tail(&local->ca.queue, skb);
-		n_queued = atomic_inc_return(&local->ca.n_queued);
-		wake_queue = n_queued < MCPS802154_CA_QUEUE_SIZE;
-		r = 0;
+		r = mcps802154_ca_xmit_skb(local, skb);
 	}
-
-	if (wake_queue)
-		ieee802154_wake_queue(hw);
 
 	schedule_work(&local->tx_work);
 	return r;
@@ -135,6 +129,8 @@ static int mcps802154_set_hw_addr_filt(struct ieee802154_hw *hw,
 				local->pib.mac_short_addr = filt->short_addr;
 			if (changed & IEEE802154_AFILT_IEEEADDR_CHANGED)
 				local->pib.mac_extended_addr = filt->ieee_addr;
+			if (changed & IEEE802154_AFILT_PANC_CHANGED)
+				local->mac_pan_coord = filt->pan_coord;
 		}
 	}
 	mutex_unlock(&local->fsm_lock);
@@ -163,6 +159,8 @@ static int mcps802154_set_promiscuous_mode(struct ieee802154_hw *hw, bool on)
 
 	mutex_lock(&local->fsm_lock);
 	r = llhw_set_promiscuous_mode(local, on);
+	if (!r)
+		local->pib.mac_promiscuous = on;
 	mutex_unlock(&local->fsm_lock);
 
 	return r;

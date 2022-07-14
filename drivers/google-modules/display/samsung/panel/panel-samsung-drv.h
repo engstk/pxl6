@@ -32,7 +32,10 @@
 #define MAX_REGULATORS		3
 #define MAX_HDR_FORMATS		4
 #define MAX_BL_RANGES		10
-#define MAX_TE2_TYPE		10
+
+#define MAX_TE2_TYPE			10
+#define FIXED_TE2_VREFRESH_NORMAL	120
+#define FIXED_TE2_VREFRESH_LP		30
 
 #define HDR_DOLBY_VISION	BIT(1)
 #define HDR_HDR10		BIT(2)
@@ -45,12 +48,15 @@
 
 #define PANEL_REV_PROTO1	BIT(0)
 #define PANEL_REV_PROTO1_1	BIT(1)
-#define PANEL_REV_EVT1		BIT(2)
-#define PANEL_REV_EVT1_1	BIT(3)
-#define PANEL_REV_EVT1_2	BIT(4)
-#define PANEL_REV_DVT1		BIT(5)
-#define PANEL_REV_DVT1_1	BIT(6)
-#define PANEL_REV_PVT		BIT(7)
+#define PANEL_REV_PROTO1_2	BIT(2)
+#define PANEL_REV_PROTO2	BIT(3)
+#define PANEL_REV_EVT1		BIT(4)
+#define PANEL_REV_EVT1_1	BIT(5)
+#define PANEL_REV_EVT1_2	BIT(6)
+#define PANEL_REV_EVT2		BIT(7)
+#define PANEL_REV_DVT1		BIT(8)
+#define PANEL_REV_DVT1_1	BIT(9)
+#define PANEL_REV_PVT		BIT(10)
 #define PANEL_REV_LATEST	BIT(31)
 #define PANEL_REV_ALL		(~0)
 #define PANEL_REV_GE(rev)	(~((rev) - 1))
@@ -77,10 +83,60 @@
 #define IS_HBM_ON(mode)	((mode) >= HBM_ON_IRC_ON && (mode) < HBM_STATE_MAX)
 #define IS_HBM_ON_IRC_OFF(mode)	(((mode) == HBM_ON_IRC_OFF))
 
+/**
+ * enum exynos_panel_state - panel operating state
+ * @PANEL_STATE_UNINITIALIZED: Panel has never been initialized, and panel OTP info such as
+ *			       panel serial and revision has not been read yet
+ * @PANEL_STATE_HANDOFF: Panel looked active when driver was loaded. The panel is uninitialized
+ *			in this state and will switch to PANEL_STATE_ON once it gets initialized
+ * @PANEL_STATE_HANDOFF_MODESET: Similar to HANDOFF state, in this case a modeset was called with
+ *			unpreferred mode, so display must be blanked before enabling.
+ * @PANEL_STATE_OFF: Panel is fully disabled and powered off
+ * @PANEL_STATE_NORMAL: Panel is ON in Normal operating mode
+ * @PANEL_STATE_LP: Panel is ON in Low Power mode
+ * @PANEL_STATE_MODESET: Going through modeset, where panel gets disable/enable calls with new mode
+ * @PANEL_STATE_BLANK: Panel is ON but no contents are shown on display
+ */
 enum exynos_panel_state {
-	PANEL_STATE_ON = 0,
+	PANEL_STATE_UNINITIALIZED,
+	PANEL_STATE_HANDOFF,
+	PANEL_STATE_HANDOFF_MODESET,
+	PANEL_STATE_OFF,
+	PANEL_STATE_NORMAL,
 	PANEL_STATE_LP,
-	PANEL_STATE_OFF
+	PANEL_STATE_MODESET,
+	PANEL_STATE_BLANK,
+};
+
+/**
+ * enum exynos_panel_idle_mode - type of idle mode supported per mode
+ * @IDLE_MODE_UNSUPPORTED: No idle mode is supported in this mode
+ * @IDLE_MODE_ON_INACTIVITY: In this mode the panel can go into idle automatically
+ *                           after last frame update
+ * @IDLE_MODE_ON_SELF_REFRESH: Manually go into lower idle mode when display enters
+ *                             self refresh state
+ */
+enum exynos_panel_idle_mode {
+	IDLE_MODE_UNSUPPORTED,
+	IDLE_MODE_ON_INACTIVITY,
+	IDLE_MODE_ON_SELF_REFRESH,
+};
+
+/**
+ * enum exynos_panel_te2_opt - option of TE2 frequency
+ * @TE2_OPT_CHANGEABLE: TE2 frequency follows display refresh rate
+ * @TE2_OPT_FIXED: TE2 frequency is fixed at 120Hz. Only supported on specific panels
+ */
+enum exynos_panel_te2_opt {
+	TE2_OPT_CHANGEABLE,
+	TE2_OPT_FIXED,
+};
+
+enum exynos_cabc_mode {
+	CABC_OFF = 0,
+	CABC_UI_MODE,
+	CABC_STILL_MODE,
+	CABC_MOVIE_MODE,
 };
 
 struct exynos_panel;
@@ -107,6 +163,14 @@ struct exynos_panel_mode {
 
 	/* @te2_timing: TE2 signal timing */
 	struct exynos_panel_te2_timing te2_timing;
+
+	/*
+	 * @idle_mode:
+	 *
+	 * Indicates whether going into lower refresh rate is allowed while in this mode, and what
+	 * type of idle mode is supported, for more info refer to enum exynos_panel_idle_mode.
+	 */
+	enum exynos_panel_idle_mode idle_mode;
 };
 
 struct exynos_panel_funcs {
@@ -164,6 +228,15 @@ struct exynos_panel_funcs {
 				 bool dimming_on);
 
 	/**
+	 * @set_cabc_mode:
+	 *
+	 * This callback is used to implement panel specific logic for cabc mode
+	 * enablement. If this is not defined, it means that panel does not
+	 * support cabc.
+	 */
+	void (*set_cabc_mode)(struct exynos_panel *exynos_panel, enum exynos_cabc_mode mode);
+
+	/**
 	 * @set_local_hbm_mode:
 	 *
 	 * This callback is used to implement panel specific logic for local high
@@ -205,6 +278,15 @@ struct exynos_panel_funcs {
 	 * specific functions.
 	 */
 	void (*panel_init)(struct exynos_panel *exynos_panel);
+
+	/**
+	 * @panel_reset:
+	 *
+	 * This callback is used to allow panel to toggle only reset pin instead of full
+	 * prepare sequence (including power rails) while the device is in BLANK state.
+	 * This is not called in any other state.
+	 */
+	void (*panel_reset)(struct exynos_panel *exynos_panel);
 
 	/**
 	 * @print_gamma:
@@ -317,6 +399,29 @@ struct exynos_panel_funcs {
 	 * otherwise returns false if no action was taken.
 	 */
 	bool (*set_self_refresh)(struct exynos_panel *exynos_panel, bool enable);
+
+	/**
+	 * @set_op_hz
+	 *
+	 * set display panel working on specified operation rate.
+	 *
+	 * Returns 0 if successfully setting operation rate.
+	 */
+	int (*set_op_hz)(struct exynos_panel *exynos_panel, unsigned int hz);
+
+	/**
+	 * @set_osc2_clk_khz
+	 *
+	 * Set specific OSC2 clock for panel.
+	 */
+	void (*set_osc2_clk_khz)(struct exynos_panel *exynos_panel, unsigned int clk_khz);
+
+	/**
+	 * @list_osc2_clk_khz
+	 *
+	 * List supported OSC2 clock for panel.
+	 */
+	ssize_t (*list_osc2_clk_khz)(struct exynos_panel *exynos_panel, char *buf);
 };
 
 /**
@@ -360,6 +465,7 @@ struct exynos_binned_lp {
 
 struct exynos_panel_desc {
 	const u8 *dsc_pps;
+	u8 panel_id_reg;
 	u32 dsc_pps_len;
 	u32 data_lane_cnt;
 	u32 hdr_formats; /* supported HDR formats bitmask */
@@ -369,7 +475,11 @@ struct exynos_panel_desc {
 	u32 max_brightness;
 	u32 min_brightness;
 	u32 dft_brightness; /* default brightness */
+	/* extra frame is needed to apply brightness change if it's not at next VSYNC */
+	bool dbv_extra_frame;
 	bool is_partial;
+	bool is_panel_idle_supported;
+	const unsigned int delay_dsc_reg_init_us;
 	const struct brightness_capability *brt_capability;
 	const u32 *bl_range;
 	u32 bl_num_ranges;
@@ -378,6 +488,7 @@ struct exynos_panel_desc {
 	const struct exynos_dsi_cmd_set *off_cmd_set;
 	/* @lp_mode: provides a low power mode if available, otherwise null */
 	const struct exynos_panel_mode *lp_mode;
+	const size_t lp_mode_count;
 	const struct exynos_dsi_cmd_set *lp_cmd_set;
 	const struct exynos_binned_lp *binned_lp;
 	const size_t num_binned_lp;
@@ -407,6 +518,7 @@ struct te2_mode_data {
 
 struct te2_data {
 	struct te2_mode_data mode_data[MAX_TE2_TYPE];
+	enum exynos_panel_te2_opt option;
 };
 
 struct exynos_panel {
@@ -427,11 +539,18 @@ struct exynos_panel {
 	struct drm_bridge bridge;
 	const struct exynos_panel_desc *desc;
 	const struct exynos_panel_mode *current_mode;
+
+	/* Deprected: please refer to panel_state instead */
 	bool enabled;
 	bool initialized;
+	enum exynos_panel_state panel_state;
+	/* If true, panel won't be powered off */
+	bool force_power_on;
 
 	/* indicates whether panel idle feature is enabled */
 	bool panel_idle_enabled;
+	/* indicates need to do specific handle when exiting idle on self refresh */
+	bool panel_need_handle_idle_exit;
 	/* indicates self refresh is active */
 	bool self_refresh_active;
 	/**
@@ -440,6 +559,8 @@ struct exynos_panel {
 	 * greater than 0 means panel idle is active
 	 */
 	unsigned int panel_idle_vrefresh;
+	unsigned int op_hz;
+	unsigned int osc2_clk_khz;
 	/**
 	 * indicates the lower bound of refresh rate
 	 * 0 means there is no lower bound limitation
@@ -457,8 +578,9 @@ struct exynos_panel {
 
 	enum exynos_hbm_mode hbm_mode;
 	bool dimming_on;
-	/* request_dimming_on from drm commit */
-	bool request_dimming_on;
+	/* indicates the LCD backlight is controlled by DCS */
+	bool bl_ctrl_dcs;
+	enum exynos_cabc_mode cabc_mode;
 	struct backlight_device *bl;
 	struct mutex mode_lock;
 	struct mutex bl_state_lock;
@@ -466,25 +588,32 @@ struct exynos_panel {
 
 	struct mutex lp_state_lock;
 	const struct exynos_binned_lp *current_binned_lp;
+	struct drm_property_blob *lp_mode_blob;
 
 	char panel_id[PANEL_ID_MAX];
 	char panel_extinfo[PANEL_EXTINFO_MAX];
 	u32 panel_rev;
-	bool is_secondary;
+	enum drm_panel_orientation orientation;
 
 	struct device_node *touch_dev;
 
 	struct te2_data te2;
 	ktime_t last_commit_ts;
 	ktime_t last_mode_set_ts;
+	ktime_t last_self_refresh_active_ts;
 	struct delayed_work idle_work;
+
+	/**
+	 * Record the last refresh rate switch. Note the mode switch doesn't
+	 * mean rr switch so it differs from last_mode_set_ts
+	 */
+	ktime_t last_rr_switch_ts;
+	u32 last_rr;
 
 	struct {
 		struct local_hbm {
 			bool gamma_para_ready;
 			u8 gamma_cmd[LOCAL_HBM_GAMMA_CMD_SIZE_MAX];
-			/* request local hbm mode from atomic_commit */
-			bool request_hbm_mode;
 			/* indicate if local hbm enabled or not */
 			bool enabled;
 			/* max local hbm on period in ms */
@@ -493,17 +622,59 @@ struct exynos_panel {
 			struct delayed_work timeout_work;
 		} local_hbm;
 
-		/* request global hbm mode from drm commit */
-		enum exynos_hbm_mode request_global_hbm_mode;
-		/* send mipi commands asynchronously after frame start */
-		struct work_struct hbm_work;
-		/* mipi command update flags in hbm_work */
-		u8 update_flags;
-		struct mutex hbm_work_lock;
-		struct drm_crtc_commit *commit;
 		struct workqueue_struct *wq;
 	} hbm;
 };
+
+/**
+ * is_panel_active - indicates whether the display is in interactive mode
+ * @ctx: panel struct
+ *
+ * Indicates whether the panel is on and showing display contents. Typically any operations such as
+ * backlight, hbm, mode updates, etc on the panel while in this mode should be reflected instantly
+ * or on next vsync.
+ */
+static inline bool is_panel_active(const struct exynos_panel *ctx)
+{
+	switch (ctx->panel_state) {
+	case PANEL_STATE_LP:
+	case PANEL_STATE_NORMAL:
+		return true;
+	case PANEL_STATE_UNINITIALIZED:
+	case PANEL_STATE_HANDOFF:
+	case PANEL_STATE_HANDOFF_MODESET:
+	case PANEL_STATE_MODESET:
+	case PANEL_STATE_BLANK:
+	case PANEL_STATE_OFF:
+	default:
+		return false;
+	}
+}
+
+/**
+ * is_panel_initialized - indicates whether the display has been initialized at least once
+ * @ctx: panel struct
+ *
+ * Indicates whether thepanel has been initialized at least once. Certain data such as panel
+ * revision is only accurate after display initialization.
+ */
+static inline bool is_panel_initialized(const struct exynos_panel *ctx)
+{
+	return ctx->panel_state != PANEL_STATE_UNINITIALIZED &&
+	       ctx->panel_state != PANEL_STATE_HANDOFF &&
+	       ctx->panel_state != PANEL_STATE_HANDOFF_MODESET;
+}
+
+/**
+ * is_panel_enabled - indicates whether the display is powered on
+ * @ctx: panel struct
+ *
+ * Indicates whether panel is powered up even if not fully initialized or in completely active mode.
+ */
+static inline bool is_panel_enabled(const struct exynos_panel *ctx)
+{
+	return ctx->panel_state != PANEL_STATE_OFF && ctx->panel_state != PANEL_STATE_UNINITIALIZED;
+}
 
 static inline int exynos_dcs_write(struct exynos_panel *ctx, const void *data,
 		size_t len)
@@ -546,9 +717,20 @@ static inline void exynos_bin2hex(const void *buf, size_t len,
 	*end = '\0';
 }
 
+static inline ssize_t exynos_get_te2_type_len(struct exynos_panel *ctx, bool lp_mode)
+{
+	return (lp_mode ? (ctx->desc->lp_mode_count ? : 1) * (ctx->desc->num_binned_lp - 1) :
+		ctx->desc->num_modes);
+}
+
 static inline void backlight_state_changed(struct backlight_device *bl)
 {
 	sysfs_notify(&bl->dev.kobj, NULL, "state");
+}
+
+static inline void te2_state_changed(struct backlight_device *bl)
+{
+	sysfs_notify(&bl->dev.kobj, NULL, "te2_state");
 }
 
 #define EXYNOS_DSI_CMD_REV(cmd, delay, rev) { sizeof(cmd), cmd, delay, (u32)rev }
@@ -636,14 +818,32 @@ static inline void backlight_state_changed(struct backlight_device *bl)
 	usleep_range(delay * 1000, delay * 1000 + 10);			\
 } while (0)
 
-#define EXYNOS_PPS_LONG_WRITE(ctx) do {					\
+#define EXYNOS_DCS_BUF_ADD(ctx, seq...) \
+	EXYNOS_DCS_WRITE_SEQ_FLAGS(ctx, 0, seq)
+
+#define EXYNOS_DCS_BUF_ADD_SET(ctx, set) \
+	EXYNOS_DCS_WRITE_TABLE_FLAGS(ctx, set, 0)
+
+#define EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, seq...) \
+	EXYNOS_DCS_WRITE_SEQ_FLAGS(ctx, EXYNOS_DSI_MSG_IGNORE_VBLANK | \
+		MIPI_DSI_MSG_LASTCOMMAND, seq)
+
+#define EXYNOS_DCS_BUF_ADD_SET_AND_FLUSH(ctx, set) \
+	EXYNOS_DCS_WRITE_TABLE_FLAGS(ctx, set, EXYNOS_DSI_MSG_IGNORE_VBLANK | \
+		MIPI_DSI_MSG_LASTCOMMAND)
+
+#define DSC_PPS_SIZE sizeof(struct drm_dsc_picture_parameter_set)
+
+#define EXYNOS_PPS_WRITE_BUF(ctx, payload) do {				\
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);	\
 	int ret;							\
 	ret = mipi_dsi_picture_parameter_set(dsi,			\
-		(struct drm_dsc_picture_parameter_set *)ctx->desc->dsc_pps);	\
+		(struct drm_dsc_picture_parameter_set *)(payload));	\
 	if (ret < 0)							\
-		dev_err(ctx->dev, "failed to write cmd(%d)\n", ret);	\
+		dev_err(ctx->dev, "failed to write pps(%d)\n", ret);	\
 } while (0)
+
+#define EXYNOS_PPS_LONG_WRITE(ctx) EXYNOS_PPS_WRITE_BUF(ctx, ctx->desc->dsc_pps)
 
 #define for_each_display_mode(i, mode, ctx)			\
 	for (i = 0, mode = &ctx->desc->modes[i].mode;		\
@@ -657,10 +857,11 @@ static inline void backlight_state_changed(struct backlight_device *bl)
 
 #define for_each_te2_timing(ctx, lp_mode, data, i)					\
 	for (data = ctx->te2.mode_data + (!(lp_mode) ? 0 : (ctx)->desc->num_modes),	\
-	i = !(lp_mode) ? (ctx)->desc->num_modes : (ctx)->desc->num_binned_lp - 1;	\
+	i = exynos_get_te2_type_len((ctx), (lp_mode));					\
 	i > 0;										\
 	i--, data++)									\
 
+unsigned int panel_get_idle_time_delta(struct exynos_panel *ctx);
 int exynos_panel_configure_te2_edges(struct exynos_panel *ctx,
 				     u32 *timings, bool lp_mode);
 ssize_t exynos_panel_get_te2_edges(struct exynos_panel *ctx,
@@ -671,6 +872,8 @@ int exynos_panel_get_modes(struct drm_panel *panel, struct drm_connector *connec
 int exynos_panel_disable(struct drm_panel *panel);
 int exynos_panel_unprepare(struct drm_panel *panel);
 int exynos_panel_prepare(struct drm_panel *panel);
+int exynos_panel_read_id(struct exynos_panel *ctx);
+int exynos_panel_read_ddic_id(struct exynos_panel *ctx);
 void exynos_panel_get_panel_rev(struct exynos_panel *ctx, u8 rev);
 int exynos_panel_init(struct exynos_panel *ctx);
 void exynos_panel_reset(struct exynos_panel *ctx);
@@ -693,7 +896,20 @@ int exynos_panel_common_init(struct mipi_dsi_device *dsi,
 				struct exynos_panel *ctx);
 ssize_t exynos_dsi_dcs_write_buffer(struct mipi_dsi_device *dsi,
 				const void *data, size_t len, u16 flags);
+ssize_t exynos_dsi_cmd_send_flags(struct mipi_dsi_device *dsi, u16 flags);
 
 int exynos_panel_probe(struct mipi_dsi_device *dsi);
 int exynos_panel_remove(struct mipi_dsi_device *dsi);
+
+static inline void exynos_dsi_dcs_write_buffer_force_batch_begin(struct mipi_dsi_device *dsi)
+{
+	exynos_dsi_dcs_write_buffer(dsi, NULL, 0, EXYNOS_DSI_MSG_FORCE_BATCH);
+}
+
+static inline void exynos_dsi_dcs_write_buffer_force_batch_end(struct mipi_dsi_device *dsi)
+{
+	exynos_dsi_dcs_write_buffer(dsi, NULL, 0,
+				    EXYNOS_DSI_MSG_FORCE_FLUSH | EXYNOS_DSI_MSG_IGNORE_VBLANK);
+}
+
 #endif /* _PANEL_SAMSUNG_DRV_ */

@@ -217,8 +217,8 @@ static int aoc_compr_prepare(struct aoc_alsa_stream *alsa_stream)
 		return -EFAULT;
 	}
 
-	alsa_stream->compr_pcm_io_sample_base = aoc_compr_offload_get_io_samples(alsa_stream);
-	if (alsa_stream->compr_pcm_io_sample_base < 0) {
+	if (aoc_compr_offload_get_io_samples(alsa_stream,
+				&alsa_stream->compr_pcm_io_sample_base) < 0) {
 		pr_err("ERR: fail to get audio playback samples\n");
 		return -EFAULT;
 	}
@@ -536,6 +536,7 @@ static int aoc_compr_pointer(struct snd_soc_component *component, struct snd_com
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
+	uint64_t current_sample = 0;
 
 	pr_debug("%s, %pK, %pK\n", __func__, runtime, arg);
 
@@ -544,11 +545,15 @@ static int aoc_compr_pointer(struct snd_soc_component *component, struct snd_com
 
 	/* TODO: overflow in samples, HAL only uses pcm_io_samples for timestamps */
 	arg->sampling_rate = alsa_stream->params_rate;
-	arg->pcm_io_frames = (aoc_compr_offload_get_io_samples(alsa_stream) -
-			      alsa_stream->compr_pcm_io_sample_base) *
+
+	if (aoc_compr_offload_get_io_samples(alsa_stream, &current_sample) < 0) {
+		pr_err("%s: failed to get playback samples\n", __func__);
+		return 0;
+	}
+	arg->pcm_io_frames = (current_sample - alsa_stream->compr_pcm_io_sample_base) *
 			     (long)arg->sampling_rate / AOC_COMPR_OFFLOAD_DEFAULT_SR;
 
-	pr_debug("compr ptr -total bytes: %llu copied: %u diff:%llu,sampes=%u,fs=%d,base=%ld\n",
+	pr_debug("compr ptr -total bytes: %llu copied: %u diff:%llu,sampes=%u,fs=%d,base=%llu\n",
 		 runtime->total_bytes_available, arg->copied_total,
 		 runtime->total_bytes_available - arg->copied_total, arg->pcm_io_frames,
 		 arg->sampling_rate, alsa_stream->compr_pcm_io_sample_base);

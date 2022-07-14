@@ -91,8 +91,11 @@ void mcps802154_fproc_access(struct mcps802154_local *local,
 	}
 
 	if (r) {
-		mcps802154_fproc_access_done(local, r);
-		mcps802154_fproc_broken_handle(local);
+		mcps802154_fproc_access_done(local, true);
+		if (r == -ETIME)
+			mcps802154_fproc_access_now(local);
+		else
+			mcps802154_fproc_broken_handle(local);
 	}
 }
 
@@ -111,7 +114,7 @@ void mcps802154_fproc_access_now(struct mcps802154_local *local)
 						       local->llhw.anticip_dtu);
 }
 
-void mcps802154_fproc_access_done(struct mcps802154_local *local, int error)
+void mcps802154_fproc_access_done(struct mcps802154_local *local, bool error)
 {
 	struct mcps802154_access *access = local->fproc.access;
 
@@ -134,7 +137,7 @@ void mcps802154_fproc_access_reset(struct mcps802154_local *local)
 				MCPS802154_ACCESS_TX_RETURN_REASON_CANCEL);
 			local->fproc.tx_skb = NULL;
 		}
-		mcps802154_fproc_access_done(local, 0);
+		mcps802154_fproc_access_done(local, false);
 		local->fproc.access = NULL;
 	}
 }
@@ -207,6 +210,34 @@ void mcps802154_tx_done(struct mcps802154_llhw *llhw)
 	mutex_unlock(&local->fsm_lock);
 }
 EXPORT_SYMBOL(mcps802154_tx_done);
+
+void mcps802154_tx_too_late(struct mcps802154_llhw *llhw)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	mutex_lock(&local->fsm_lock);
+	if (local->fproc.state->tx_too_late)
+		local->fproc.state->tx_too_late(local);
+	else
+		mcps802154_broken_safe(local);
+	trace_llhw_event_done(local);
+	mutex_unlock(&local->fsm_lock);
+}
+EXPORT_SYMBOL_GPL(mcps802154_tx_too_late);
+
+void mcps802154_rx_too_late(struct mcps802154_llhw *llhw)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	mutex_lock(&local->fsm_lock);
+	if (local->fproc.state->rx_too_late)
+		local->fproc.state->rx_too_late(local);
+	else
+		mcps802154_broken_safe(local);
+	trace_llhw_event_done(local);
+	mutex_unlock(&local->fsm_lock);
+}
+EXPORT_SYMBOL_GPL(mcps802154_rx_too_late);
 
 void mcps802154_broken(struct mcps802154_llhw *llhw)
 {

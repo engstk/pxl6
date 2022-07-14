@@ -31,6 +31,7 @@
 #include "dw3000_core.h"
 #define DEFINE_COMPAT_REGISTERS
 #include "dw3000_core_reg.h"
+#include "dw3000_cir.h"
 #include "dw3000_stm.h"
 #include "dw3000_trc.h"
 #include "dw3000_perf.h"
@@ -38,6 +39,7 @@
 #include "dw3000_coex.h"
 #include "dw3000_nfcc_coex_core.h"
 #include "dw3000_txpower_adjustment.h"
+#include "dw3000_power_stats.h"
 
 /* Table of supported chip version and associated chip operations */
 const struct dw3000_chip_version dw3000_chip_versions[] = {
@@ -169,50 +171,10 @@ const struct dw3000_chip_version dw3000_chip_versions[] = {
 	 DW3000_SYS_ENABLE_LO_ARFE_ENABLE_BIT_MASK)
 #define DW3000_SYS_STATUS_TRX (DW3000_SYS_STATUS_TX | DW3000_SYS_STATUS_RX)
 
-/* All RX errors mask */
-#define DW3000_SYS_STATUS_ALL_RX_ERR                                           \
-	(DW3000_SYS_STATUS_RXPHE_BIT_MASK | DW3000_SYS_STATUS_RXFCE_BIT_MASK | \
-	 DW3000_SYS_STATUS_RXFSL_BIT_MASK | DW3000_SYS_STATUS_RXSTO_BIT_MASK | \
-	 DW3000_SYS_STATUS_ARFE_BIT_MASK | DW3000_SYS_STATUS_CIAERR_BIT_MASK | \
-	 DW3000_SYS_STATUS_CPERR_BIT_MASK |                                    \
-	 DW3000_SYS_STATUS_LCSSERR_BIT_MASK)
-
-/* User defined RX timeouts (frame wait timeout and preamble detect timeout)
-   mask. */
-#define DW3000_SYS_STATUS_ALL_RX_TO \
-	(DW3000_SYS_STATUS_RXFTO_BIT_MASK | DW3000_SYS_STATUS_RXPTO_BIT_MASK)
-
-/* All RX events after a correct packet reception mask */
-#define DW3000_SYS_STATUS_ALL_RX_GOOD                                         \
-	(DW3000_SYS_STATUS_RXFR_BIT_MASK | DW3000_SYS_STATUS_RXFCG_BIT_MASK | \
-	 DW3000_SYS_STATUS_RXPRD_BIT_MASK |                                   \
-	 DW3000_SYS_STATUS_RXSFDD_BIT_MASK |                                  \
-	 DW3000_SYS_STATUS_RXPHD_BIT_MASK |                                   \
-	 DW3000_SYS_STATUS_CIA_DONE_BIT_MASK)
-
-/* All TX events mask */
-#define DW3000_SYS_STATUS_ALL_TX                                               \
-	(DW3000_SYS_STATUS_AAT_BIT_MASK | DW3000_SYS_STATUS_TXFRB_BIT_MASK |   \
-	 DW3000_SYS_STATUS_TXPRS_BIT_MASK | DW3000_SYS_STATUS_TXPHS_BIT_MASK | \
-	 DW3000_SYS_STATUS_TXFRS_BIT_MASK)
-
 #define DW3000_RX_BUFFER_MAX_LEN (1023)
 #define DW3000_TX_BUFFER_MAX_LEN (1024)
 #define DW3000_REG_DIRECT_OFFSET_MAX_LEN (127)
-/* Transmit Data Buffer */
-#define DW3000_TX_BUFFER_ID 0x140000
-/* pointer to access indirect access buffer A */
-#define DW3000_INDIRECT_POINTER_A_ID 0x1D0000
-/* pointer to access indirect access buffer B */
-#define DW3000_INDIRECT_POINTER_B_ID 0x1E0000
-/* Receive Data Buffer (in double buffer set) */
-#define DW3000_RX_BUFFER_A_ID 0x120000
-/* Receive Data Buffer (in double buffer set) */
-#define DW3000_RX_BUFFER_B_ID 0x130000
-#define DW3000_PHRMODE_STD 0x0 /* standard PHR mode */
-#define DW3000_PHRMODE_EXT 0x1 /* DW proprietary extended frames PHR mode */
-#define DW3000_PHRRATE_STD 0x0 /* standard PHR rate */
-#define DW3000_PHRRATE_DTA 0x1 /* PHR at data rate (6M81) */
+
 #define DW3000_CONFIG \
 	0x0001 /* download the AON array into the HIF
 				(configuration download) */
@@ -252,12 +214,6 @@ const struct dw3000_chip_version dw3000_chip_versions[] = {
 /* Defines for dw3000_force_clocks() function */
 #define DW3000_FORCE_CLK_SYS_TX (1)
 #define DW3000_FORCE_CLK_AUTO (5)
-
-/* Bit fields to select information to retrieve from OTP memory */
-#define DW3000_READ_OTP_PID 0x10 /* read part ID from OTP */
-#define DW3000_READ_OTP_LID 0x20 /* read lot ID from OTP */
-#define DW3000_READ_OTP_BAT 0x40 /* read ref voltage from OTP */
-#define DW3000_READ_OTP_TMP 0x80 /* read ref temperature from OTP */
 
 #define DW3000_STD_FRAME_LEN (127)
 #define DW3000_EXT_FRAME_LEN (1023)
@@ -301,16 +257,14 @@ static const u16 dw3000_sts_length_factors[DW3000_STS_LEN_SUPPORTED] = {
  * turnaroud time for ACK transmission. */
 #define DW3000_NUMBER_OF_SYMBOL_DELAY_AUTO_ACK (12)
 
-/* The PLL calibration should take less that 400us, typically it is < 100us. */
-#define DW3000_MAX_RETRIES_FOR_PLL (20)
+/* The PLL calibration should take less than 400us.
+ * Typically it is < 100us
+ * (however on some corners with ch9 it can take ~900us)
+ */
+#define DW3000_MAX_RETRIES_FOR_PLL (50)
 
 /* The empirical delay to lock the PLL after its activation */
 #define DW3000_PLL_LOCK_DELAY_US (10)
-
-/* The mean XTAL TRIM value measured on multiple E0 samples.
- * During the initialization the XTAL TRIM value can be read from the OTP and
- * in case it is not present, the default would be used instead. */
-#define DW3000_DEFAULT_XTAL_TRIM 0x1f
 
 /* SYS_STATE_LO register errors */
 /* TSE is in TX but TX is in IDLE in SYS_STATE_LO register */
@@ -469,18 +423,8 @@ const struct dw3000_plen_info _plen_info[] = {
 	},
 };
 
-const struct dw3000_bitrate_info _bitrate_info[] = {
-	{
-		/*  850k */
-		.phr_chip_per_symb = 512,
-		.data_chip_per_symb = 512,
-	},
-	{
-		/* 6M8 */
-		.phr_chip_per_symb = 512,
-		.data_chip_per_symb = 64,
-	},
-};
+/* Chip per symbol for 850kbps (512) and 6.8Mbps (64) */
+const int _chip_per_symbol_info[2] = { 512, 64 };
 
 const struct dw3000_prf_info _prf_info[] = {
 	{
@@ -501,42 +445,6 @@ static int dw3000_transfers_reset(struct dw3000 *dw);
 static int dw3000_change_speed(struct dw3000 *dw, u32 new_speed);
 static int dw3000_wakeup(struct dw3000 *dw);
 static inline bool _dw3000_sts_is_enabled(struct dw3000 *dw);
-static u8 dw3000_calc_bandwithadj(struct dw3000 *dw, int target_count);
-static u32 dw3000_calc_pgcount(struct dw3000 *dw, u32 pg_delay);
-
-
-void dw3000_enable_counters(struct dw3000 *dw)
-{
-	dw3000_reg_write32(dw, 0xf0000, 0, 1);
-}
-
-void dw3000_reset_counters(struct dw3000 *dw)
-{
-	dw3000_reg_write32(dw, 0xf0000, 0, 2);
-}
-
-void dw3000_read_counters(struct dw3000 *dw)
-{
-	uint16_t buffer[16];
-
-	dw3000_reg_read_fast(dw, 0xf0004, 0, sizeof(buffer), buffer);
-
-	trace_dw3000_get_counters_first_part(dw,
-			buffer[0],
-			buffer[1],
-			buffer[2],
-			buffer[5],
-			buffer[6],
-			buffer[7],
-			buffer[8],
-			buffer[9],
-			buffer[10],
-			buffer[11]);
-	trace_dw3000_get_counters_second_part(dw,
-			buffer[3],
-			buffer[14],
-			buffer[15]);
-}
 
 /**
  * dw3000_get_dtu_time() - compute current DTU time
@@ -592,95 +500,6 @@ static int dw3000_may_resync(struct dw3000 *dw)
 }
 
 /**
- * dw3000_power_stats() - compute time elapsed in dw3000 states
- * @dw: the DW device on which state is changed
- * @state: the new state
- * @len_or_date: frame length to be transmitted or RX dates in DTU
- *
- * Update power statistics according current state leaved and new state.
- * States > RUN are handled specifically.
- */
-static inline void dw3000_power_stats(struct dw3000 *dw, int state,
-				      int len_or_date)
-{
-	struct dw3000_power *pw = &dw->power;
-	int cstate = min(pw->cur_state, DW3000_PWR_RUN);
-	int nstate = min(state, DW3000_PWR_RUN);
-	u64 boot_time_ns = ktime_get_boottime_ns();
-	s64 duration;
-	s64 adjust;
-	u32 cur_dtu_time;
-
-	/* Trace call */
-	trace_dw3000_power_stats(dw, state, boot_time_ns, len_or_date);
-	/* Sanity checks first */
-	if (state < 0 || state >= DW3000_PWR_MAX)
-		return;
-	/* Calculate duration of current state. */
-	duration = boot_time_ns - pw->start_time;
-	/* Update basic state statistics */
-	pw->stats[cstate].dur += duration;
-	if (nstate != cstate)
-		pw->stats[nstate].count++;
-	/* Handle specific states */
-	cstate = pw->cur_state;
-	switch (state) {
-	case DW3000_PWR_IDLE:
-		adjust = 0;
-		if (cstate == DW3000_PWR_TX) {
-			/* TX duration is just pw->tx_adjust */
-			adjust = pw->tx_adjust;
-		} else if (cstate == DW3000_PWR_RX) {
-			/* RX duration is just cur_dtu_time-pw->trx_adjust,
-			 * remain is IDLE time, so remove duration previously added */
-			cur_dtu_time = (u32)len_or_date;
-			if (!cur_dtu_time) {
-				/* RX frame end time is not given, so get current DTU. */
-				cur_dtu_time = dw3000_get_dtu_time(dw);
-			}
-			if (cur_dtu_time < pw->rx_start)
-				/* Handle chip time overflow.
-				 * Through 'll' type avoid computation problem. */
-				adjust = (1ll << 32) + cur_dtu_time -
-					 pw->rx_start;
-			else
-				adjust = cur_dtu_time - pw->rx_start;
-		}
-		pw->stats[cstate].dur += (u32)adjust;
-		if (state != cstate)
-			pw->stats[DW3000_PWR_IDLE].count++;
-		break;
-	case DW3000_PWR_TX:
-		/* TX time is calculated according frame len only */
-		pw->tx_adjust =
-			dw3000_frame_duration_dtu(dw, len_or_date, true);
-		pw->stats[DW3000_PWR_TX].count++;
-		break;
-	case DW3000_PWR_RX:
-		/* RX time is calculated using start time and reception time */
-		cur_dtu_time = (u32)len_or_date;
-		if (!cur_dtu_time) {
-			/* Start time is unknown for immediate RX but we need
-			   it, so get current DTU time. */
-			cur_dtu_time = dw3000_get_dtu_time(dw);
-		}
-		pw->rx_start = cur_dtu_time;
-		pw->stats[DW3000_PWR_RX].count++;
-		break;
-	case DW3000_PWR_RUN:
-		/* Entering RUN state also enter IDLE state */
-		if (state != cstate)
-			pw->stats[DW3000_PWR_IDLE].count++;
-		break;
-	default:
-		break;
-	}
-	/* Update current information */
-	pw->start_time = boot_time_ns;
-	pw->cur_state = state;
-}
-
-/**
  * dw3000_alloc_xfer() - Allocate a new spi_message including spi_tranfer.
  * @trcount: the number of transfer to allocate with the new spi_message
  * @len: the length of TX buffer to allocate for the first transfer
@@ -691,6 +510,15 @@ static inline struct spi_message *dw3000_alloc_xfer(unsigned int trcount,
 						    unsigned int len)
 {
 	struct spi_message *msg = spi_message_alloc(trcount, GFP_KERNEL);
+
+#if ((KERNEL_VERSION(4, 12, 0) > LINUX_VERSION_CODE) && \
+     (KERNEL_VERSION(4, 6, 0) <= LINUX_VERSION_CODE))
+	/* Initialize spi_message resources list to avoid null pointer
+	 * dereference on some SPI controllers to fix a bug in spi_message_alloc()
+	 * appeared in 4.6.0 and fixed in 4.12.0. */
+	if (msg)
+		INIT_LIST_HEAD(&msg->resources);
+#endif
 
 	if (msg && len) {
 		struct spi_transfer *transfer = list_first_entry(
@@ -872,21 +700,175 @@ static void dw3000_free_fastcmd(struct spi_message *msg)
 	dw3000_free_xfer(msg, 1);
 }
 
+static inline int dw3000_spi_sync(struct dw3000 *dw, struct spi_message *msg);
+
 /**
- * dw3000_spi_sync() - Call spi_sync with error message
+ * dw3000_spi_queue_start() - Prepare SPI messages queue
  * @dw: the DW device on which the SPI transfer will occurs
- * @msg: the SPI message to sync
+ *
+ * Reset and initialise SPI messages queue to record next transfers until
+ * dw3000_spi_queue_flush() is called.
+ */
+void dw3000_spi_queue_start(struct dw3000 *dw)
+{
+#ifdef CONFIG_DW3000_SPI_OPTIMIZATION
+	struct spi_message *msg = dw->msg_queue;
+
+	spi_message_init(msg);
+	dw->msg_queue_xfer = (struct spi_transfer *)(msg + 1);
+	dw->msg_queue_xfer_count = 0;
+	dw->msg_queue_buf_pos = dw->msg_queue_buf;
+#endif
+}
+
+/**
+ * dw3000_spi_queue_msg() - Add one SPI message to messages queue
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @msg: the SPI message to add to SPI message queue
+ *
+ * All transfers of the provided SPI message are added to the local SPI messages
+ * queue. TX only transfer can be queued, so message queue must be flushed
+ * before any RX transfer is required.
  *
  * Return: 0 on success, else a negative error code.
  */
-static inline int dw3000_spi_sync(const struct dw3000 *dw,
-				  struct spi_message *msg)
+static inline int dw3000_spi_queue_msg(struct dw3000 *dw,
+				       struct spi_message *msg)
+{
+	struct spi_transfer *dxfer = dw->msg_queue_xfer;
+	struct spi_transfer *xfer;
+
+	if (dxfer == NULL)
+		return -ENOBUFS;
+	list_for_each_entry (xfer, &msg->transfers, transfer_list) {
+		/* Don't support queuing RX transfer */
+		if (xfer->rx_buf)
+			return -EINVAL;
+		if ((dw->msg_queue_buf_pos + xfer->len) >=
+		    (dw->msg_queue_buf + DW3000_QUEUED_SPI_BUFFER_SZ))
+			return -EMSGSIZE;
+		/* Copy this message transfer to next empty transfer in queue */
+		memcpy(dw->msg_queue_buf_pos, xfer->tx_buf, xfer->len);
+		memset(dxfer, 0, sizeof *dxfer);
+		dxfer->len = xfer->len;
+		dxfer->tx_buf = dw->msg_queue_buf_pos;
+		if (list_is_last(&xfer->transfer_list, &msg->transfers)) {
+			dxfer->cs_change = true;
+#if (KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE)
+			dxfer->cs_change_delay.unit = SPI_DELAY_UNIT_NSECS;
+			dxfer->cs_change_delay.value = 0;
+#endif
+		}
+		/* add transfer to queue */
+		spi_message_add_tail(dxfer, dw->msg_queue);
+		dw->msg_queue_xfer_count++;
+		/* Prepare next */
+		dw->msg_queue_buf_pos += dxfer->len;
+		if (dw->msg_queue_xfer_count >= DW3000_MAX_QUEUED_SPI_XFER) {
+			dxfer = NULL;
+			break;
+		}
+		dxfer++;
+	}
+	/* Save new dest xfer for next call */
+	dw->msg_queue_xfer = dxfer;
+	if (!dxfer && !list_is_last(&xfer->transfer_list, &msg->transfers))
+		return -ENOBUFS;
+	return 0;
+}
+
+/**
+ * dw3000_spi_queue_reset() - Reset message queue
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @rc: the return value given by caller to return after reset
+ *
+ * Reset the SPI messages queue and return the provided error code.
+ * This must be called when an error happen while SPI message are
+ * queued to ensure queuing mode is disabled.
+ *
+ * This revert dw3000_spi_sync() to immediate transaction mode.
+ *
+ * Return: the rc given value
+ */
+int dw3000_spi_queue_reset(struct dw3000 *dw, int rc)
+{
+#ifdef CONFIG_DW3000_SPI_OPTIMIZATION
+	dw->msg_queue_xfer = NULL;
+	dw->msg_queue_xfer_count = 0;
+#endif
+	return rc;
+}
+
+/**
+ * dw3000_spi_queue_flush() - Flush messages queue to dw3000_spi_sync()
+ * @dw: the DW device on which the SPI transfer will occurs
+ *
+ * Flush all queued transfers in SPI message queue by calling the
+ * dw3000_spi_sync() again with the SPI messages queue.
+ *
+ * This revert dw3000_spi_sync() to immediate transaction mode.
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_spi_queue_flush(struct dw3000 *dw)
+{
+#ifdef CONFIG_DW3000_SPI_OPTIMIZATION
+	struct spi_message *msg = dw->msg_queue;
+	struct spi_transfer *xfer;
+	int rc;
+
+	/* If nothing queued, nothing to do. Just reset to no-queuing mode. */
+	if (!dw->msg_queue_xfer_count)
+		return dw3000_spi_queue_reset(dw, 0);
+	/* Ensure last xfer don't have cs_change flag */
+	xfer = list_last_entry(&msg->transfers, struct spi_transfer,
+			       transfer_list);
+	xfer->cs_change = false;
+	/* Ensure dw3000_spi_sync() stop queue messages */
+	dw->msg_queue_xfer = NULL;
+	/* Do saved SPI transfers */
+	rc = dw3000_spi_sync(dw, msg);
+	/* Cleanup */
+	return dw3000_spi_queue_reset(dw, rc);
+#else
+	return 0;
+#endif
+}
+
+/**
+ * dw3000_spi_sync() - Execute or queue an SPI synchronous transaction
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @msg: the SPI message to transmit
+ *
+ * Call directly spi_sync() with the provided SPI message and display an error
+ * message if any error occurs.
+ *
+ * If SPI messages queue mode was activated previously by a call to
+ * dw3000_spi_queue_start(), don't call spi_sync() directly but store the
+ * given transfers into the message queue.
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+static inline int dw3000_spi_sync(struct dw3000 *dw, struct spi_message *msg)
 {
 	int rc;
+	if (dw->msg_queue_xfer)
+		return dw3000_spi_queue_msg(dw, msg);
 	rc = spi_sync(dw->spi, msg);
 	if (rc)
 		dev_err(dw->dev, "could not transfer : %d\n", rc);
 	return rc;
+}
+
+/**
+ * dw3000_spi_queue_active() - Check SPI queuing mode status
+ * @dw: the DW device on which the SPI transfer will occurs
+ *
+ * Return: true if SPI message queuing mode is active
+ */
+static inline bool dw3000_spi_queue_active(struct dw3000 *dw)
+{
+	return (dw->msg_queue_xfer || dw->msg_queue_xfer_count);
 }
 
 /**
@@ -912,10 +894,9 @@ int dw3000_xfer(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset, u16 length,
 		struct spi_transfer header;
 		struct spi_transfer data;
 		u8 header_buf[2];
-	} xfer;
+	} xfer = {};
 
 	/* Init transfers first because spi_message_init_with_transfer don't! */
-	memset(&xfer.header, 0, sizeof(xfer.header) * 2);
 	xfer.header.tx_buf = xfer.header_buf;
 	xfer.header.len = sizeof(xfer.header_buf);
 
@@ -1269,18 +1250,6 @@ int dw3000_clear_sys_status(struct dw3000 *dw, u32 clear_bits)
 	return dw3000_spi_sync(dw, msg);
 }
 
-static int dw3000_clear_all_sys_status(struct dw3000 *dw, u64 clear_bits)
-{
-	/* Use a prebuilt SPI message to be as fast as possible. */
-	struct spi_message *msg = dw->msg_write_all_sys_status;
-	struct spi_transfer *tr = list_first_entry(
-		&msg->transfers, struct spi_transfer, transfer_list);
-	const int hlen = tr->len - sizeof(clear_bits);
-	/* Prepared message have only header & length set, need to set data part */
-	put_unaligned_le64(clear_bits, (void *)tr->tx_buf + hlen);
-	return dw3000_spi_sync(dw, msg);
-}
-
 /**
  * dw3000_read_sys_status() - Fast read of SYS_STATUS register (4 low bytes upon 6)
  * @dw: the DW device on which the SPI transfer will occurs
@@ -1298,6 +1267,45 @@ int dw3000_read_sys_status(struct dw3000 *dw, u32 *status)
 	int rc = dw3000_spi_sync(dw, msg);
 	if (!rc)
 		*status = get_unaligned_le32(tr->rx_buf + hlen);
+	return rc;
+}
+
+/**
+ * dw3000_clear_all_sys_status() - Fast clearing of SYS_STATUS register
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @clear_bits: the bitmask of bits to clear
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+static int dw3000_clear_all_sys_status(struct dw3000 *dw, u64 clear_bits)
+{
+	/* Use a prebuilt SPI message to be as fast as possible. */
+	struct spi_message *msg = dw->msg_write_all_sys_status;
+	struct spi_transfer *tr = list_first_entry(
+		&msg->transfers, struct spi_transfer, transfer_list);
+	const int hlen = tr->len - sizeof(clear_bits);
+	/* Prepared message have only header & length set, need to set data part */
+	put_unaligned_le64(clear_bits, (void *)tr->tx_buf + hlen);
+	return dw3000_spi_sync(dw, msg);
+}
+
+/**
+ * dw3000_read_all_sys_status() - Fast read of SYS_STATUS register
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @status: address where to put read status
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_read_all_sys_status(struct dw3000 *dw, u64 *status)
+{
+	/* Use a prebuilt SPI message to be as fast as possible. */
+	struct spi_message *msg = dw->msg_read_all_sys_status;
+	struct spi_transfer *tr = list_first_entry(
+		&msg->transfers, struct spi_transfer, transfer_list);
+	const int hlen = tr->len - sizeof(*status);
+	int rc = dw3000_spi_sync(dw, msg);
+	if (!rc)
+		*status = get_unaligned_le64(tr->rx_buf + hlen);
 	return rc;
 }
 
@@ -1370,23 +1378,14 @@ int dw3000_clear_spi_collision_status(struct dw3000 *dw, u8 clear_bits)
 	return rc;
 }
 
-/*
- * dw3000_read_all_sys_status() - Fast read of SYS_STATUS register
- * @dw: the DW device on which the SPI transfer will occurs
- * @status: address where to put read status
- *
- * Return: 0 on success, else a negative error code.
- */
-int dw3000_read_all_sys_status(struct dw3000 *dw, u64 *status)
+
+int dw3000_change_tx_rf1_to_rf2(struct dw3000 *dw, bool tx)
 {
-	/* Use a prebuilt SPI message to be as fast as possible. */
-	struct spi_message *msg = dw->msg_read_all_sys_status;
-	struct spi_transfer *tr = list_first_entry(
-		&msg->transfers, struct spi_transfer, transfer_list);
-	const int hlen = tr->len - sizeof(*status);
-	int rc = dw3000_spi_sync(dw, msg);
-	if (!rc)
-		*status = get_unaligned_le64(tr->rx_buf + hlen);
+	int rc;
+	if (tx)
+		rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, 0x1C000050);
+	else
+		rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, 0x1C000000);
 	return rc;
 }
 
@@ -1427,7 +1426,7 @@ int dw3000_check_devid(struct dw3000 *dw)
 	for (i = 0; i < ARRAY_SIZE(dw3000_chip_versions); i++) {
 		if (devid == dw3000_chip_versions[i].id) {
 			if (!dw->chip_dev_id) {
-				dev_warn(dw->dev, "chip version found : %x\n",
+				dev_info(dw->dev, "chip version found : %x\n",
 					 devid);
 				dw->chip_dev_id = devid;
 				dw->chip_idx = i;
@@ -1445,20 +1444,17 @@ int dw3000_check_devid(struct dw3000 *dw)
  * dw3000_check_idlerc() - Read and check the RCINIT bit in SYS_STATUS register
  * @dw: the DW device on which the SPI transfer will occurs
  *
- * Return: 1 if bit is set else 0 if unset or SPI error.
+ * Return: True if bit is set else false if unset or SPI error.
  */
-static inline u8 dw3000_check_idlerc(struct dw3000 *dw)
+static inline bool dw3000_check_idlerc(struct dw3000 *dw)
 {
-	u32 reg;
+	u32 low_sys_status;
 
-	if (dw3000_read_sys_status(dw, &reg))
-		return 0;
-	dw3000_reset_counters(dw);
-	dw3000_enable_counters(dw);
-	dev_notice(dw->dev, "sys_status : 0x%x\n", reg);
+	if (dw3000_read_sys_status(dw, &low_sys_status))
+		return false;
 
-	return ((reg & (DW3000_SYS_STATUS_RCINIT_BIT_MASK)) ==
-		(DW3000_SYS_STATUS_RCINIT_BIT_MASK));
+	trace_dw3000_check_idlerc(dw, low_sys_status);
+	return low_sys_status & (DW3000_SYS_STATUS_RCINIT_BIT_MASK);
 }
 
 /**
@@ -1570,7 +1566,7 @@ skip_opt:
 }
 
 /**
- * dw3000_stats_enable() - Enable or disable all statistics
+ * dw3000_rx_stats_enable() - Enable or disable all statistics
  * @dw:	the DW device
  * @on: true to enable statistics, otherwise disable it.
  *
@@ -1600,7 +1596,8 @@ inline void dw3000_rx_stats_clear(struct dw3000 *dw)
 static bool dw3000_stats_enabled = false;
 module_param_named(stats_enabled, dw3000_stats_enabled, bool, 0644);
 MODULE_PARM_DESC(stats_enabled,
-		 "Enable statistics gathering, to be used with traces, only provides RSSI at this time");
+		 "Enable statistics gathering, to be used with traces, only"
+		 " provides RSSI at this time");
 
 /**
  * dw3000_rx_store_rssi() - Get RSSI data from last good RX frame
@@ -1645,10 +1642,11 @@ static int dw3000_rx_store_rssi(struct dw3000 *dw)
 	if (unlikely(rc))
 		return rc;
 	/* Avoid "nan" and "-inf" in userspace when calculating average RSSI */
-	if (cir_pwr == 0 || pacc_cnt == 0)
-		dev_info(dw->dev,
+	if (cir_pwr == 0 || pacc_cnt == 0) {
+		dev_err(dw->dev,
 			"one or both values from CIA registers are null\n");
-
+		return -EAGAIN;
+	}
 	rssi->cir_pwr = cir_pwr;
 	rssi->pacc_cnt = pacc_cnt;
 	rssi->prf_64mhz = ((config->rxCode >= 9) && (config->rxCode <= 24));
@@ -1686,43 +1684,71 @@ static inline int dw3000_rx_stats_inc(struct dw3000 *dw,
 	return rc;
 }
 
-static int dw3000_power_supply(struct dw3000 *dw,
-			       struct dw3000_power_control *power, int onoff)
+static int dw3000_power_supply_one(struct regulator *regulator, bool onoff)
 {
 	int rc;
 
-	if (!power->regulator_1p8 && !power->regulator_2p5) {
-		dev_warn(dw->dev, "No regulators, assuming always on\n");
+	if (!regulator)
 		return 0;
-	}
-
-	if (power->regulator_1p8) {
-		if (onoff)
-			rc = regulator_enable(power->regulator_1p8);
-		else
-			rc = regulator_disable(power->regulator_1p8);
-	}
-
-	if (power->regulator_2p5) {
-		if (onoff)
-			rc = regulator_enable(power->regulator_2p5);
-		else
-			rc = regulator_disable(power->regulator_2p5);
-	}
-	/* Ensure RESET is asserted at least the required time */
-	usleep_range(DW3000_HARD_RESET_DELAY_US,
-		     DW3000_HARD_RESET_DELAY_US + 500);
+	if (onoff)
+		rc = regulator_enable(regulator);
+	else
+		rc = regulator_disable(regulator);
 	return rc;
 }
 
 /**
- * dw3000_reset_assert() - reset gpio control
+ * dw3000_power_supply() - Set attached regulators state
  * @dw: the DW device
-*
+ * @onoff: the new expected regulators state
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+static int dw3000_power_supply(struct dw3000 *dw, int onoff)
+{
+	struct dw3000_power_control *power = &dw->regulators;
+	int rc = 0;
+
+	/* Early return if no regulator defined */
+	if (!power->regulator_1p8 && !power->regulator_2p5 &&
+	    !power->regulator_vdd)
+		return 0;
+	/* Change defined regulators state */
+	rc = dw3000_power_supply_one(power->regulator_1p8, onoff);
+	if (rc < 0) {
+		dev_err(dw->dev, "regulator %s failed for 1p8 (%d)\n",
+			onoff ? "enable" : "disable", rc);
+		return rc;
+	}
+
+	rc = dw3000_power_supply_one(power->regulator_2p5, onoff);
+	if (rc < 0) {
+		dev_err(dw->dev, "regulator %s failed for 2p5 (%d)\n",
+			onoff ? "enable" : "disable", rc);
+		return rc;
+	}
+
+	rc = dw3000_power_supply_one(power->regulator_vdd, onoff);
+	if (rc < 0) {
+		dev_err(dw->dev, "regulator %s failed for vdd (%d)\n",
+			onoff ? "enable" : "disable", rc);
+		return rc;
+	}
+
+	/* Add some delay to wait regulator stable */
+	usleep_range(dw3000_regulator_delay_us,
+		     dw3000_regulator_delay_us + 100);
+	return rc;
+}
+
+/**
+ * dw3000_reset_assert() - Reset gpio control
+ * @dw: the DW device
+ * @reset: the DW device
+ *
  * The configured reset gpio is switched to input to ensure it is not
  * driven low.
  *
- * Context: Must be call outside the thread handling device IRQ.
  * Return: 0 on success, else a negative error code.
  */
 static int dw3000_reset_assert(struct dw3000 *dw, bool reset)
@@ -1738,7 +1764,8 @@ static int dw3000_reset_assert(struct dw3000 *dw, bool reset)
 		/* Assert RESET GPIO */
 		rc = gpio_direction_output(dw->reset_gpio, 0);
 		if (rc)
-			dev_err(dw->dev, "Could not set reset gpio as output\n");
+			dev_err(dw->dev,
+				"Could not set reset gpio as output\n");
 	} else {
 		/* Release RESET GPIO.
 		 * Reset should be open drain, or switched to input whenever not driven
@@ -1749,9 +1776,6 @@ static int dw3000_reset_assert(struct dw3000 *dw, bool reset)
 	}
 	return rc;
 }
-
-
-
 
 /**
  * dw3000_set_operational_state() - Set new operational state for the device
@@ -1768,46 +1792,34 @@ static void dw3000_set_operational_state(struct dw3000 *dw,
 	wake_up(&dw->operational_state_wq);
 }
 
-
 /**
- * dw3000_poweron() - Power-on device using configured reset gpio
+ * dw3000_wait_idle_state() - Wait device powered-on and ready
  * @dw: the DW device to power-on
  *
+ * Device signal it is ready by issuing SPIRDY IRQ. This function waits
+ * for this IRQ to be handled and current_operational_state changed.
+ *
+ * Context: Must be call outside the thread handling device IRQ.
  * Return: 0 on success, else a negative error code.
  */
-int dw3000_poweron(struct dw3000 *dw)
+int dw3000_wait_idle_state(struct dw3000 *dw)
 {
-	int timeout;
-	int rc;
+	int timeout = msecs_to_jiffies(500);
+	int rc = 0;
 
-	if (dw->is_powered) {
-		dev_info(dw->dev, "device already powered on\n");
-		return 0;
-	}
-
-	rc = dw3000_power_supply(dw, &dw->regulators, true);
-	if (rc) {
-		dev_err(dw->dev, "Could not enable regulator\n");
-		return rc;
-	}
-
-	dw->is_powered = true;
-	/* HW may rely only on regulator, so exit without error if no GPIO */
-	if (!gpio_is_valid(dw->reset_gpio))
-		goto stats;
-
-	rc = dw3000_reset_assert(dw, false);
-	if (rc)
-		return rc;
-
-stats:
 	/* Force slow SPI clock speed (at device level) */
 	dw3000_change_speed(dw, DW3000_SPI_SLOW_HZ);
 	/* Enable interrupt so we can catch the SPI ready IRQ */
 	enable_irq(dw->spi->irq);
 
 	/* Now, wait for SPI ready interrupt */
-	timeout = msecs_to_jiffies(500);
+	if (!wait_event_timeout(dw->operational_state_wq,
+				dw->current_operational_state >=
+					DW3000_OP_STATE_IDLE_RC,
+				timeout)) {
+		dev_err(dw->dev, "Timeout waiting poweron event.\n");
+		rc = -EIO;
+	}
 
 	/* No IRQs after this point until device is enabled */
 	disable_irq(dw->spi->irq);
@@ -1817,6 +1829,33 @@ stats:
 	if (!rc)
 		dw3000_power_stats(dw, DW3000_PWR_RUN, 0);
 	return rc;
+}
+
+/**
+ * dw3000_poweron() - Power-on device
+ * @dw: the DW device to power-on
+ *
+ * Power-on device using configured regulators and de-assert reset gpio.
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_poweron(struct dw3000 *dw)
+{
+	int rc;
+
+	if (dw->is_powered) {
+		dev_info(dw->dev, "Device already powered on\n");
+		return 0;
+	}
+	/* Power up regulators */
+	rc = dw3000_power_supply(dw, true);
+	if (rc) {
+		dev_err(dw->dev, "Could not enable regulator\n");
+		return rc;
+	}
+	dw->is_powered = true;
+	/* De-assert RESET GPIO */
+	return dw3000_reset_assert(dw, false);
 }
 
 /**
@@ -1833,36 +1872,28 @@ int dw3000_poweroff(struct dw3000 *dw)
 	int rc;
 
 	if (!dw->is_powered) {
-		dev_info(dw->dev, "device already powered off\n");
+		dev_info(dw->dev, "Device already powered off\n");
 		return 0;
 	}
-
-	rc = dw3000_power_supply(dw, &dw->regulators, false);
+	/* Power down regulators */
+	rc = dw3000_power_supply(dw, false);
 	if (rc) {
 		dev_err(dw->dev, "Could not disable regulator\n");
 		return rc;
 	}
-
 	dw->is_powered = false;
-
-	/* Clear security registers related cache */
-	memset(local->sts_key, 0, AES_KEYSIZE_128);
-	memset(local->sts_iv, 0, AES_BLOCK_SIZE);
-	/* Reset STS mode */
-	dw->config.stsMode = DW3000_STS_MODE_OFF | DW3000_STS_MODE_SDC;
-
-
-
-	/* HW may rely only on regulator, so exit without error if no GPIO */
-	if (!gpio_is_valid(dw->reset_gpio))
-		goto stats;
 
 	/* Assert RESET GPIO */
 	rc = dw3000_reset_assert(dw, true);
 	if (rc)
 		return rc;
 
-stats:
+	/* Clear security registers related cache */
+	memset(local->sts_key, 0, AES_KEYSIZE_128);
+	memset(local->sts_iv, 0, AES_BLOCK_SIZE);
+	/* Reset STS mode */
+	dw->config.stsMode = DW3000_STS_MODE_OFF | DW3000_STS_MODE_SDC;
+	/* Update operational state and power stats */
 	dw3000_set_operational_state(dw, DW3000_OP_STATE_OFF);
 	dw3000_power_stats(dw, DW3000_PWR_OFF, 0);
 
@@ -1888,8 +1919,8 @@ int dw3000_forcetrxoff(struct dw3000 *dw)
 
 	/* Check if in TX or RX state before forcing device into IDLE state */
 	rc = dw3000_reg_read8(dw, DW3000_SYS_STATE_LO_ID, 2, &idle);
-	if (idle <= DW3000_SYS_STATE_IDLE) {
-		/* Device is already in IDLE or IDLE_RC ... must not force to IDLE if in IDLE_RC */
+	if (idle < DW3000_SYS_STATE_IDLE) {
+		/* Device is already in IDLE_RC ... must not force to IDLE if in IDLE_RC */
 		return rc;
 	}
 	disable_irq(dw->spi->irq);
@@ -1983,7 +2014,12 @@ static int dw3000_wakeup(struct dw3000 *dw)
 
 	/* Add a delay after transfer. See spi_transfer_delay_exec() called by
 	   spi_transfer_one_message(). */
+#if (KERNEL_VERSION(5, 13, 0) > LINUX_VERSION_CODE)
 	tr->delay_usecs = DW3000_SPI_CS_WAKEUP_DELAY_US;
+#else
+	tr->delay.unit = SPI_DELAY_UNIT_USECS;
+	tr->delay.value = DW3000_SPI_CS_WAKEUP_DELAY_US;
+#endif
 	/* Now, execute SPI modified message/transfer */
 	rc = dw3000_spi_sync(dw, msg);
 	if (!rc) {
@@ -1993,7 +2029,11 @@ static int dw3000_wakeup(struct dw3000 *dw)
 		enable_irq(dw->spi->irq);
 	}
 	/* Reset delay in transfer */
+#if (KERNEL_VERSION(5, 13, 0) > LINUX_VERSION_CODE)
 	tr->delay_usecs = 0;
+#else
+	tr->delay.value = 0;
+#endif
 	return rc;
 	/* The next part of the wake process is located in
 	   dw3000_isr_handle_spi_ready(), executed when SPIRDY interrupt is
@@ -2002,7 +2042,12 @@ static int dw3000_wakeup(struct dw3000 *dw)
 
 static int do_wakeup(struct dw3000 *dw, const void *in, void *out)
 {
-	return dw3000_wakeup(dw);
+	int err;
+	err = dw3000_wakeup(dw);
+	if (err)
+		mcps802154_broken(dw->llhw);
+
+	return err;
 }
 
 int dw3000_deepsleep_wakeup_now(struct dw3000 *dw,
@@ -2090,13 +2135,27 @@ enum hrtimer_restart dw3000_idle_timeout(struct hrtimer *timer)
 /**
  * dw3000_idle_cancel_timer() - Cancel idle timer.
  * @dw: the DW device
+ *
+ * Return: 0 on success, -errno otherwise.
  */
-static void dw3000_idle_cancel_timer(struct dw3000 *dw)
+int dw3000_idle_cancel_timer(struct dw3000 *dw)
 {
+	int r;
+
 	trace_dw3000_idle_cancel_timer(dw);
-	hrtimer_try_to_cancel(&dw->idle_timer);
+	/* Remember: return value of hrtimer_try_to_cancel.
+	 *  0 when the timer was not active.
+	 *  1 when the timer was active.
+	 * -1 when the timer is currently executing the callback function and
+	 *    cannot be stopped. */
+	r = hrtimer_try_to_cancel(&dw->idle_timer);
+	if (r < 0)
+		return -EBUSY;
+	else if (!r)
+		return -ENOENT;
 	/* Ensure wakeup ISR don't call the mcps802154_timer_expired() */
 	dw->idle_timeout_cb = NULL;
+	return 0;
 }
 
 /**
@@ -2198,7 +2257,6 @@ int dw3000_check_operational_state(struct dw3000 *dw, int delay_dtu,
 		if (!rc)
 			return 1; /* And save params. */
 		/* Failure to enter deep sleep, continue without it */
-		break;
 	}
 	/* Cancel wakeup timer launch by idle() */
 	dw3000_idle_cancel_timer(dw);
@@ -2244,6 +2302,27 @@ int dw3000_rx_disable(struct dw3000 *dw)
 }
 
 /**
+ * dw3000_rx_busy() - Change RX busy state
+ * @dw: the DW device to change RX busy state
+ * @busy: the new value to set in busy field
+ *
+ * Return: true if busy flag already set to specified value.
+ */
+bool dw3000_rx_busy(struct dw3000 *dw, bool busy)
+{
+	unsigned long flags;
+	/* Check and set busy flag */
+	spin_lock_irqsave(&dw->rx.lock, flags);
+	if (dw->rx.busy == busy) {
+		spin_unlock_irqrestore(&dw->rx.lock, flags);
+		return true;
+	}
+	dw->rx.busy = busy;
+	spin_unlock_irqrestore(&dw->rx.lock, flags);
+	return false;
+}
+
+/**
  * dw3000_rx_enable() - Enable RX
  * @dw: the DW device to put in RX mode
  * @rx_delayed:  true if RX delayed must be use
@@ -2270,12 +2349,23 @@ int dw3000_rx_enable(struct dw3000 *dw, bool rx_delayed, u32 date_dtu,
 	if (unlikely(rc))
 		return rc;
 
+	/* Flush SPI queue before dw3000_coex_start() because coex use it
+	   already.
+	   NOTE: Since dw3000_rx_enable() also called during ADC calibration,
+	   we may have nothing to flush. Call it only if SPI queuing is active */
+	if (dw3000_spi_queue_active(dw)) {
+		rc = dw3000_spi_queue_flush(dw);
+		if (unlikely(rc))
+			return rc;
+	}
+
 	/* Update RX parameters according to WiFi coexistence */
 	rc = dw3000_coex_start(dw, &rx_delayed, &date_dtu, cur_time_dtu);
 	if (unlikely(rc))
 		return rc;
 
 	if (!rx_delayed) {
+		/* Enter immediate reception mode */
 		rc = dw3000_write_fastcmd(dw, DW3000_CMD_RX);
 		if (unlikely(rc))
 			goto stop_coex;
@@ -2283,12 +2373,21 @@ int dw3000_rx_enable(struct dw3000 *dw, bool rx_delayed, u32 date_dtu,
 		return 0;
 	}
 
+	/* Restart SPI queuing mode */
+	dw3000_spi_queue_start(dw);
+	/* Set reception date */
 	rc = dw3000_setdelayedtrxtime(dw, date_dtu);
 	if (unlikely(rc))
 		goto stop_coex;
+	/* Enter delayed reception mode */
 	rc = dw3000_write_fastcmd(dw, DW3000_CMD_DRX);
 	if (unlikely(rc))
 		goto stop_coex;
+	/* Execute SPI queued transfers */
+	rc = dw3000_spi_queue_flush(dw);
+	if (unlikely(rc))
+		goto stop_coex;
+
 	/* Apply power stats now, will goes back to IDLE in dw3000_forcetrxoff() */
 	dw3000_power_stats(dw, DW3000_PWR_RX, date_dtu);
 	/* Check if late */
@@ -2334,40 +2433,43 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 	struct dw3000_deep_sleep_state *dss = &dw->deep_sleep_state;
 	struct mcps802154_llhw *llhw = dw->llhw;
 	u32 cur_time_dtu = 0;
-	u32 date_dtu = 0;
+	u32 rx_date_dtu = 0;
 	u32 timeout_pac = 0;
 	bool rx_delayed = true;
 	int delay_dtu = 0;
 	bool can_sync = false;
-	bool override_rx_antenna = dw->sp0_rx_antenna > -1 &&
-		!(info-> flags & MCPS802154_RX_INFO_RANGING);
-	u8 rx_antenna = info->ant_pair_id;
 	int rc;
 	bool pdoa_enabled;
 	u8 sts_mode;
 
 	trace_dw3000_mcps_rx_enable(dw, info->flags, info->timeout_dtu);
 
+	/* Ensure CFO is checked if responder wait first frame of round. */
+	dw->data.check_cfo = !!(info->flags & MCPS802154_RX_INFO_RANGING_ROUND);
 	/* Calculate the transfer date. */
-	if (info->flags & MCPS802154_RX_INFO_TIMESTAMP_DTU)
-		date_dtu = info->timestamp_dtu - DW3000_RX_ENABLE_STARTUP_DTU;
-	else
+	if (info->flags & MCPS802154_RX_INFO_TIMESTAMP_DTU) {
+		rx_date_dtu =
+			info->timestamp_dtu - DW3000_RX_ENABLE_STARTUP_DTU;
+	} else {
 		/* Receive immediately. */
 		rx_delayed = false;
-
-	/* Calculate the timeout. Do nothing if no timeout */
-	if (info->timeout_dtu == 0)
+	}
+	/* Calculate the timeout. */
+	if (info->timeout_dtu == 0) {
 		timeout_pac = dw->pre_timeout_pac;
-	else if (info->timeout_dtu != -1)
-		timeout_pac = dw->pre_timeout_pac + dtu_to_pac(llhw, info->timeout_dtu);
+	} else if (info->timeout_dtu != -1) {
+		timeout_pac = dw->pre_timeout_pac +
+			      dtu_to_pac(llhw, info->timeout_dtu);
+	} else {
+		/* No timeout. */
+	}
 
 	if (rx_delayed) {
 		cur_time_dtu = dw3000_get_dtu_time(dw);
-		delay_dtu = (int)(date_dtu - cur_time_dtu);
+		delay_dtu = (int)(rx_date_dtu - cur_time_dtu);
 		if (delay_dtu < 0) {
-			dev_err(dw->dev,
-				"too late to program delayed rx date_dtu=%x current_dtu=%x\n",
-				date_dtu, cur_time_dtu);
+			trace_dw3000_mcps_rx_enable_too_late(dw, rx_date_dtu,
+							     cur_time_dtu);
 			return -ETIME;
 		}
 	}
@@ -2395,6 +2497,10 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 	}
 	/* All operation below require the DW chip is in IDLE_PLL state */
 
+	/* Start SPI queuing mode to minimise number of SPI messages
+	   Queue will be flushed by dw3000_tx_frame() itself. */
+	dw3000_spi_queue_start(dw);
+
 	/* Enable STS */
 	pdoa_enabled = !!(info->flags & MCPS802154_RX_INFO_RANGING_PDOA);
 	sts_mode = FIELD_GET(MCPS802154_RX_INFO_STS_MODE_MASK, info->flags);
@@ -2402,19 +2508,16 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 				 sts_to_pdoa(sts_mode, pdoa_enabled));
 	if (unlikely(rc))
 		goto fail;
-	/* Ensure correct RX antenna are selected. */
-	if (override_rx_antenna)
-		rx_antenna = ANTPAIR_OFFSET(dw->sp0_rx_antenna);
-	rc = dw3000_set_rx_antennas(dw, rx_antenna, pdoa_enabled);
+	/* Ensure correct RX antennas are selected. */
+	rc = dw3000_set_rx_antennas(dw, info->ant_set_id, pdoa_enabled);
 	if (unlikely(rc))
 		goto fail;
-
-	if (info->flags & MCPS802154_RX_INFO_AACK)
+	if (info->flags & MCPS802154_RX_INFO_AACK) {
 		dw3000_enable_autoack(dw, false);
-	else
+	} else {
 		dw3000_disable_autoack(dw, false);
-
-	rc = dw3000_rx_enable(dw, rx_delayed, date_dtu, timeout_pac);
+	}
+	rc = dw3000_rx_enable(dw, rx_delayed, rx_date_dtu, timeout_pac);
 	if (unlikely(rc))
 		goto fail;
 
@@ -2423,6 +2526,9 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 		(info->flags & MCPS802154_RX_INFO_KEEP_RANGING_CLOCK) != 0;
 
 fail:
+	if (rc)
+		/* Ensure SPI queuing mode disabled on error */
+		dw3000_spi_queue_reset(dw, rc);
 	trace_dw3000_return_int(dw, rc);
 	return rc;
 }
@@ -2436,29 +2542,41 @@ static irqreturn_t dw3000_irq_handler(int irq, void *context)
 	return IRQ_HANDLED;
 }
 
+static void dw3000_setup_one_regulator(const char *name, struct device *dev,
+				       struct regulator **out)
+{
+	struct regulator *regulator;
+
+	regulator = devm_regulator_get_optional(dev, name);
+	if (IS_ERR(regulator)) {
+		int err = PTR_ERR(regulator);
+		dev_notice(dev, "Fail to get %s regulator (%d)\n", name, err);
+		regulator = NULL;
+	}
+	*out = regulator;
+}
+
 /**
  * dw3000_setup_regulators() - request regulator
- * @dw: the DW device to request regulators.
+ * @dw: the DW device to get regulator config from DT
+ *
+ * This will search for configured regulators to use from the device tree.
+ * All of them are optional, so missing one will just be noticed to dmesg.
  */
-
 void dw3000_setup_regulators(struct dw3000 *dw)
 {
-	struct regulator *regulator_1p8, *regulator_2p5;
+	struct dw3000_power_control *power = &dw->regulators;
 
-	regulator_1p8 = devm_regulator_get_optional(dw->dev, "power_reg_1p8");
-	if (IS_ERR_OR_NULL(regulator_1p8)) {
-		dev_dbg(dw->dev, "No regulator 1.8V found in DT\n");
-		regulator_1p8 = NULL;
+	dw3000_setup_one_regulator("power_reg_1p8", dw->dev,
+				   &power->regulator_1p8);
+	dw3000_setup_one_regulator("power_reg_2p5", dw->dev,
+				   &power->regulator_2p5);
+	dw3000_setup_one_regulator("power_reg", dw->dev, &power->regulator_vdd);
+
+	if (!power->regulator_1p8 && !power->regulator_2p5 &&
+	    !power->regulator_vdd) {
+		dev_warn(dw->dev, "No regulators, assuming always on\n");
 	}
-
-	regulator_2p5 = devm_regulator_get_optional(dw->dev, "power_reg_2p5");
-	if (IS_ERR_OR_NULL(regulator_2p5)) {
-		dev_dbg(dw->dev, "No regulator 2.5V found in DT\n");
-		regulator_2p5 = NULL;
-	}
-
-	dw->regulators.regulator_1p8 = regulator_1p8;
-	dw->regulators.regulator_2p5 = regulator_2p5;
 }
 
 /**
@@ -2474,8 +2592,12 @@ void dw3000_setup_regulators(struct dw3000 *dw)
 int dw3000_setup_reset_gpio(struct dw3000 *dw)
 {
 	/* Initialise reset GPIO pin as output */
-	dw->reset_gpio =
-		of_get_named_gpio(dw->dev->of_node, "uwbhal,reset-gpio", 0);
+	dw->reset_gpio = of_get_named_gpio(dw->dev->of_node, "reset-gpio", 0);
+	if (!gpio_is_valid(dw->reset_gpio)) {
+		/* Try with old name */
+		dw->reset_gpio = of_get_named_gpio(dw->dev->of_node,
+						   "uwbhal,reset-gpio", 0);
+	}
 	if (!gpio_is_valid(dw->reset_gpio)) {
 		dev_warn(dw->dev, "device does not support GPIO RESET control");
 		return 0;
@@ -2538,6 +2660,200 @@ int dw3000_setup_irq(struct dw3000 *dw)
 	return 0;
 }
 
+/**
+ * dw3000_setup_wifi_coex() - request wifi coex parameters for the device
+ * @dw: the DW device to get wifi coex parameters from DT
+ *
+ * Get the wifi coex parameters from the DT :
+ *
+ * wificoex_gpio : wifi coexistence GPIO number
+ * If not set, it is disabled.
+ *
+ * wificoex_delay_us : delay between wifi coexistence GPIO activation and TX/RX in us.
+ * Default is 1000us.
+ *
+ * wificoex_interval_us : minimum interval between two operations in us under which
+ * wifi coexistence GPIO is kept active.
+ * Default is 2000us.
+ *
+ * wificoex_margin_us: margin to add to the wifi coexistece delay
+ * for SPI transactions
+ * Default is 300us.
+ *
+ * All these parameters are optional
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_setup_wifi_coex(struct dw3000 *dw)
+{
+	int rc;
+	struct device_node *node = dw->dev->of_node;
+
+	/* Initialize wifi coex parameters to default values */
+	dw->coex_gpio = -1;
+	dw->coex_delay_us = 1000;
+	dw->coex_margin_us = 300;
+	dw->coex_interval_us = 2000;
+
+	/*
+	 * Get wificoex_gpio :
+	 * If not set stop here to get parameters from DT
+	 * because the feature is disabled
+	 */
+	if (of_find_property(node, "wificoex_gpio", NULL)) {
+		rc = of_property_read_u8(node, "wificoex_gpio", &dw->coex_gpio);
+		if (rc) {
+			dev_err(dw->dev, "fail to get 'wificoex_gpio' %s\n",
+				node->name);
+			return rc;
+		}
+	} else {
+		dev_info(dw->dev, "gpio coex disabled\n");
+		return 0;
+	}
+	/* Get wificoex_delay_us */
+	if (of_find_property(node, "wificoex_delay_us", NULL)) {
+		rc = of_property_read_u32(node, "wificoex_delay_us",
+					  &dw->coex_delay_us);
+		if (rc) {
+			dev_err(dw->dev, "fail to get 'wificoex_delay_us' %s\n",
+				node->name);
+			return rc;
+		}
+	}
+	/* Get wificoex_interval_us */
+	if (of_find_property(node, "wificoex_interval_us", NULL)) {
+		rc = of_property_read_u32(node, "wificoex_interval_us",
+					  &dw->coex_interval_us);
+		if (rc) {
+			dev_err(dw->dev,
+				"fail to get 'wificoex_interval_us' %s\n",
+				node->name);
+			return rc;
+		}
+	}
+	/* Get wificoex_margin_us */
+	if (of_find_property(node, "wificoex_margin_us", NULL)) {
+		rc = of_property_read_u32(node, "wificoex_margin_us",
+					  &dw->coex_margin_us);
+		if (rc) {
+			dev_err(dw->dev,
+				"fail to get 'wificoex_margin_us' %s\n",
+				node->name);
+			return rc;
+		}
+	}
+	dev_info(dw->dev,
+		 "gpio coex enabled : "
+		 "gpio %u, delay %u, interval %u, margin %u\n",
+		 dw->coex_gpio, dw->coex_delay_us, dw->coex_interval_us,
+		 dw->coex_margin_us);
+
+	return 0;
+}
+
+/**
+ * dw3000_setup_thread_cpu() - request thread cpu for the device
+ * @dw: the DW device to get thread cpu from DT
+ * @dw3000_thread_cpu: pointer to the thread cpu value read in DT or -1
+ *
+ * Get the thread cpu# from the DT :
+ *
+ * CPU# on which the DW state machine's thread will run.
+ * If not set, processing thread is not bound to a specific CPU and
+ * the scheduler may move it, adding migration latencies.
+ *
+ * This property is optional
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_setup_thread_cpu(struct dw3000 *dw, int *dw3000_thread_cpu)
+{
+	int rc;
+	struct device_node *node = dw->dev->of_node;
+
+	*dw3000_thread_cpu = -1;
+
+	if (of_find_property(node, "cpu", NULL)) {
+		rc = of_property_read_u32(node, "cpu", dw3000_thread_cpu);
+		if (rc) {
+			dev_err(dw->dev, "fail to get 'cpu' %s\n", node->name);
+			return rc;
+		}
+	}
+
+	dev_info(dw->dev, "thread cpu %d\n", *dw3000_thread_cpu);
+
+	return 0;
+}
+
+/**
+ * dw3000_setup_qos_latency() - request qos latency for the device
+ * @dw: the DW device to get qos latency from DT
+ *
+ * Get the qos latency from the DT :
+ *
+ * Latency request to PM QoS on active ranging in microseconds.
+ * Default is  0, the minimum PM QoS latency.
+ *
+ * This property is optional
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_setup_qos_latency(struct dw3000 *dw)
+{
+	int rc;
+	struct device_node *node = dw->dev->of_node;
+
+	if (of_find_property(node, "qos_latency", NULL)) {
+		rc = of_property_read_u32(node, "qos_latency",
+					  &dw3000_qos_latency);
+		if (rc) {
+			dev_err(dw->dev, "fail to get 'qos_latency' %s\n",
+				node->name);
+			return rc;
+		}
+	}
+
+	dev_info(dw->dev, "qos latency %d\n", dw3000_qos_latency);
+
+	return 0;
+}
+
+/**
+ * dw3000_setup_regulator_delay() - request regulator delay for the device
+ * @dw: the DW device to get regulator delay from DT
+ *
+ * Get the regulator delay in us from the DT :
+ *
+ * Delay in us to wait after regulator(s) state has changed.
+ * Default is 1000 us.
+ *
+ * This property is optional
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_setup_regulator_delay(struct dw3000 *dw)
+{
+	int rc;
+	struct device_node *node = dw->dev->of_node;
+
+	if (of_find_property(node, "regulator_delay_us", NULL)) {
+		rc = of_property_read_u32(node, "regulator_delay_us",
+					  &dw3000_regulator_delay_us);
+		if (rc) {
+			dev_err(dw->dev,
+				"fail to get 'regulator_delay_us' %s\n",
+				node->name);
+			return rc;
+		}
+	}
+
+	dev_info(dw->dev, "regulator delay %d us\n", dw3000_regulator_delay_us);
+
+	return 0;
+}
+
 int dw3000_hardreset(struct dw3000 *dw)
 {
 	int rc;
@@ -2546,15 +2862,10 @@ int dw3000_hardreset(struct dw3000 *dw)
 	if (rc)
 		return rc;
 
-	usleep_range(DW3000_HARD_RESET_DELAY_US, DW3000_HARD_RESET_DELAY_US + 100);
+	usleep_range(DW3000_HARD_RESET_DELAY_US,
+		     DW3000_HARD_RESET_DELAY_US + 100);
 
-	rc = dw3000_reset_assert(dw, false);
-	if (rc)
-		return rc;
-
-	usleep_range(DW3000_HARD_RESET_DELAY_US, DW3000_HARD_RESET_DELAY_US + 100);
-
-	return 0;
+	return dw3000_reset_assert(dw, false);
 }
 
 static inline int dw3000_clear_aonconfig(struct dw3000 *dw)
@@ -2605,28 +2916,19 @@ static void _dw3000_softreset(struct dw3000 *dw)
 	dw->data.sleep_mode = 0;
 }
 
-static int dw3000_tx_write_data(struct dw3000 *dw, u8 *buffer, u16 len,
-				u16 offset)
+static int dw3000_tx_write_data(struct dw3000 *dw, u8 *buffer, u16 len)
 {
-	if ((offset + len) >= DW3000_TX_BUFFER_MAX_LEN)
+	if (len >= DW3000_TX_BUFFER_MAX_LEN)
 		return -1;
-	if (offset <= DW3000_REG_DIRECT_OFFSET_MAX_LEN) {
-		/* Directly write the data to the IC TX buffer */
-		dw3000_xfer(dw, DW3000_TX_BUFFER_ID, offset, len, buffer,
-			    DW3000_SPI_WR_BIT);
-	} else {
-		/* Program the indirect offset register A for
-			* specified offset to TX buffer
-			*/
-		dw3000_reg_write32(dw, DW3000_INDIRECT_ADDR_A_ID, 0,
-				   (DW3000_TX_BUFFER_ID >> 16));
-		dw3000_reg_write32(dw, DW3000_INDIRECT_ADDR_A_ID, 0, offset);
-
-		/* Indirectly write the data to the IC TX buffer */
-		dw3000_xfer(dw, DW3000_INDIRECT_POINTER_A_ID, 0, len, buffer,
-			    DW3000_SPI_WR_BIT);
-	}
+	/* Directly write the data to the IC TX buffer */
+	dw3000_xfer(dw, DW3000_TX_BUFFER_ID, 0, len, buffer, DW3000_SPI_WR_BIT);
 	return 0;
+}
+
+static int do_change_speed(struct dw3000 *dw, const void *in, void *out)
+{
+	/* Need to reset pre-allocated message which hold speed */
+	return dw3000_transfers_reset(dw);
 }
 
 /**
@@ -2642,13 +2944,21 @@ static int dw3000_tx_write_data(struct dw3000 *dw, u8 *buffer, u16 len,
  */
 static int dw3000_change_speed(struct dw3000 *dw, u32 new_speed)
 {
+	struct dw3000_stm_command cmd_change_speed = { do_change_speed, NULL,
+						       NULL };
+
 	/* Setup new SPI speed only if changed */
 	if (new_speed == dw->spi->max_speed_hz)
 		return 0;
 	/* Change SPI max speed */
 	dw->spi->max_speed_hz = new_speed;
-	/* Need to reset pre-allocated message which hold speed */
-	return dw3000_transfers_reset(dw);
+
+	/*
+	 * Must call dw3000_transfers_reset() from our thread
+	 * to guarantee no SPI transfer occurs during
+	 * transfers structure are re-allocated
+	 */
+	return dw3000_enqueue_generic(dw, &cmd_change_speed);
 }
 
 /**
@@ -2724,7 +3034,7 @@ static inline int dw3000_rftx_blocks_enable(struct dw3000 *dw, u32 chan)
 }
 
 /**
- * dw3000_enab_blocks_autoseq_disablele_rf_tx() - Turn on TX LDOs and enable RF blocks for TX
+ * dw3000_enable_rf_tx() - Turn on TX LDOs and enable RF blocks for TX
  * @dw: the DW device
  * @chan: specifies the operating channel (e.g. 5 or 9)
  * @switch_ctrl: specifies whether the switch needs to be configured for TX
@@ -2747,17 +3057,7 @@ static int dw3000_enable_rf_tx(struct dw3000 *dw, u32 chan, u8 switch_ctrl)
 			      DW3000_LDO_CTRL_LDO_VDDTX2_EN_BIT_MASK |
 			      DW3000_LDO_CTRL_LDO_VDDTX1_EN_BIT_MASK));
 	/* Enable RF blocks for TX (configure RF_ENABLE_ID register) */
-	if (chan == 5) {
-		dw3000_reg_or32(dw, DW3000_RF_ENABLE_ID, 0,
-				(0x2000000UL
-				| 0x2000U | 0x1000U
-				| 0x800U | 0x400U));
-	} else {
-		dw3000_reg_or32(dw, DW3000_RF_ENABLE_ID, 0,
-				(0x2000000UL
-				| 0x1000U
-				| 0x800U | 0x400U));
-	}
+	rc = dw3000_rftx_blocks_enable(dw, chan);
 	if (rc)
 		return rc;
 	if (switch_ctrl) {
@@ -3028,7 +3328,7 @@ int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
 		if (WARN_ON(len > dw->data.max_frames_len))
 			return -EINVAL;
 		/* Write frame data to the DW IC buffer */
-		if (dw3000_tx_write_data(dw, skb->data, skb->len, 0) != 0) {
+		if (dw3000_tx_write_data(dw, skb->data, skb->len) != 0) {
 			dev_err(dw->dev, "cannot write frame data to DW IC\n");
 			return -EINVAL;
 		}
@@ -3043,6 +3343,12 @@ int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
 		return rc;
 
 	rc = dw3000_write_txctrl(dw);
+	if (unlikely(rc))
+		return rc;
+
+	/* Flush SPI queue before dw3000_coex_start() because coex use it
+	   already. */
+	rc = dw3000_spi_queue_flush(dw);
 	if (unlikely(rc))
 		return rc;
 
@@ -3063,6 +3369,8 @@ int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
 		return 0;
 	}
 
+	/* Restart SPI queuing mode */
+	dw3000_spi_queue_start(dw);
 	/* Set transmission date. */
 	rc = dw3000_setdelayedtrxtime(dw, tx_date_dtu);
 	if (unlikely(rc))
@@ -3072,6 +3380,11 @@ int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
 	rc = dw3000_write_fastcmd(dw, cmd);
 	if (unlikely(rc))
 		goto stop_coex;
+	/* Execute SPI queued transfers */
+	rc = dw3000_spi_queue_flush(dw);
+	if (unlikely(rc))
+		goto stop_coex;
+
 	/* W4R mode are handled by TX event IRQ handler */
 	dw3000_power_stats(dw, DW3000_PWR_TX,
 			   skb ? skb->len + IEEE802154_FCS_LEN : 0);
@@ -3080,15 +3393,12 @@ int dw3000_tx_frame(struct dw3000 *dw, struct sk_buff *skb, bool tx_delayed,
 	if (unlikely(rc)) {
 		if (rc == -ETIME) {
 			cur_time_dtu = dw3000_get_dtu_time(dw);
-			dev_err(dw->dev,
-				"cannot program delayed tx date_dtu=%x current_dtu=%x\n",
-				tx_date_dtu, cur_time_dtu);
-			/* dw3000_forcetrxoff() already stop coex, return now */
-			return rc;
+			trace_dw3000_mcps_tx_frame_too_late(dw, tx_date_dtu,
+							    cur_time_dtu);
 		}
 		goto stop_coex;
 	}
-	return 0;
+	return dw->chip_ops->check_tx_ok(dw);
 stop_coex:
 	dw3000_coex_stop(dw);
 	return rc;
@@ -3179,6 +3489,10 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 	}
 	/* All operation below require the DW chip is in IDLE_PLL state */
 
+	/* Start SPI queuing mode to minimise number of SPI messages
+	   Queue will be flushed by dw3000_tx_frame() itself. */
+	dw3000_spi_queue_start(dw);
+
 	/* Enable STS */
 	sts_mode = FIELD_GET(MCPS802154_TX_FRAME_STS_MODE_MASK, info->flags);
 	rc = dw3000_set_sts_pdoa(
@@ -3188,7 +3502,7 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 	if (unlikely(rc))
 		goto fail;
 	/* Ensure correct TX antenna is selected. */
-	rc = dw3000_set_tx_antenna(dw, info->ant_id);
+	rc = dw3000_set_tx_antenna(dw, info->ant_set_id);
 	if (unlikely(rc))
 		goto fail;
 
@@ -3199,7 +3513,7 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 		rx_delay_dly = dtu_to_dly(llhw, info->rx_enable_after_tx_dtu) -
 			       DW3000_RX_ENABLE_STARTUP_DLY;
 		rx_delay_dly = rx_delay_dly >= 0 ? rx_delay_dly : 0;
-		/* Calculate the after tx rx timeout. DO nothing if no timeout */
+		/* Calculate the after tx rx timeout. */
 		if (info->rx_enable_after_tx_timeout_dtu == 0) {
 			rx_timeout_pac = dw->pre_timeout_pac;
 		} else if (info->rx_enable_after_tx_timeout_dtu != -1) {
@@ -3208,6 +3522,8 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 				dtu_to_pac(
 					llhw,
 					info->rx_enable_after_tx_timeout_dtu);
+		} else {
+			/* No timeout. */
 		}
 	}
 	rc = dw3000_tx_frame(dw, skb, tx_delayed, tx_date_dtu, rx_delay_dly,
@@ -3219,6 +3535,9 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 	dw->need_ranging_clock =
 		(info->flags & MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK) != 0;
 fail:
+	if (rc)
+		/* Ensure SPI queuing mode disabled on error */
+		dw3000_spi_queue_reset(dw, rc);
 	trace_dw3000_return_int(dw, rc);
 	return rc;
 }
@@ -3265,13 +3584,17 @@ static int dw3000_rx_frame(struct dw3000 *dw,
 	u8 *buffer;
 	int rc;
 
+	/* If rx_disable() callback was called, we can't call mcps802154_rx_frame() */
+	if (dw3000_rx_busy(dw, true))
+		return 0;
 	/* Read frame data into skb */
 	if (len) {
 		/* Allocate new skb (including space for FCS added by ieee802154_rx) */
 		skb = dev_alloc_skb(len + IEEE802154_FCS_LEN);
 		if (!skb) {
 			dev_err(dw->dev, "RX buffer allocation failed\n");
-			return -ENOMEM;
+			rc = -ENOMEM;
+			goto err_spi;
 		}
 		buffer = skb_put(skb, len);
 		/* Directly read data from the IC to the buffer */
@@ -3299,12 +3622,14 @@ static int dw3000_rx_frame(struct dw3000 *dw,
 	}
 	/* Inform MCPS 802.15.4 that we received a frame */
 	mcps802154_rx_frame(dw->llhw);
+	WARN_ON_ONCE(dw3000_rx_busy(dw, false));
 	return 0;
 
 err_spi:
 	/* Release the socker buffer */
 	if (skb)
 		dev_kfree_skb_any(skb);
+	WARN_ON_ONCE(dw3000_rx_busy(dw, false));
 	return rc;
 }
 
@@ -3434,7 +3759,7 @@ static int dw3000_configure_otp(struct dw3000 *dw, struct dw3000_config *config)
  *
  *   sts_mnth = sqrt(x/y)*default_sts_mnth
  *
- *   where:
+ *   where
  *	 - `default_sts_mnth` is 0x10
  *       - `x` is the length of the STS in units of 8  (i.e. 8 for 64 length,
  *         16 for 128 length etc..)
@@ -3450,7 +3775,7 @@ static int dw3000_configure_otp(struct dw3000 *dw, struct dw3000_config *config)
  *
  *   val = sqrt(stsLength/16)*2048
  *
- *   where:
+ *   where
  *	 - `stsLength` value of the given `dw3000_sts_lengths enum`
  *
  * Return: zero on success, else a negative error code.
@@ -3634,8 +3959,7 @@ static void _dw3000_ciadiag_update_reg_select(struct dw3000 *dw)
 	}
 }
 
-static int dw3000_configure_sys_cfg(struct dw3000 *dw,
-				    struct dw3000_config *config)
+int dw3000_configure_sys_cfg(struct dw3000 *dw, struct dw3000_config *config)
 {
 	u8 mode = (config->phrMode == DW3000_PHRMODE_EXT) ?
 			  DW3000_SYS_CFG_PHR_MODE_BIT_MASK :
@@ -3672,9 +3996,20 @@ static int dw3000_configure_sys_cfg(struct dw3000 *dw,
 	if (rc)
 		return rc;
 	/* Configure PAC */
-	rc = dw3000_reg_modify8(dw, DW3000_DRX_TUNE0_ID, 0,
-				(u8)~DW3000_DRX_TUNE0_PRE_PAC_SYM_BIT_MASK,
-				dw_pac_reg);
+	if (config->pdoaMode == DW3000_PDOA_M1) {
+		/* Disable STS CMF, and configure PAC size */
+		rc = dw3000_reg_modify8(
+			dw, DW3000_DRX_TUNE0_ID, 0,
+			(u8) ~(DW3000_DRX_TUNE0_PRE_PAC_SYM_BIT_MASK |
+			       DW3000_DRX_TUNE0_DT0B4_BIT_MASK),
+			dw_pac_reg);
+	} else {
+		/* Enable STS CMF, and configure PAC size */
+		rc = dw3000_reg_modify8(
+			dw, DW3000_DRX_TUNE0_ID, 0,
+			(u8)~DW3000_DRX_TUNE0_PRE_PAC_SYM_BIT_MASK,
+			dw_pac_reg | DW3000_DRX_TUNE0_DT0B4_BIT_MASK);
+	}
 	if (rc)
 		return rc;
 	if (config->txPreambLength == DW3000_PLEN_72) {
@@ -3766,7 +4101,6 @@ static inline int dw3000_configure_rf(struct dw3000 *dw)
 	u32 rf_pll_cfg;
 	int rc;
 	/* Get default values */
-
 	if (chan == 9) {
 		rf_pll_cfg = DW3000_RF_PLL_CFG_CH9;
 	} else {
@@ -3789,10 +4123,8 @@ static inline int dw3000_configure_rf(struct dw3000 *dw)
 		return rc;
 	/* Setup TX power */
 	rc = dw3000_reg_write32(dw, DW3000_TX_POWER_ID, 0, txconfig->power);
-
 	if (unlikely(rc))
 		return rc;
-
 	/* Extend the lock delay */
 	rc = dw3000_reg_write8(dw, DW3000_PLL_CAL_ID, 0, DW3000_RF_PLL_CFG_LD);
 	if (unlikely(rc))
@@ -3814,39 +4146,19 @@ static int dw3000_configmrxlut(struct dw3000 *dw)
 	const u32 *lut;
 	int rc;
 
+	if (!dw->chip_ops->set_mrxlut || !dw->chip_ops->get_config_mrxlut_chan)
+		return 0;
+
 	lut = dw->chip_ops->get_config_mrxlut_chan(dw, chan);
 	if (!lut)
 		return -EINVAL;
-	/* Update LUT registers */
-	rc = dw3000_reg_write32(dw, DW3000_DGC_CFG_ID, 0x0, 0x19c7f1e5);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_0_CFG_ID, 0x0, lut[0]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_1_CFG_ID, 0x0, lut[1]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_2_CFG_ID, 0x0, lut[2]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_3_CFG_ID, 0x0, lut[3]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_4_CFG_ID, 0x0, lut[4]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_5_CFG_ID, 0x0, lut[5]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_6_CFG_ID, 0x0, lut[6]);
-	if (rc)
-		return rc;
-	rc = dw3000_reg_write32(dw, DW3000_DGC_CFG0_ID, 0x0, DW3000_DGC_CFG0);
-	if (rc)
-		return rc;
 
-	return dw3000_reg_write32(dw, DW3000_DGC_CFG1_ID, 0x0, DW3000_DGC_CFG1);
+	rc = dw->chip_ops->set_mrxlut(dw, lut);
+	if (unlikely(rc)) {
+		dev_err(dw->dev, "mrxlut configuration has failed (%d)\n", rc);
+	}
+
+	return rc;
 }
 
 int dw3000_configure_dgc(struct dw3000 *dw)
@@ -3860,10 +4172,11 @@ int dw3000_configure_dgc(struct dw3000 *dw)
 		if (local->dgc_otp_set) {
 			/* If the OTP has DGC info programmed into it, do a
 			 * manual kick from OTP. */
-			u16 dgc_sel = (config->chan == 5 ? 0 : 1)
-				      << DW3000_NVM_CFG_DGC_SEL_BIT_OFFSET;
+			u16 dgc_sel = (config->chan == 5 ?
+					       0 :
+					       DW3000_NVM_CFG_DGC_SEL_BIT_MASK);
 			rc = dw3000_reg_modify16(
-				dw, DW3000_DGC_CFG_ID, 0,
+				dw, DW3000_NVM_CFG_ID, 0,
 				(u16) ~(DW3000_NVM_CFG_DGC_SEL_BIT_MASK),
 				dgc_sel | DW3000_NVM_CFG_DGC_KICK_BIT_MASK);
 			if (rc)
@@ -3892,12 +4205,29 @@ static int dw3000_restore_dgc(struct dw3000 *dw)
 {
 	struct dw3000_config *config = &dw->config;
 	int rc = 0;
+
+	/* Restore OPS table configuration */
+	if (dw->chip_ops->kick_ops_table_on_wakeup) {
+		rc = dw->chip_ops->kick_ops_table_on_wakeup(dw);
+		if (rc)
+			return rc;
+	}
+
 	/* Only enable DGC for PRF 64. */
 	if ((config->rxCode >= 9) && (config->rxCode <= 24)) {
 		struct dw3000_local_data *local = &dw->data;
 		/* Load RX LUTs only if not already loaded from OTP */
 		if (!local->dgc_otp_set)
 			rc = dw3000_configmrxlut(dw);
+		else if (dw->chip_ops->kick_dgc_on_wakeup) {
+			/*
+			 * If the OTP has DGC info programmed into it,
+			 * do a manual kick from OTP
+			 */
+			rc = dw->chip_ops->kick_dgc_on_wakeup(dw);
+			if (rc)
+				return rc;
+		}
 	}
 	return rc;
 }
@@ -3934,6 +4264,121 @@ int dw3000_configure_pcode(struct dw3000 *dw)
 {
 	/* Just reconfigure the CHAN_CTRL register */
 	return dw3000_configure_chan_ctrl(dw, &dw->config);
+}
+
+/**
+ * dw3000_configure_sfd_type() - change the device's RF SFD type
+ * @dw: the DW device
+ *
+ * Return: zero on success, else a negative error code.
+ */
+int dw3000_configure_sfd_type(struct dw3000 *dw)
+{
+	/* Just reconfigure the CHAN_CTRL register */
+	return dw3000_configure_chan_ctrl(dw, &dw->config);
+}
+
+/**
+ * dw3000_configure_phr_rate() - change the device's phr rate
+ * @dw: the DW device
+ *
+ * Return: zero on success, else a negative error code.
+ */
+int dw3000_configure_phr_rate(struct dw3000 *dw)
+{
+	struct dw3000_config *config = &dw->config;
+	u8 mode = (config->phrMode == DW3000_PHRMODE_EXT) ?
+			  DW3000_SYS_CFG_PHR_MODE_BIT_MASK :
+			  0;
+
+	return dw3000_reg_modify32(
+		dw, DW3000_SYS_CFG_ID, 0,
+		~(u32)(DW3000_SYS_CFG_PHR_MODE_BIT_MASK |
+		       DW3000_SYS_CFG_PHR_6M8_BIT_MASK |
+		       DW3000_SYS_CFG_CP_PROTOCOL_BIT_MASK |
+		       DW3000_SYS_CFG_PDOA_MODE_BIT_MASK |
+		       DW3000_SYS_CFG_CP_SDC_BIT_MASK),
+		(((u32)config->pdoaMode)
+		 << DW3000_SYS_CFG_PDOA_MODE_BIT_OFFSET) |
+			(((u16)config->stsMode & DW3000_STS_CONFIG_MASK)
+			 << DW3000_SYS_CFG_CP_PROTOCOL_BIT_OFFSET) |
+			(DW3000_SYS_CFG_PHR_6M8_BIT_MASK &
+			 ((u32)config->phrRate
+			  << DW3000_SYS_CFG_PHR_6M8_BIT_OFFSET)) |
+			mode);
+}
+
+/**
+ * dw3000_configure_preamble_length_and_datarate() - change the device's RF preamble length (PSR) and data rate
+ * @dw: the DW device
+ * @update_datarate_only: if true, update only the datarate
+ *
+ * Return: zero on success, else a negative error code.
+ */
+int dw3000_configure_preamble_length_and_datarate(struct dw3000 *dw,
+						  bool update_datarate_only)
+{
+	struct dw3000_config *config = &dw->config;
+	int rc;
+
+	/* Setup TX preamble size, and data rate */
+	rc = dw3000_reg_modify32(
+		dw, DW3000_TX_FCTRL_ID, 0,
+		~(DW3000_TX_FCTRL_TXBR_BIT_MASK |
+		  DW3000_TX_FCTRL_TXPSR_PE_BIT_MASK),
+		((u32)config->dataRate << DW3000_TX_FCTRL_TXBR_BIT_OFFSET) |
+			((u32)config->txPreambLength)
+				<< DW3000_TX_FCTRL_TXPSR_PE_BIT_OFFSET);
+	if (rc)
+		return rc;
+
+	if (!update_datarate_only) {
+		int symb = _plen_info[config->txPreambLength - 1].symb;
+		int pac_symb = _plen_info[config->txPreambLength - 1].pac_symb;
+		u8 dw_pac_reg =
+			_plen_info[config->txPreambLength - 1].dw_pac_reg;
+		int sfd_symb = dw3000_get_sfd_symb(dw);
+
+		/**
+		 * DTUNE (SFD timeout):
+		 * SFD timeout = PLEN + 1 + sfd len - pac size
+		 */
+		config->sfdTO = symb + 1 + sfd_symb - pac_symb;
+		rc = dw3000_reg_write16(dw, DW3000_DRX_SFDTOC_ID, 0,
+					config->sfdTO);
+		if (rc)
+			return rc;
+		/* Reconfigure PAC */
+		rc = dw3000_reg_modify8(
+			dw, DW3000_DRX_TUNE0_ID, 0,
+			(u8)~DW3000_DRX_TUNE0_PRE_PAC_SYM_BIT_MASK, dw_pac_reg);
+		if (rc)
+			return rc;
+
+		if (config->txPreambLength == DW3000_PLEN_72) {
+			/**
+			 * Value 9 sets fine premable length to 72 symbols
+			 * This is needed to set 72 length.
+			 */
+			rc = dw3000_setplenfine(dw, 9);
+			if (rc)
+				return rc;
+		} else {
+			/* Clear the setting in the FINE_PLEN register. */
+			rc = dw3000_setplenfine(dw, 0);
+			if (rc)
+				return rc;
+		}
+		if (symb > 64)
+			rc = dw3000_reg_write8(dw, DW3000_DTUNE4_ID, 0x3,
+					       DW3000_RX_SFD_HLDOFF);
+		else /* set default value for <= 64 */
+			rc = dw3000_reg_write8(dw, DW3000_DTUNE4_ID, 0x3,
+					       DW3000_RX_SFD_HLDOFF_DEF);
+		if (rc)
+			return rc;
+	}
+	return rc;
 }
 
 static int dw3000_setdwstate(struct dw3000 *dw, enum operational_state state)
@@ -4360,7 +4805,7 @@ int dw3000_idle(struct dw3000 *dw, bool timestamp, u32 timestamp_dtu,
 			goto eof;
 		}
 	} else if (dw->auto_sleep_margin_us < 0) {
-		/* Deep-sleep is completly disable, so do nothing here! */
+		/* Deep-sleep is completely disable, so do nothing here! */
 		rc = 0;
 		goto eof;
 	}
@@ -4393,6 +4838,7 @@ static inline int dw3000_lock_pll(struct dw3000 *dw, u8 sys_status)
 		dw3000_set_operational_state(dw, DW3000_OP_STATE_IDLE_PLL);
 		goto resync_dtu;
 	}
+
 	if (__dw3000_chip_version == DW3000_E0_VERSION) {
 		/* Verify PLL lock bit is cleared */
 		int rc = dw3000_reg_write8(
@@ -4441,12 +4887,11 @@ static int dw3000_run_pgfcal(struct dw3000 *dw)
 {
 	u32 val = 0;
 	u8 cal;
-	/* Put into calibration mode and turn on delay mode */
-	u32 data = (((u32)0x02) << DW3000_PGF_CAL_CFG_COMP_DLY_BIT_OFFSET) |
-		   (DW3000_PGF_CAL_CFG_PGF_MODE_BIT_MASK & 0x1);
 	int rc;
 
-	rc = dw3000_reg_write32(dw, DW3000_PGF_CAL_CFG_ID, 0x0, data);
+	/* Put into calibration mode */
+	rc = dw3000_reg_modify8(dw, DW3000_PGF_CAL_CFG_ID, 0x0,
+				(u8)~DW3000_PGF_CAL_CFG_PGF_MODE_BIT_MASK, 0x1);
 	if (rc)
 		return rc;
 	/* Trigger PGF calibration */
@@ -4490,6 +4935,10 @@ static int dw3000_run_pgfcal(struct dw3000 *dw)
 	if (val == 0x1fffffff) {
 		goto calib_err;
 	}
+	/* Disable reading */
+	rc = dw3000_reg_and8(dw, DW3000_PGF_CAL_CFG_ID, 0x2, ~0x1);
+	if (rc)
+		return rc;
 	return 0;
 calib_err:
 	dev_err(dw->dev, "PGF calibration failed\n");
@@ -4509,6 +4958,11 @@ static int dw3000_pgf_cal(struct dw3000 *dw, bool ldoen)
 	u16 val;
 	int rc;
 
+	/* Turn on delay mode (ensure good initial value all the time) */
+	rc = dw3000_reg_write16(dw, DW3000_PGF_CAL_CFG_ID, 0x2, 0x02);
+	if (rc)
+		return rc;
+
 	if (__dw3000_chip_version >= DW3000_D0_VERSION) {
 		u32 resi;
 		/* Enable reading of CAL result */
@@ -4517,6 +4971,10 @@ static int dw3000_pgf_cal(struct dw3000 *dw, bool ldoen)
 			return rc;
 		/* Read calibration */
 		rc = dw3000_reg_read32(dw, DW3000_RX_CAL_RESI_ID, 0x0, &resi);
+		if (rc)
+			return rc;
+		/* Disable reading */
+		rc = dw3000_reg_and8(dw, DW3000_RX_CAL_CFG_ID, 0x2, ~0x1);
 		if (rc)
 			return rc;
 		/* If not D0 and not soft reset, no need to continue */
@@ -4559,11 +5017,8 @@ static int dw3000_pgf_cal(struct dw3000 *dw, bool ldoen)
 static int dw3000_configure(struct dw3000 *dw)
 {
 	struct dw3000_config *config = &dw->config;
-	int symb = _plen_info[config->txPreambLength - 1].symb;
-	int pac_symb = _plen_info[config->txPreambLength - 1].pac_symb;
-	int sfd_symb = dw3000_get_sfd_symb(dw);
-	int pg_count = 0;
 	int rc;
+
 	/* Clear the sleep mode ALT_GEAR bit */
 	dw->data.sleep_mode &= (~(DW3000_ALT_GEAR | DW3000_SEL_GEAR3));
 	dw->data.max_frames_len = config->phrMode ? DW3000_EXT_FRAME_LEN :
@@ -4576,25 +5031,11 @@ static int dw3000_configure(struct dw3000 *dw)
 	rc = dw3000_configure_chan(dw);
 	if (rc)
 		return rc;
-	/* Setup TX preamble size, PRF and data rate */
-	rc = dw3000_reg_modify32(
-		dw, DW3000_TX_FCTRL_ID, 0,
-		~(DW3000_TX_FCTRL_TXBR_BIT_MASK |
-		  DW3000_TX_FCTRL_TXPSR_PE_BIT_MASK),
-		((u32)config->dataRate << DW3000_TX_FCTRL_TXBR_BIT_OFFSET) |
-			((u32)config->txPreambLength)
-				<< DW3000_TX_FCTRL_TXPSR_PE_BIT_OFFSET);
+	/* Setup TX preamble size, data rate and SDF timeout count */
+	rc = dw3000_configure_preamble_length_and_datarate(dw, false);
 	if (rc)
 		return rc;
-	/**
-	 * DTUNE (SFD timeout):
-	 * SFD timeout = PLEN + 1 + sfd len - pac size
-	 */
-	config->sfdTO = symb + 1 + sfd_symb - pac_symb;
 
-	rc = dw3000_reg_write16(dw, DW3000_DRX_SFDTOC_ID, 0, config->sfdTO);
-	if (rc)
-		return rc;
 	/* Auto calibrate the PLL and change to IDLE_PLL state */
 	rc = dw3000_lock_pll(dw, 0);
 	if (rc)
@@ -4612,17 +5053,10 @@ static int dw3000_configure(struct dw3000 *dw)
 	/* Calibrate ADC offset, if needed, after DGC configuration and after PLL lock.
 	 * If this calibration is executed before the PLL lock, the PLL lock failed.
 	 */
-
-	dw3000_configmrxlut(dw);
 	if (dw->chip_ops->adc_offset_calibration)
 		rc = dw->chip_ops->adc_offset_calibration(dw);
+
 	/* Update configuration dependent timings */
-	if (dw->bw_comp) {
-		pg_count = dw3000_calc_pgcount(dw, dw->txconfig.PGdly);
-		 if (pg_count !=0) {
-			 dw3000_calc_bandwithadj(dw, pg_count);
-		 }
-	}
 	dw3000_update_timings(dw);
 	return rc;
 }
@@ -4710,7 +5144,7 @@ int dw3000_set_shortaddr(struct dw3000 *dw, __le16 val)
 }
 
 /**
- * dw3000_configure_hw_addr_filt() - Set device's hardware address filtering
+ * dw3000_configure_hw_addr_filt() - Set device's hardware address filtering 
  * parameters
  * @dw: the DW device
  * @changed: bitfields of flags indicating parameters which have changed
@@ -4801,17 +5235,54 @@ static inline int dw3000_framefilter_disable(struct dw3000 *dw)
 }
 
 /**
-* dw3000_read_pdoa() - Read the PDOA result.
-* @dw: The DW device.
-*
-* This is used to read the PDOA result, it is the phase difference between
-* either the Ipatov and STS POA, or the two STS POAs, depending on the PDOA
-* mode of operation. (PDoA - Phase Difference On Arrival).
-* NOTE: To convert to degrees: float pdoa_deg =
-* ((float)pdoa / (1 << 11)) * 180 / M_PI.
-*
-* Return: The PDOA result (signed in [1:-11] radian units).
-*/
+ * dw3000_read_clockoffset() - Read the clock offset for last frame received
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @cfo: the address where to store read CFO
+ *
+ * This is used to read the crystal offset (relating to the frequency offset of
+ * the far DW3720 device compared to this one).
+ *
+ * Note: the returned signed number must be divided by 2^26 to get ppm offset.
+ * Return: 0 on success, else a negative error code.
+ */
+int dw3000_read_clockoffset(struct dw3000 *dw, s16 *cfo)
+{
+	int rc;
+	switch (dw->data.dblbuffon) {
+	case DW3000_DBL_BUFF_ACCESS_BUFFER_B:
+		/* !!! Assumes that Indirect pointer register B was already set. */
+		rc = dw3000_reg_read16(dw, DW3000_INDIRECT_POINTER_B_ID,
+				       DW3000_DB_DIAG_CIA_DIAG0, (u16 *)cfo);
+		break;
+	case DW3000_DBL_BUFF_ACCESS_BUFFER_A:
+		rc = dw3000_reg_read16(dw, DW3000_DB_DIAG_SET_1,
+				       DW3000_DB_DIAG_CIA_DIAG0, (u16 *)cfo);
+		break;
+	default:
+		rc = dw3000_reg_read16(dw, DW3000_CIA_DIAG0_ID, 0, (u16 *)cfo);
+	}
+	if (rc)
+		return rc;
+	/* Bit 12 is sign, make the number to be sign extended if this bit is '1' */
+	*cfo <<= sizeof(*cfo) * 8 - DW3000_CIA_DIAG0_COE_PPM_BIT_LEN;
+	*cfo >>= sizeof(*cfo) * 8 - DW3000_CIA_DIAG0_COE_PPM_BIT_LEN;
+	trace_dw3000_read_clockoffset(dw, *cfo);
+	return 0;
+}
+
+/**
+ * dw3000_read_pdoa() - Read the PDOA result
+ * @dw: The DW device.
+ *
+ * This is used to read the PDOA result, it is the phase difference between
+ * either the Ipatov and STS POA, or the two STS POAs, depending on the PDOA
+ * mode of operation. (POA - Phase Of Arrival).
+ *
+ * NOTE: To convert to degrees: float pdoa_deg =
+ * ((float)pdoa / (1 << 11)) * 180 / M_PI.
+ *
+ * Return: the PDOA result (signed in q11 radian units).
+ */
 s16 dw3000_read_pdoa(struct dw3000 *dw)
 {
 	const u16 b12_sign_extend_test = 0x2000;
@@ -4918,6 +5389,7 @@ int dw3000_set_sts_pdoa(struct dw3000 *dw, u8 sts_mode, u8 pdoa_mode)
 	if (config->pdoaMode != pdoa_mode) {
 		config->pdoaMode = pdoa_mode;
 		changed = true;
+		trace_dw3000_set_pdoa(dw, pdoa_mode);
 	}
 	/* Re-configure the device with new STS & PDOA mode */
 	if (changed) {
@@ -5029,7 +5501,7 @@ int dw3000_set_promiscuous(struct dw3000 *dw, bool on)
 		return dw3000_framefilter_disable(dw);
 	return dw3000_framefilter_enable(
 		dw, DW3000_FF_BEACON_EN | DW3000_FF_DATA_EN | DW3000_FF_ACK_EN |
-			    DW3000_FF_COORD_EN);
+			    DW3000_FF_MAC_EN);
 }
 
 /**
@@ -5145,7 +5617,7 @@ int dw3000_otp_read32(struct dw3000 *dw, u16 addr, u32 *val)
  *
  * Return: zero on success, else a negative error code.
  */
-static int dw3000_read_otp(struct dw3000 *dw, int mode)
+int dw3000_read_otp(struct dw3000 *dw, int mode)
 {
 	struct dw3000_otp_data *otp = &dw->otp_data;
 	u32 val;
@@ -5172,8 +5644,7 @@ static int dw3000_read_otp(struct dw3000 *dw, int mode)
 	rc = dw3000_otp_read32(dw, DW3000_XTRIM_ADDRESS, &val);
 	if (unlikely(rc))
 		return rc;
-	/* TODO: avoid hard number, and replace it. */
-	otp->xtal_trim = val & 0x7f;
+	otp->xtal_trim = val & DW3000_XTAL_TRIM_BIT_MASK;
 	/* Load optional values according to mode parameter */
 	if (mode & DW3000_READ_OTP_PID) {
 		rc = dw3000_otp_read32(dw, DW3000_PARTID_ADDRESS, &otp->partID);
@@ -5190,7 +5661,12 @@ static int dw3000_read_otp(struct dw3000 *dw, int mode)
 		if (unlikely(rc))
 			return rc;
 		/* TODO: avoid hard number, and replace it. */
-		otp->vBatP = val & 0xff;
+		/* We save three voltage levels in OTP during production testing:
+		 * [7:0] = Vbat @ 1.62V
+		 * [15:8] = Vbat @ 3.6V
+		 * [23:16] = Vbat @ 3.0V
+		 */
+		otp->vBatP = (val >> 16) & 0xff;
 	}
 	if (mode & DW3000_READ_OTP_TMP) {
 		rc = dw3000_otp_read32(dw, DW3000_VTEMP_ADDRESS, &val);
@@ -5203,7 +5679,7 @@ static int dw3000_read_otp(struct dw3000 *dw, int mode)
 	   eng samples) set to default value */
 	/* TODO: avoid hard number, and replace it. */
 	if (otp->tempP == 0)
-		otp->tempP = 0x85; /* @temp of 20 deg */
+		otp->tempP = 0x85; /* @temp of 22 deg */
 	/* If the reference voltage has not been programmed in OTP (early eng
 	   samples) set to default value */
 	/* TODO: avoid hard number, and replace it. */
@@ -5486,14 +5962,21 @@ int dw3000_otp_write32(struct dw3000 *dw, u16 addr, u32 data)
  *
  * Return: zero on success, else a negative error code.
  */
-static int dw3000_prog_xtrim(struct dw3000 *dw)
+int dw3000_prog_xtrim(struct dw3000 *dw)
 {
 	struct dw3000_otp_data *otp = &dw->otp_data;
+	struct dw3000_local_data *local = &dw->data;
 	int rc;
 
 	if (otp->xtal_trim) {
-		/* set the XTAL trim value as read from OTP */
-		rc = dw3000_reg_write8(dw, DW3000_XTAL_ID, 0, otp->xtal_trim);
+		int value = (int)otp->xtal_trim + local->xtal_bias;
+		if (value < 0)
+			value = 0;
+		else if (value > DW3000_XTAL_TRIM_BIT_MASK)
+			value = DW3000_XTAL_TRIM_BIT_MASK;
+		/* Set the XTAL trim value */
+		rc = dw3000_reg_write8(dw, DW3000_XTAL_ID, 0, (u8)value);
+		trace_dw3000_prog_xtrim(dw, rc, value, local->xtal_bias);
 		if (unlikely(rc))
 			return rc;
 	}
@@ -5735,7 +6218,7 @@ static int dw3000_set_antenna_gpio(struct dw3000 *dw,
 /**
  * dw3000_set_tx_antenna() - Configure device to use selected antenna for TX
  * @dw: The DW device.
- * @antidx: The antenna to use for next TX
+ * @ant_set_id: The antennas set id to use
  *
  * Prepare the DW device to transmit frame using the specified antenna.
  * The required HW information (port, gpio and gpio value) must be set
@@ -5743,29 +6226,42 @@ static int dw3000_set_antenna_gpio(struct dw3000 *dw,
  *
  * Return: zero on success, else a negative error code.
  */
-int dw3000_set_tx_antenna(struct dw3000 *dw, int antidx)
+int dw3000_set_tx_antenna(struct dw3000 *dw, int ant_set_id)
 {
 	struct dw3000_config *config = &dw->config;
 	struct dw3000_antenna_calib *ant_calib;
 	int rc;
-	/* Early return if no change */
-	if (antidx == config->ant[0])
-		return 0;
-	/* Retrieve antenna GPIO configuration from calibration data */
-	ant_calib = &dw->calib_data.ant[antidx];
-	if (ant_calib->port != 0) {
-		/* TX always use RF1 port */
-		dev_warn(
-			dw->dev,
-			"Bad antenna selected or bad configuration ant=%d, port=%d\n",
-			antidx, ant_calib->port);
+	s8 ant_idx1, ant_idx2;
+	/* Sanity checks first */
+	if (ant_set_id < 0 || ant_set_id >= ANTSET_ID_MAX)
+		return -EINVAL;
+	/* Retrieve TX antenna from antenna set */
+	dw3000_calib_ant_set_id_to_ant(ant_set_id, &ant_idx1, &ant_idx2);
+	if (ant_idx1 < 0 && ant_idx2 >= 0)
+		ant_idx1 = ant_idx2; /* use ant_idx2 if ant_idx1 undefined */
+	if (ant_idx1 < 0) {
+		/* Specified TX antenna must be valid */
+		dev_warn(dw->dev, "Bad antennas set id selected (%d)\n",
+			 ant_set_id);
 		return -EINVAL;
 	}
+	/* Early return if no change */
+	if (ant_idx1 == config->ant[0])
+		return 0;
+	/* Retrieve antenna GPIO configuration from calibration data */
+	ant_calib = &dw->calib_data.ant[ant_idx1];
+	/* switching to RF2 port for TX if necessary  */
+	if (ant_calib->port == 1) {
+		dw3000_change_tx_rf1_to_rf2(dw, true);
+		dw->tx_rf2 = 1;
+	}
+
 	/* Set GPIO state according config to select this antenna */
 	rc = dw3000_set_antenna_gpio(dw, ant_calib);
+
 	if (rc)
 		return rc;
-	config->ant[0] = antidx;
+	config->ant[0] = ant_idx1;
 	/* Switching antenna require changing some calibration parameters */
 	return dw3000_calib_update_config(dw);
 }
@@ -5773,50 +6269,62 @@ int dw3000_set_tx_antenna(struct dw3000 *dw, int antidx)
 /**
  * dw3000_set_rx_antennas() - Set GPIOs to use selected antennas for RX
  * @dw: The DW device.
- * @ant_pair: The antennas pair to use
+ * @ant_set_id: The antennas set id to use
  * @pdoa_enabled: True if PDoA is enabled
  *
  * Return: zero on success, else a negative error code.
  */
-int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_pair, bool pdoa_enabled)
+int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id, bool pdoa_enabled)
 {
 	struct dw3000_config *config = &dw->config;
 	struct dw3000_antenna_calib *ant_calib;
-	int rc = 0, port, changed = 0;
-	u8 antidx1, antidx2;
+	int rc = 0, port = -1, changed = 0;
+	s8 ant_idx1, ant_idx2;
 	/* Sanity checks first */
-	if (ant_pair < 0 || ant_pair >= ANTPAIR_MAX)
+	if (ant_set_id < 0 || ant_set_id >= ANTSET_ID_MAX)
 		return -EINVAL;
-	/* Retrieve first antenna GPIO configuration from calibration data */
-	dw3000_calib_antpair_to_ant(ant_pair, &antidx1, &antidx2);
-	ant_calib = &dw->calib_data.ant[antidx1];
-	port = ant_calib->port; /* Save port for later check */
-	if (antidx1 != config->ant[port]) {
-		/* Set GPIO state according config for this first antenna */
-		rc = dw3000_set_antenna_gpio(dw, ant_calib);
-		if (rc)
-			return rc;
-		config->ant[port] = antidx1;
-		changed++;
+	if (dw->tx_rf2) {
+		dw3000_change_tx_rf1_to_rf2(dw, false);
 	}
-	/* Retrieve second antenna GPIO configuration from calibration data */
-	if (pdoa_enabled) {
-		ant_calib = &dw->calib_data.ant[antidx2];
+	/* Retrieve RX antennas configuration from antenna set id */
+	dw3000_calib_ant_set_id_to_ant(ant_set_id, &ant_idx1, &ant_idx2);
+	if (pdoa_enabled && (ant_idx1 < 0 || ant_idx2 < 0)) {
+		dev_warn(dw->dev,
+			 "Bad antennas set id selected (%d) for pdoa\n",
+			 ant_set_id);
+		return -EINVAL;
+	}
+	/* Apply config for first antenna */
+	if (ant_idx1 >= 0) {
+		ant_calib = &dw->calib_data.ant[ant_idx1];
+		port = ant_calib->port; /* Save port for later check */
+		if (ant_idx1 != config->ant[port]) {
+			/* Set GPIO state according config for this first antenna */
+			rc = dw3000_set_antenna_gpio(dw, ant_calib);
+			if (rc)
+				return rc;
+			config->ant[port] = ant_idx1;
+			changed++;
+		}
+	}
+	/* Apply config for second antenna */
+	if (ant_idx2 >= 0) {
+		ant_calib = &dw->calib_data.ant[ant_idx2];
 		if (port == ant_calib->port) {
 			/* Specified RX antenna must be on different port */
 			dev_warn(
 				dw->dev,
 				"Bad antennas selected or bad configuration ant1=%d (port=%d), ant2=%d (port=%d)\n",
-				antidx1, port, antidx2, ant_calib->port);
+				ant_idx1, port, ant_idx2, ant_calib->port);
 			return -EINVAL;
 		}
 		port = ant_calib->port;
-		if (antidx2 != config->ant[port]) {
-			/* Set GPIO state according config for this first antenna */
+		if (ant_idx2 != config->ant[port]) {
+			/* Set GPIO state according config for this second antenna */
 			rc = dw3000_set_antenna_gpio(dw, ant_calib);
 			if (rc)
 				return rc;
-			config->ant[port] = antidx2;
+			config->ant[port] = ant_idx2;
 			changed++;
 		}
 	}
@@ -5831,6 +6339,341 @@ static void dw3000_mcps_timer_expired(struct work_struct *work)
 	struct dw3000 *dw =
 		container_of(work, struct dw3000, timer_expired_work);
 	mcps802154_timer_expired(dw->llhw);
+}
+
+/**
+ * dw3000_complete_cir_data - Release consummer when data is ready to be dumped
+ * @dw: DW device
+ * Context: cir_data mutex already taken
+ */
+static void dw3000_complete_cir_data(struct dw3000 *dw)
+{
+	complete(&dw->cir_data->complete);
+}
+
+/**
+ * dw3000_read_ciaregs - Collect once all CIA regs required by cir_data
+ * @dw: DW device
+ * Return: 0 or negative error code
+ * Context: cir_data mutex already taken
+ */
+static int dw3000_read_ciaregs(struct dw3000 *dw)
+{
+	int rc;
+	unsigned int length;
+	unsigned int cia_bank;
+
+	/* Find witch bank is storing CIA data */
+	switch (dw->data.dblbuffon) {
+	case DW3000_DBL_BUFF_ACCESS_BUFFER_B:
+		dev_warn_once(dw->dev, "double banking not supported\n");
+		return -ENOSYS;
+	case DW3000_DBL_BUFF_ACCESS_BUFFER_A:
+		cia_bank = DW3000_DB_DIAG_SET_1;
+		length = DW3000_DB_DIAG_SET_LEN;
+		break;
+	default:
+		cia_bank = 0;
+	}
+
+	/* Read whole active CIA data bank */
+	if (cia_bank)
+		return dw3000_xfer(dw, cia_bank, 0, length, dw->cir_data->ciaregs,
+				 DW3000_SPI_RD_BIT);
+
+	/* From IP_TS -> STS1_TS_ */
+	length = DW3000_DB_DIAG_Reserved4 - DW3000_DB_DIAG_IP_TS;
+	rc = dw3000_xfer(dw, DW3000_IP_TS_LO_ID, 0, length,
+			 dw->cir_data->ciaregs +
+				 (DW3000_DB_DIAG_IP_TS >> 2),
+			 DW3000_SPI_RD_BIT);
+	if (rc)
+		return rc;
+	/* From IP_DIAG0 -> IP_DIAG8 */
+	length = DW3000_DB_DIAG_IP_DIAG8 - DW3000_DB_DIAG_IP_DIAG0 +
+		 DW3000_IP_DIAG8_LEN;
+	rc = dw3000_xfer(dw, DW3000_IP_DIAG0_ID, 0, length,
+			 dw->cir_data->ciaregs +
+				 (DW3000_DB_DIAG_IP_DIAG0 >> 2),
+			 DW3000_SPI_RD_BIT);
+	if (rc)
+		return rc;
+	/* From STS_DIAG0 -> STS_DIAG3 */
+	length = DW3000_DB_DIAG_STS_DIAG3 - DW3000_DB_DIAG_STS_DIAG0 +
+		 DW3000_STS_DIAG_3_LEN;
+	rc = dw3000_xfer(dw, DW3000_STS_DIAG_0_ID, 0, length,
+			 dw->cir_data->ciaregs +
+				 (DW3000_DB_DIAG_STS_DIAG0 >> 2),
+			 DW3000_SPI_RD_BIT);
+	if (rc)
+		return rc;
+	/* From STS_DIAG4 -> STS1_DIAG12 */
+	length = DW3000_DB_DIAG_STS1_DIAG12 - DW3000_DB_DIAG_STS_DIAG4 +
+		 DW3000_STS_DIAG_4_LEN;
+	rc = dw3000_xfer(dw, DW3000_STS_DIAG_4_ID, 0, length,
+			 dw->cir_data->ciaregs +
+				 (DW3000_DB_DIAG_STS_DIAG4 >> 2),
+			 DW3000_SPI_RD_BIT);
+	if (rc)
+		return rc;
+	/* IP_DIAG_12 */
+	length = DW3000_IP_DIAG12_LEN;
+	rc = dw3000_xfer(dw, DW3000_IP_DIAG12_ID, 0, length,
+			 dw->cir_data->ciaregs +
+				 (DW3000_DB_DIAG_IP_DIAG_12 >> 2),
+			 DW3000_SPI_RD_BIT);
+	return rc;
+}
+
+/**
+ * dw3000_read_cir_acc - Get how many records have been stored in the CIR accumulator
+ * @dw: DW device
+ * @stsMode: sts mode
+ * Context: cir_data mutex already taken
+ */
+static void dw3000_read_cir_acc(struct dw3000 *dw, u8 stsMode)
+{
+	u32 reg_acc;
+	u32 mask;
+
+	if (stsMode != DW3000_STS_MODE_OFF) {
+		reg_acc = DW3000_DB_DIAG_STS_DIAG12 >> 2;
+		mask = DW3000_STS_DIAG_12_MASK;
+	} else {
+		reg_acc = DW3000_DB_DIAG_IP_DIAG_12 >> 2;
+		mask = DW3000_IP_DIAG12_MASK;
+	}
+
+	dw->cir_data->acc = __le32_to_cpu(dw->cir_data->ciaregs[reg_acc]) &
+			    mask;
+}
+
+/**
+ * dw3000_read_fp_power - Get current package power registers
+ * @dw: DW device
+ * @stsMode: sts mode
+ * Context: cir_data mutex already taken
+ */
+static void dw3000_read_fp_power(struct dw3000 *dw, u8 stsMode)
+{
+	struct dw3000_cir_data *cir = dw->cir_data;
+	u32 reg_idx;
+	u32 reg_f1;
+
+	if (stsMode != DW3000_STS_MODE_OFF) {
+		reg_idx = DW3000_DB_DIAG_STS_DIAG8 >> 2;
+		reg_f1 = DW3000_DB_DIAG_STS_DIAG2 >> 2;
+	} else {
+		reg_idx = DW3000_DB_DIAG_IP_DIAG8 >> 2;
+		reg_f1 = DW3000_DB_DIAG_IP_DIAG2 >> 2;
+	}
+
+	/* Fixed point variable, the First Path index is the integer part only */
+	cir->fp_index = __le32_to_cpu(cir->ciaregs[reg_idx]);
+	cir->fp_index = (cir->fp_index & (1 << 5)) + (cir->fp_index >> 6);
+
+	cir->fp_power1 = __le32_to_cpu(cir->ciaregs[reg_f1]);
+	cir->fp_power2 = __le32_to_cpu(cir->ciaregs[reg_f1 + 1]);
+	cir->fp_power3 = __le32_to_cpu(cir->ciaregs[reg_f1 + 2]);
+}
+
+/**
+ * dw3000_read_cir_data - Read the user requested number of complex numbers from CIR memory
+ * @dw: DW device
+ * @stsMode: sts mode
+ * @prf: prf of current package
+ * Return: 0 or negative error code
+ * Context: cir_data mutex already taken
+ */
+static int dw3000_read_cir_data(struct dw3000 *dw, u8 stsMode, u8 prf)
+{
+	int rc;
+	u16 offset;
+	u16 banksize;
+	s32 firstpath_idx = dw->cir_data->fp_index;
+	u8 nrecord = dw->cir_data->count;
+
+	if (stsMode != DW3000_STS_MODE_OFF) {
+		offset = DW3000_ACC_MEM_STS_OFFSET;
+		banksize = DW3000_ACC_MEM_STS_SIZE;
+	} else {
+		offset = DW3000_ACC_MEM_IPATOV_OFFSET;
+		if (prf == DW3000_PRF_64M)
+			banksize = DW3000_ACC_MEM_PRF64_SIZE;
+		else if (prf == DW3000_PRF_16M)
+			banksize = DW3000_ACC_MEM_PRF16_SIZE;
+		else {
+			dev_info(
+				dw->dev,
+				"custom prf used so set default cir bank size\n");
+			banksize = DW3000_ACC_MEM_PRF16_SIZE;
+		}
+	}
+
+	/* Apply user offset, goes at bank start if out of bank */
+	if (dw->cir_data->offset + firstpath_idx < 0) {
+		firstpath_idx = 0;
+	} else {
+		firstpath_idx += dw->cir_data->offset;
+	}
+
+	/* Avoid going out of bank */
+	if (firstpath_idx + nrecord > banksize)
+		nrecord = banksize - firstpath_idx;
+	offset += firstpath_idx;
+
+	/* Use indirect addressing to reach data in accumulator */
+	rc = dw3000_reg_write32(dw, DW3000_INDIRECT_ADDR_A_ID, 0,
+				(DW3000_CIR_RAM_ID >> 16));
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_ADDR_OFFSET_A_ID, 0, offset);
+	if (rc)
+		return rc;
+
+	/* Indirectly read data from the IC to the buffer */
+	rc = dw3000_xfer(dw, DW3000_INDIRECT_POINTER_A_ID, 0,
+			 sizeof(struct dw3000_cir_record) * nrecord + 1,
+			 (u8 *)dw->cir_data->data - 1, DW3000_SPI_RD_BIT);
+
+	return rc;
+}
+
+/**
+ * dw3000_acc_clken - Control clock state to allow cir accumulator dumping
+ * @dw: DW device
+ * @enable: true to allow CIR accumulator access
+ * Return: 0 or negative error code
+ */
+static int dw3000_acc_clken(struct dw3000 *dw, bool enable)
+{
+	u16 mask = DW3000_CLK_CTRL_FORCE_ACC_CLK_BIT_MASK |
+		   DW3000_CLK_CTRL_ACC_MEM_CLK_ON_BIT_MASK;
+
+	return dw3000_reg_modify16(dw, DW3000_CLK_CTRL_ID, 0, ~mask,
+				   (!!enable) * mask);
+}
+
+/**
+ * dw3000_read_frame_cir_data - Producer of debugfs CIR data retrieving mecanism
+ * @dw: DW device
+ * @info: mac information about the current packet
+ * @utime: packet timestamp
+ *
+ * This function is called when a packet is received and the associated
+ * consummer is waiting for data because its debugfs interface file is
+ * in a blocked read call. If the wanted number of records is correctly
+ * read from CIR bank this function wakes up the consummer
+ *
+ * Return: 0 or negative error code
+ */
+int dw3000_read_frame_cir_data(struct dw3000 *dw,
+			       struct mcps802154_rx_frame_info *info, u64 utime)
+{
+	struct dw3000_config *config = &dw->config;
+	struct dw3000_cir_data *cir = dw->cir_data;
+	u8 prf = config->txCode >= 9 ? DW3000_PRF_64M : DW3000_PRF_16M;
+	u8 stsMode = config->stsMode & DW3000_STS_BASIC_MODES_MASK;
+	int rc = 0;
+
+	/* Check if CIR data gathering is enabled */
+	if (!dw->cir_data)
+		return 0;
+
+	trace_dw3000_read_frame_cir_data(dw, prf, stsMode, utime);
+
+	rc = mutex_lock_interruptible(&cir->mutex);
+	if (rc)
+		return -EINTR;
+
+	/* Get packet type */
+	cir->type = stsMode;
+
+	/* Get tdoa */
+	if (info->flags & MCPS802154_RX_FRAME_INFO_RANGING_PDOA) {
+		cir->tdoa = info->ranging_pdoa_rad_q11;
+	} else {
+		cir->tdoa = 0;
+	}
+
+	/* CIA algorithm have to finish before results reading */
+	if (!(dw->rx.flags & DW3000_RX_FLAG_CIA)) {
+		rc = -ENODATA;
+		goto read_frame_cir_error;
+	}
+
+	rc = dw3000_read_ciaregs(dw);
+	if (rc)
+		goto read_frame_cir_error;
+	dw3000_read_fp_power(dw, stsMode);
+	dw3000_read_cir_acc(dw, stsMode);
+	rc = dw3000_acc_clken(dw, true);
+	if (rc)
+		goto read_frame_cir_error;
+	rc = dw3000_read_cir_data(dw, stsMode, prf);
+	if (rc)
+		goto read_frame_cir_error;
+	rc = dw3000_acc_clken(dw, false);
+	if (rc)
+		goto read_frame_cir_error;
+	cir->utime = utime;
+	cir->ts = ktime_get_boottime_ns();
+
+	dw3000_complete_cir_data(dw);
+
+	/* Reset minidiag to allow a new measure */
+	rc = dw3000_reg_modify32(dw, DW3000_CIA_CONF_ID, 0,
+				 ~DW3000_CIA_CONF_MINDIAG_BIT_MASK, 0x0);
+
+read_frame_cir_error:
+	mutex_unlock(&dw->cir_data->mutex);
+	trace_dw3000_read_frame_cir_data_return(dw, cir->ts, cir->fp_power1,
+						cir->fp_power2, cir->fp_power3,
+						cir->acc, cir->fp_index,
+						cir->offset, cir->filter);
+	return rc;
+}
+
+/**
+ * dw3000_cir_data_alloc_count - Allocation or release ressources for CIR exploitation
+ * @dw: DW device
+ * @nrecord: number of imaginary number retrieved per call ; 0 means release
+ * Return: 0 if ok, a negative error code else
+ */
+int dw3000_cir_data_alloc_count(struct dw3000 *dw, u16 nrecord)
+{
+	if (dw->cir_data) {
+		/* Avoid using dw->cir_data elsewhere and force consumer release
+		 * because pointer target is changed */
+		struct dw3000_cir_data *cir = dw->cir_data;
+		dw->cir_data = NULL;
+		dw->cir_data_changed = true;
+		smp_wmb();
+		mutex_lock(&cir->mutex);
+		cir->count = 0;
+		complete(&cir->complete);
+		mutex_destroy(&cir->mutex);
+		kfree(cir);
+	}
+
+	if (nrecord > 0) {
+		size_t cirsz = sizeof(struct dw3000_cir_data) +
+			       sizeof(struct dw3000_cir_record) * (nrecord - 1);
+		dw->cir_data =
+			(struct dw3000_cir_data *)kzalloc(cirsz, GFP_KERNEL);
+		if (likely(dw->cir_data)) {
+			dw->cir_data_changed = true;
+			init_completion(&dw->cir_data->complete);
+			mutex_init(&dw->cir_data->mutex);
+			dw->cir_data->count = nrecord;
+		} else {
+			dev_err(dw->dev,
+				"memory allocation failed for cir data buffer\n");
+			return -ENOMEM;
+		}
+	}
+
+	return 0;
 }
 
 /**
@@ -5869,6 +6712,10 @@ static void dw3000_initialise(struct dw3000 *dw)
 #else
 	memset(dss, 0, sizeof(*dss));
 #endif
+	/* CIR data initialization */
+	if (!dw->cir_data)
+		dw3000_cir_data_alloc_count(dw,
+					    DW3000_DEFAULT_CIR_RECORD_COUNT);
 	/* Reset time origin for DTU calculation */
 	dw->time_zero_ns = ktime_get_boottime_ns();
 }
@@ -5910,6 +6757,11 @@ void dw3000_transfers_free(struct dw3000 *dw)
 	/* generic read/write full-duplex message */
 	dw3000_free_xfer(dw->msg_readwrite_fdx, 1);
 	dw->msg_readwrite_fdx = NULL;
+	/* message queue */
+	kfree(dw->msg_queue_buf);
+	dw->msg_queue_buf = NULL;
+	kfree(dw->msg_queue);
+	dw->msg_queue = NULL;
 }
 
 /**
@@ -5986,6 +6838,14 @@ int dw3000_transfers_init(struct dw3000 *dw)
 		goto alloc_err;
 	/* mutex protecting msg_readwrite_fdx */
 	mutex_init(&dw->msg_mutex);
+	/* message queue */
+	dw->msg_queue_buf = kzalloc(DW3000_QUEUED_SPI_BUFFER_SZ, GFP_KERNEL);
+	if (!dw->msg_queue_buf)
+		goto alloc_err;
+	dw->msg_queue = kzalloc(sizeof(struct spi_message) +
+					DW3000_MAX_QUEUED_SPI_XFER *
+						sizeof(struct spi_transfer),
+				GFP_KERNEL);
 	return 0;
 
 alloc_err:
@@ -6028,13 +6888,6 @@ int dw3000_init(struct dw3000 *dw, bool check_idlerc)
 			dev_err(dw->dev, "device not in IDLE_RC state\n");
 			return -EINVAL;
 		}
-	}
-
-	/* Read OTP data (first call only) */
-	rc = dw3000_read_otp(dw, DW3000_READ_OTP_PID | DW3000_READ_OTP_LID);
-	if (unlikely(rc)) {
-		dev_err(dw->dev, "device OTP read has failed (%d)\n", rc);
-		return rc;
 	}
 
 	/* Read LDO_TUNE and BIAS_TUNE from OTP */
@@ -6226,7 +7079,6 @@ void dw3000_init_config(struct dw3000 *dw)
 		.pdoaMode = DW3000_PDOA_M0,
 		.pdoaOffset = 0,
 		.ant = { -1, -1 },
-		.antpair_spacing_mm_q11 = DW3000_DEFAULT_ANTPAIR_SPACING,
 	};
 	/* Set default configuration */
 	dw->config = config;
@@ -6242,9 +7094,6 @@ void dw3000_init_config(struct dw3000 *dw)
 		}
 	}
 	for (i = 0; i < ANTPAIR_MAX; i++) {
-		/* Ensure default antennas pair spacing is configured */
-		dw->calib_data.antpair[i].spacing_mm_q11 =
-			DW3000_DEFAULT_ANTPAIR_SPACING;
 		memcpy(dw->calib_data.antpair[i]
 			       .ch[DW3000_CALIBRATION_CHANNEL_5]
 			       .pdoa_lut,
@@ -6330,6 +7179,30 @@ static inline int dw3000_isr_handle_spi_ready(struct dw3000 *dw,
 		 * locking (see SEQ_CTRL & AON_DIG_CFG) might be stopped!
 		 * If required, do it here and let the call below redo it
 		 * properly. */
+	}
+
+	/* Preamble length or data rate were changed during DEEP-SLEEP. */
+	if (dss->config_changed &
+	    (DW3000_PREAMBLE_LENGTH_CHANGED | DW3000_DATA_RATE_CHANGED)) {
+		rc = dw3000_configure_preamble_length_and_datarate(
+			dw, !(dss->config_changed &
+			      DW3000_PREAMBLE_LENGTH_CHANGED));
+		if (rc)
+			return rc;
+	}
+
+	/* SFD was changed during DEEP-SLEEP. */
+	if (dss->config_changed & DW3000_SFD_CHANGED) {
+		rc = dw3000_configure_sfd_type(dw);
+		if (rc)
+			return rc;
+	}
+
+	/* PHR rate was changed during DEEP-SLEEP. */
+	if (dss->config_changed & DW3000_PHR_RATE_CHANGED) {
+		rc = dw3000_configure_phr_rate(dw);
+		if (rc)
+			return rc;
 	}
 
 	/* Auto calibrate the PLL and change to IDLE_PLL state */
@@ -6421,6 +7294,14 @@ setuperror:
 		/* Consume the callback handler before execution. */
 		dw->wakeup_done_cb = NULL;
 		rc = wakeup_done_cb(dw);
+		if (rc == -ETIME) {
+			if (wakeup_done_cb == dw3000_wakeup_done_to_tx)
+				mcps802154_tx_too_late(dw->llhw);
+			else
+				mcps802154_rx_too_late(dw->llhw);
+
+			rc = 0;
+		}
 	}
 	return rc;
 }
@@ -6592,6 +7473,9 @@ static inline int dw3000_isr_handle_rxto_event(struct dw3000 *dw, u32 status)
 {
 	u32 end_dtu;
 	int rc;
+	/* If rx_disable() callback was called, we can't call mcps802154_rx_timeout() */
+	if (dw3000_rx_busy(dw, true))
+		return 0;
 	/* Update power statistics */
 	end_dtu = dw->power.rx_start + (dw->data.rx_timeout_pac + 1) *
 					       dw->chips_per_pac *
@@ -6600,14 +7484,16 @@ static inline int dw3000_isr_handle_rxto_event(struct dw3000 *dw, u32 status)
 	/* Report statistics */
 	rc = dw3000_rx_stats_inc(dw, DW3000_STATS_RX_TO);
 	if (unlikely(rc))
-		return rc;
+		goto err;
 	/* Inform upper layer */
 	if (status & DW3000_SYS_STATUS_RXFTO_BIT_MASK)
 		dev_dbg(dw->dev, "rx frame timeout");
 	else
 		dev_dbg(dw->dev, "rx preamble timeout");
 	mcps802154_rx_timeout(dw->llhw);
-	return 0;
+err:
+	WARN_ON_ONCE(dw3000_rx_busy(dw, false));
+	return rc;
 }
 
 static inline int dw3000_isr_handle_rxerr_event(struct dw3000 *dw, u32 status)
@@ -6616,6 +7502,9 @@ static inline int dw3000_isr_handle_rxerr_event(struct dw3000 *dw, u32 status)
 	enum mcps802154_rx_error_type error;
 	int rc;
 
+	/* If rx_disable() callback was called, we can't call mcps802154_rx_error() */
+	if (dw3000_rx_busy(dw, true))
+		return 0;
 	/* Update power statistics */
 	dw3000_power_stats(dw, DW3000_PWR_IDLE, 0);
 	/* Map error to mcps802154_rx_error_type enum */
@@ -6644,10 +7533,12 @@ static inline int dw3000_isr_handle_rxerr_event(struct dw3000 *dw, u32 status)
 	/* Report statistics */
 	rc = dw3000_rx_stats_inc(dw, DW3000_STATS_RX_ERROR);
 	if (unlikely(rc))
-		return rc;
+		goto err;
 	/* Report RX error event */
 	mcps802154_rx_error(llhw, error);
-	return 0;
+err:
+	WARN_ON_ONCE(dw3000_rx_busy(dw, false));
+	return rc;
 }
 
 static inline int dw3000_isr_handle_tx_event(struct dw3000 *dw,
@@ -6695,8 +7586,6 @@ void dw3000_isr(struct dw3000 *dw)
 	int rc = 0;
 	bool stsnd = ((dw->config.stsMode & DW3000_STS_BASIC_MODES_MASK) ==
 		      DW3000_STS_MODE_ND);
-	if (dw3000_stats_enabled)
-		dw3000_read_counters(dw);
 
 	/* Don't read if spurious DEEP-SLEEP IRQ */
 	if (dw->current_operational_state == DW3000_OP_STATE_DEEP_SLEEP) {
@@ -6713,7 +7602,7 @@ void dw3000_isr(struct dw3000 *dw)
 		rc = dw3000_read_dss_status(dw, &isr.dss_stat);
 		if (rc)
 			goto spi_err;
-		trace_dw3000_nfcc_coex_isr(dw, isr.dss_stat);
+		trace_dw3000_isr_dss_stat(dw, isr.dss_stat);
 	}
 	/* Early clear all status bits since saved locally */
 	rc = dw3000_clear_all_sys_status(dw, isr.status);
@@ -6837,7 +7726,7 @@ void dw3000_isr(struct dw3000 *dw)
 		if (rc)
 			goto spi_err;
 		/* Handle SPI available. */
-		rc = dw3000_nfcc_coex_handle_spi1_avail_isr(dw);
+		rc = dw3000_nfcc_coex_spi1_avail(dw);
 		if (rc)
 			goto spi_err;
 	}
@@ -6855,73 +7744,10 @@ void dw3000_isr(struct dw3000 *dw)
 	return;
 
 spi_err:
+	mcps802154_broken(dw->llhw);
 	/* TODO: handle SPI error */
 	trace_dw3000_return_int(dw, rc);
 	return;
-}
-
-static u32 dw3000_calc_pgcount(struct dw3000 *dw, u32 pg_delay)
-{
-	u8 val;
-	u16 count;
-	int chan = dw->config.chan;
-
-	dw3000_rftx_blocks_autoseq_disable(dw, chan);
-	dw3000_enable_rf_tx(dw, chan, 0);
-	dw3000_force_clocks(dw, DW3000_FORCE_CLK_SYS_TX);
-	usleep_range(DW3000_HARD_RESET_DELAY_US,
-		     DW3000_HARD_RESET_DELAY_US + 500);
-
-	dw3000_reg_write8(dw, DW3000_TX_CTRL_HI_ID, 0,
-			   pg_delay & DW3000_TX_CTRL_HI_TX_PG_DELAY_BIT_MASK);
-
-	dw3000_reg_write8(dw, DW3000_PGC_CTRL_ID, 0, 0x91);
-
-	do {
-		dw3000_reg_read8(dw, DW3000_PGC_CTRL_ID, 0, &val);
-	} while (val & DW3000_PGC_CTRL_PGC_START_BIT_MASK);
-
-	dw3000_reg_read16(dw, DW3000_PGC_STATUS_ID, 0, &count);
-	count &= DW3000_PGC_STATUS_PG_DELAY_COUNT_BIT_MASK;
-
-	dw3000_reg_write32(dw, DW3000_RF_CTRL_MASK_ID, 0, 0);
-	dw3000_rftx_blocks_autoseq_disable(dw, chan);
-	dw3000_force_clocks(dw, DW3000_FORCE_CLK_AUTO);
-
-	return (u32) count;
-}
-
-static u8 dw3000_calc_bandwithadj(struct dw3000 *dw, int target_count)
-{
-	int chan = dw->config.chan;
-	int timeout = 1000;
-	u8 val;
-
-	if (target_count == 0)
-		return 0;
-
-	dw3000_rftx_blocks_autoseq_disable(dw, chan);
-	dw3000_enable_rf_tx(dw, chan, 0);
-	dw3000_force_clocks(dw, DW3000_FORCE_CLK_SYS_TX);
-
-	dw3000_reg_write16(dw, DW3000_PG_CAL_TARGET_ID, 0,
-			target_count & DW3000_PG_CAL_TARGET_TARGET_BIT_MASK);
-
-	dw3000_reg_write8(dw, DW3000_PGC_CTRL_ID, 0x0, 0x92);
-	do {
-		dw3000_reg_read8(dw, DW3000_PGC_CTRL_ID, 0, &val);
-	} while((val & DW3000_PGC_CTRL_PGC_START_BIT_MASK) && timeout--);
-
-	/* dw3000_disable_rf */
-	dw3000_reg_write32(dw, DW3000_RF_CTRL_MASK_ID, 0, 0);
-	dw3000_rftx_blocks_autoseq_disable(dw, chan);
-	dw3000_force_clocks(dw, DW3000_FORCE_CLK_AUTO);
-
-	dw3000_reg_read8(dw, DW3000_TX_CTRL_HI_ID, 0, &val);
-	val &= DW3000_TX_CTRL_HI_TX_PG_DELAY_BIT_MASK;
-
-	return val;
-
 }
 
 int dw3000_testmode_continuous_tx_start(struct dw3000 *dw, u32 frame_length,
@@ -6968,7 +7794,7 @@ int dw3000_testmode_continuous_tx_start(struct dw3000 *dw, u32 frame_length,
 	rc = dw3000_reg_write32(dw, DW3000_DX_TIME_ID, 0x0, rate);
 	if (rc)
 		return rc;
-	rc = dw3000_tx_write_data(dw, tx_buf, frame_length, 0);
+	rc = dw3000_tx_write_data(dw, tx_buf, frame_length);
 	if (rc)
 		return rc;
 	rc = dw3000_writetxfctrl(dw, frame_length, 0, false);

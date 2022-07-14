@@ -270,6 +270,8 @@ static void plane_state_to_win_config(struct dpu_bts_win_config *win_config,
 	if (simplified_rot & DRM_MODE_ROTATE_90)
 		win_config->is_rot = true;
 
+	win_config->is_secure = (fb->modifier & DRM_FORMAT_MOD_PROTECTION) != 0;
+
 	DRM_DEBUG("src[%d %d %d %d], dst[%d %d %d %d]\n",
 			win_config->src_x, win_config->src_y,
 			win_config->src_w, win_config->src_h,
@@ -306,6 +308,7 @@ static void conn_state_to_win_config(struct dpu_bts_win_config *win_config,
 	win_config->dpp_ch = wb->id;
 	win_config->comp_src = 0;
 	win_config->is_rot = false;
+	win_config->is_secure = (fb->modifier & DRM_FORMAT_MOD_PROTECTION) != 0;
 
 	DRM_DEBUG("src[%d %d %d %d], dst[%d %d %d %d]\n",
 			win_config->src_x, win_config->src_y,
@@ -330,12 +333,26 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 	struct drm_connector *conn;
 	const struct drm_connector_state *old_conn_state, *new_conn_state;
 	int i;
+	struct dpp_device *dpp;
+	struct exynos_drm_crtc *exynos_crtc;
 
 	if (!IS_ENABLED(CONFIG_EXYNOS_BTS))
 		return;
 
 	for_each_oldnew_plane_in_state(old_state, plane, old_plane_state,
 				       new_plane_state, i) {
+		dpp = plane_to_dpp(to_exynos_plane(plane));
+		if (test_bit(DPP_ATTR_RCD, &dpp->attr)) {
+			if (new_plane_state->crtc) {
+				decon = crtc_to_decon(new_plane_state->crtc);
+				win_config = &decon->bts.rcd_win_config.win;
+				plane_state_to_win_config(win_config, new_plane_state);
+
+				decon->bts.rcd_win_config.dma_addr =
+					exynos_drm_fb_dma_addr(new_plane_state->fb, 0);
+			}
+			continue;
+		}
 		if (new_plane_state->crtc) {
 			const int zpos = new_plane_state->normalized_zpos;
 
@@ -358,13 +375,12 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 
 	for_each_oldnew_connector_in_state(old_state, conn, old_conn_state,
 					new_conn_state, i) {
-		struct writeback_device *wb;
 		bool old_job, new_job;
 
 		if (conn->connector_type != DRM_MODE_CONNECTOR_WRITEBACK)
 			continue;
 
-		wb = conn_to_wb_dev(conn);
+		conn_to_wb_dev(conn);
 
 		old_job = wb_check_job(old_conn_state);
 		new_job = wb_check_job(new_conn_state);
@@ -382,26 +398,30 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 
 	for_each_new_crtc_in_state(old_state, crtc, new_crtc_state, i) {
 		decon = crtc_to_decon(crtc);
+		exynos_crtc = to_exynos_crtc(crtc);
 
 		if (!new_crtc_state->active)
 			continue;
 
 		if (new_crtc_state->planes_changed) {
-			const size_t max_planes =
-				dev->mode_config.num_total_plane;
 			const size_t num_planes =
-				hweight32(new_crtc_state->plane_mask);
+				hweight32(new_crtc_state->plane_mask &
+						~exynos_crtc->rcd_plane_mask);
 			int j;
 
-			for (j = num_planes; j < max_planes; j++) {
+			for (j = num_planes; j < MAX_WIN_PER_DECON; j++) {
 				win_config = &decon->bts.win_config[j];
 				win_config->state = DPU_WIN_STATE_DISABLED;
 			}
 
+			if ((new_crtc_state->plane_mask & exynos_crtc->rcd_plane_mask) == 0) {
+				win_config = &decon->bts.rcd_win_config.win;
+				win_config->state = DPU_WIN_STATE_DISABLED;
+			}
 		}
 
 		DPU_EVENT_LOG_ATOMIC_COMMIT(decon->id);
-		decon_mode_bts_pre_update(decon, new_crtc_state);
+		decon_mode_bts_pre_update(decon, new_crtc_state, old_state);
 	}
 }
 
@@ -460,6 +480,7 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 	struct drm_connector_state *old_conn_state;
 	struct drm_connector_state *new_conn_state;
 	unsigned int hibernation_crtc_mask = 0;
+	unsigned int disabling_crtc_mask = 0;
 
 	DPU_ATRACE_BEGIN("exynos_atomic_commit_tail");
 
@@ -494,6 +515,12 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 			hibernation_crtc_mask |= drm_crtc_mask(crtc);
 		}
 
+		if (drm_atomic_crtc_effectively_active(old_crtc_state) && !new_crtc_state->active) {
+			/* keep runtime vote while disabling is taking place */
+			pm_runtime_get_sync(decon->dev);
+			disabling_crtc_mask |= drm_crtc_mask(crtc);
+		}
+
 		if (old_crtc_state->active && drm_atomic_crtc_needs_modeset(new_crtc_state)) {
 			DPU_ATRACE_BEGIN("crtc_disable");
 
@@ -519,6 +546,31 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 	drm_atomic_helper_commit_modeset_enables(dev, old_state);
 	DPU_ATRACE_END("modeset");
 
+	DPU_ATRACE_BEGIN("connector_pre_commit");
+	for_each_oldnew_connector_in_state(old_state, connector,
+				 old_conn_state, new_conn_state, i) {
+		if (!new_conn_state->crtc)
+			continue;
+
+		new_crtc_state = drm_atomic_get_new_crtc_state(old_state, new_conn_state->crtc);
+		if (!new_crtc_state->active)
+			continue;
+
+		if (is_exynos_drm_connector(connector)) {
+			struct exynos_drm_connector *exynos_connector =
+				to_exynos_connector(connector);
+			const struct exynos_drm_connector_helper_funcs *funcs =
+				exynos_connector->helper_private;
+			if (!funcs->atomic_pre_commit)
+				continue;
+
+			funcs->atomic_pre_commit(exynos_connector,
+					to_exynos_connector_state(old_conn_state),
+					to_exynos_connector_state(new_conn_state));
+		}
+	}
+	DPU_ATRACE_END("connector_pre_commit");
+
 	DPU_ATRACE_BEGIN("commit_planes");
 	drm_atomic_helper_commit_planes(dev, old_state,
 					DRM_PLANE_COMMIT_ACTIVE_ONLY);
@@ -533,9 +585,10 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 
 	drm_atomic_helper_fake_vblank(old_state);
 
+	DPU_ATRACE_BEGIN("connector_commit");
 	for_each_oldnew_connector_in_state(old_state, connector,
 				 old_conn_state, new_conn_state, i) {
-		if (new_conn_state->writeback_job || !new_conn_state->crtc)
+		if (!new_conn_state->crtc)
 			continue;
 
 		new_crtc_state = drm_atomic_get_new_crtc_state(old_state, new_conn_state->crtc);
@@ -553,7 +606,7 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 					to_exynos_connector_state(new_conn_state));
 		}
 	}
-
+	DPU_ATRACE_END("connector_commit");
 	DPU_ATRACE_BEGIN("wait_for_crtc_flip");
 	exynos_crtc_wait_for_flip_done(old_state);
 	DPU_ATRACE_END("wait_for_crtc_flip");
@@ -568,6 +621,8 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 		decon = crtc_to_decon(crtc);
 		if (hibernation_crtc_mask & drm_crtc_mask(crtc))
 			hibernation_unblock_enter(decon->hibernation);
+		if (disabling_crtc_mask & drm_crtc_mask(crtc))
+			pm_runtime_put_sync(decon->dev);
 	}
 
 	drm_atomic_helper_commit_hw_done(old_state);

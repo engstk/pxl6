@@ -53,39 +53,53 @@ static inline u32 ioread32(void *addr)
 static inline void _region_advance_tx(struct aoc_ipc_memory_region *r,
 				      u32 amount)
 {
+	u32 sz = ioread32(&r->size);
 	u32 tx = ioread32(&r->tx);
-	iowrite32(tx + amount, &r->tx);
+	u32 wp = ioread32(&r->wp);
+
+	u32 updated_tx = (tx + amount);
+	u32 updated_wp = (wp + amount) % sz;
+
+	iowrite32(updated_tx, &r->tx);
+	iowrite32(updated_wp, &r->wp);
 }
 
 static inline void _region_advance_rx(struct aoc_ipc_memory_region *r,
 				      u32 amount)
 {
+	u32 sz = ioread32(&r->size);
 	u32 rx = ioread32(&r->rx);
-	iowrite32(rx + amount, &r->rx);
+	u32 rp = ioread32(&r->rp);
+
+	u32 updated_rx = (rx + amount);
+	u32 updated_rp = (rp + amount) % sz;
+
+	iowrite32(updated_rx, &r->rx);
+	iowrite32(updated_rp, &r->rp);
 }
 
-static size_t _aoc_queue_write_buffer(u8 *dest, const u8 *src, size_t length);
-static size_t _aoc_ring_read_buffer(const u8 *ring,
-				    struct aoc_ipc_memory_region *r, u8 *dest,
-				    size_t *dest_size);
+static u32 _aoc_queue_write_buffer(u8 *dest, const u8 *src, u32 length);
+static u32 _aoc_ring_read_buffer(const u8 *ring,
+				 struct aoc_ipc_memory_region *r,
+				 u8 *dest,
+				 size_t *dest_size);
 
-static size_t _difference_with_overflow(struct aoc_ipc_memory_region *r)
+static u32 _read_write_delta(struct aoc_ipc_memory_region *r)
 {
-	size_t tx = ioread32(&r->tx);
-	size_t rx = ioread32(&r->rx);
+	u32 tx = ioread32(&r->tx);
+	u32 rx = ioread32(&r->rx);
 
 	if (tx >= rx) {
 		return tx - rx;
 	} else {
-		/*
-     * The tx counter has overflowed the 32 bit counter, so calculate the
-     * difference with a larger type
-     */
-		return ((tx + 0x100000000) - rx);
+      // Here we are assuming that this is a wraparound and not a read
+      // pointer that has been advanced past the write pointer or
+      // a unsynced read pointer after a reset write pointer
+		return (SIZE_MAX - rx) + tx + 1;
 	}
 }
 
-static size_t _aoc_queue_write_buffer(u8 *dest, const u8 *src, size_t length)
+static u32 _aoc_queue_write_buffer(u8 *dest, const u8 *src, u32 length)
 {
 	struct aoc_ipc_message_header hdr = {
 		.length = length, .r1 = 0, .r2 = 0, .r3 = 0
@@ -98,74 +112,101 @@ static size_t _aoc_queue_write_buffer(u8 *dest, const u8 *src, size_t length)
 	return length;
 }
 
-/* Returns the new rx */
-static size_t _aoc_ring_read_buffer(const u8 *ring,
-				    struct aoc_ipc_memory_region *r, u8 *dest,
-				    size_t *dest_size)
+static bool _aoc_ring_reader_sync_offset(struct aoc_ipc_memory_region *r,
+					 size_t bytes_to_leave)
 {
-	size_t available = _difference_with_overflow(r);
-	size_t to_read;
-	size_t offset;
-	size_t tx = ioread32(&r->tx);
-	size_t rx = ioread32(&r->rx);
-	size_t ring_size = r->size;
+	u32 sz = r->size;
+	u32 delta = _read_write_delta(r);
 
-	if (available > ring_size) {
-		/*
-     * Overflow.  Reader has not kept up with the writer
-     * Move the read pointer up to make the diff ring_size
-     */
+	if (bytes_to_leave > sz)
+		bytes_to_leave = sz;
 
-		/*
-     * Drag the rx value up to tx - ring_size, but tx has recently
-     * wrapped. rx will still be before the wrap value (0xffffffff)
-     */
-		if (tx < ring_size)
-			rx = (tx + 0x100000000 - ring_size);
+	if (delta < bytes_to_leave)
+		bytes_to_leave = delta;
+
+	_region_advance_rx(r, delta - bytes_to_leave);
+	return true;
+}
+
+/* Returns the amount of bytes read from buffer */
+static u32 _aoc_ring_read_buffer(const u8 *ring,
+				 struct aoc_ipc_memory_region *r,
+				 u8 *dest,
+				 size_t *dest_size)
+{
+	u32 sz;
+	u32 tx;
+	u32 rx;
+	u32 wp;
+	u32 rp;
+	u32 to_read;
+	u32 bytes_available;
+
+	bytes_available = _read_write_delta(r);
+	sz = ioread32(&r->size);
+
+	if (bytes_available > sz)
+		_aoc_ring_reader_sync_offset(r, sz);
+
+	tx = ioread32(&r->tx);
+	rx = ioread32(&r->rx);
+	wp = ioread32(&r->wp);
+	rp = ioread32(&r->rp);
+
+	if (wp > rp) {
+		bytes_available = wp - rp;
+	} else if (wp < rp) {
+		bytes_available = wp + sz - rp;
+	} else {
+		if (tx == rx)
+			bytes_available = 0;
 		else
-			rx = tx - ring_size;
-
-		available = ring_size;
+			bytes_available = sz;
 	}
 
-	offset = rx % ring_size;
-	to_read = *dest_size;
-	to_read = available > to_read ? to_read : available;
+	if (bytes_available > *dest_size)
+		to_read = *dest_size;
+	else
+		to_read = bytes_available;
 
-	if (offset + to_read <= ring_size) {
-		copy_from_buffer(dest, ring + offset, to_read);
+	if (rp + to_read <= sz) {
+		copy_from_buffer(dest, ring + rp, to_read);
 	} else {
-		size_t partial = ring_size - offset;
-		copy_from_buffer(dest, ring + offset, partial);
+		u32 partial = sz - rp;
+
+		copy_from_buffer(dest, ring + rp, partial);
 		copy_from_buffer(dest + partial, ring, to_read - partial);
 	}
 
 	*dest_size = to_read;
-	return rx + to_read;
+	return to_read;
 }
 
-static size_t _aoc_ring_write_buffer(u8 *ring, struct aoc_ipc_memory_region *r,
-				     const u8 *src, size_t size)
+static u32 _aoc_ring_write_buffer(u8 *ring,
+				  struct aoc_ipc_memory_region *r,
+				  const u8 *src,
+				  size_t size)
 {
-	size_t ring_size = r->size;
-	size_t to_write = size;
+	u32 wp = ioread32(&r->wp);
+	u32 sz = r->size;
 
-	size_t offset = ioread32(&r->tx) % ring_size;
-	if (to_write > ring_size) {
-		/* Allow the write, but only commit the end */
-		src = ((src + size) - ring_size);
-		to_write = ring_size;
+	u32 to_write = size;
+
+	if (to_write > sz) {
+		/* Allow the write, but only commit the beginning */
+		to_write = sz;
 	}
 
-	if (offset + to_write <= ring_size) {
-		copy_to_buffer(ring + offset, src, to_write);
+	if (wp + to_write <= sz) {
+		copy_to_buffer(ring + wp, src, to_write);
 	} else {
-		size_t partial = ring_size - offset;
-		copy_to_buffer(ring + offset, src, partial);
+		size_t partial = sz - wp;
+
+		copy_to_buffer(ring + wp, src, partial);
 		copy_to_buffer(ring, src + partial, to_write - partial);
 	}
 
-	return size;
+	return to_write;
 }
 
 const char *aoc_service_name(aoc_service *service)
@@ -240,7 +281,7 @@ bool aoc_ring_did_overflow(aoc_service *service, aoc_direction dir)
 
 	region = &header->regions[dir];
 
-	return (_difference_with_overflow(region) > region->size);
+	return (_read_write_delta(region) > region->size);
 }
 
 size_t aoc_service_message_size(aoc_service *service, aoc_direction dir)
@@ -300,7 +341,7 @@ size_t aoc_ring_bytes_available_to_read(aoc_service *service, aoc_direction dir)
 
 	s = service;
 	region = &s->regions[dir];
-	difference = _difference_with_overflow(region);
+	difference = _read_write_delta(region);
 
 	return difference > region->size ? region->size : difference;
 }
@@ -345,7 +386,7 @@ size_t aoc_service_slots_available_to_read(aoc_service *service,
      */
 		return ioread32(&region->tx) != ioread32(&region->rx) ? 1 : 0;
 	} else {
-		size_t diff = _difference_with_overflow(region);
+		size_t diff = _read_write_delta(region);
 
 		/*
      * TODO : The API contract says that the difference will never be larger
@@ -373,7 +414,7 @@ size_t aoc_service_slots_available_to_write(aoc_service *service,
 	} else if (aoc_service_is_buffer(service)) {
 		return 0;
 	} else {
-		size_t diff = _difference_with_overflow(region);
+		size_t diff = _read_write_delta(region);
 
 		AOC_ASSERT(diff <= ioread32(&region->slots));
 		return ioread32(&region->slots) - diff;
@@ -392,8 +433,13 @@ void *aoc_service_current_read_pointer(struct aoc_ipc_service_header *service,
 
 	region = &service->regions[dir];
 	ptr = base;
-	offset = (region->size *
-		  (ioread32(&region->rx) % ioread32(&region->slots)));
+
+	if (aoc_service_is_ring(service)) {
+		offset = ioread32(&region->rp);
+	} else {
+		offset = (region->size *
+			  (ioread32(&region->rx) % region->slots));
+	}
 
 	return ptr + region->offset + offset;
 }
@@ -412,7 +458,7 @@ void *aoc_service_current_write_pointer(struct aoc_ipc_service_header *service,
 	ptr = base;
 
 	if (aoc_service_is_ring(service)) {
-		offset = (ioread32(&region->tx) % region->size);
+		offset = ioread32(&region->wp);
 	} else {
 		offset = (region->size *
 			  (ioread32(&region->tx) % region->slots));
@@ -488,63 +534,67 @@ bool aoc_service_advance_read_index(aoc_service *service, aoc_direction dir,
 {
 	struct aoc_ipc_memory_region *region;
 	struct aoc_ipc_service_header *s;
+	u32 bytes_to_advance = amount;
 
 	s = service;
 	if (!s)
 		return false;
 
 	if (aoc_service_is_ring(service)) {
-		if (aoc_ring_bytes_available_to_read(service, dir) < amount)
-			return false;
+		u32 bytes_available = aoc_ring_bytes_available_to_read(service, dir);
+
+		if (bytes_available < amount)
+			bytes_to_advance = bytes_available;
 	} else {
 		if (aoc_service_slots_available_to_read(service, dir) < amount)
 			return false;
 	}
 
 	region = &s->regions[dir];
-	_region_advance_rx(region, amount);
-	return true;
+	_region_advance_rx(region, bytes_to_advance);
+	return (bytes_to_advance == amount);
 }
 EXPORT_SYMBOL_GPL(aoc_service_advance_read_index);
 
 bool aoc_ring_flush_read_data(aoc_service *service, aoc_direction dir,
 			      size_t bytes_to_leave)
 {
-	struct aoc_ipc_memory_region *region;
+	struct aoc_ipc_memory_region *r;
 	struct aoc_ipc_service_header *s;
 
 	s = service;
 	if (!s || !aoc_service_is_ring(service))
 		return false;
 
-	region = &s->regions[dir];
-
-	if (bytes_to_leave > region->size)
-		bytes_to_leave = region->size;
-
-	region->rx = region->tx - bytes_to_leave;
-	return true;
+	r = &s->regions[dir];
+	return _aoc_ring_reader_sync_offset(r, bytes_to_leave);
 }
 EXPORT_SYMBOL(aoc_ring_flush_read_data);
+
 
 /*
  * To reset the aoc ring write ptr to the beginning of the aoc ring buffer.
  */
 bool aoc_ring_reset_write_pointer(aoc_service *service, aoc_direction dir)
 {
-	struct aoc_ipc_memory_region *region;
+	struct aoc_ipc_memory_region *r;
 	struct aoc_ipc_service_header *s;
 	int bytes_remaining;
+	u32 sz;
+	u32 wp;
 
 	if (!service || !aoc_service_is_ring(service))
 		return false;
 
 	s = service;
-	region = &s->regions[dir];
+	r = &s->regions[dir];
 
-	bytes_remaining = region->tx % region->size;
+	sz = ioread32(&r->size);
+	wp = ioread32(&r->wp);
+	bytes_remaining = sz - wp;
+
 	if (bytes_remaining > 0)
-		region->tx += region->size - bytes_remaining;
+		_region_advance_tx(r, bytes_remaining);
 
 	return true;
 }
@@ -575,12 +625,15 @@ bool aoc_service_read_message(aoc_service *service, void *base,
 		return false;
 
 	r = &s->regions[dir];
-	ptr = aoc_service_current_read_pointer(service, base, dir);
 	if (aoc_service_is_ring(service)) {
-		size_t rx = _aoc_ring_read_buffer(ptr, r, buffer, size);
+		u32 bytes_read;
 
-		iowrite32(rx, &r->rx);
+		ptr = aoc_service_ring_base(service, base, dir);
+		bytes_read = _aoc_ring_read_buffer(ptr, r, buffer, size);
+
+		_region_advance_rx(r, bytes_read);
 	} else {
+		ptr = aoc_service_current_read_pointer(service, base, dir);
 		hdr = (struct aoc_ipc_message_header *)ptr;
 		ptr += sizeof(struct aoc_ipc_message_header);
 
@@ -617,11 +670,13 @@ bool aoc_service_write_message(aoc_service *service, void *base,
 		return false;
 
 	if (aoc_service_is_ring(service)) {
+		u32 bytes_written;
+
 		ptr = aoc_service_ring_base(service, base, dir);
-		_aoc_ring_write_buffer(ptr, r, buffer, size);
+		bytes_written = _aoc_ring_write_buffer(ptr, r, buffer, size);
 
 		WRITE_BARRIER();
-		_region_advance_tx(r, size);
+		_region_advance_tx(r, bytes_written);
 	} else {
 		ptr = aoc_service_current_write_pointer(service, base, dir);
 		_aoc_queue_write_buffer(ptr, buffer, size);
@@ -667,7 +722,18 @@ size_t aoc_service_ring_read_offset(aoc_service *service, aoc_direction dir)
 	if (!service || !aoc_service_is_ring(service) || !VALID_DIRECTION(dir))
 		return 0;
 
-	return s->regions[dir].rx % s->regions[dir].size;
+	return ioread32(&s->regions[dir].rp);
+}
+
+size_t aoc_service_ring_write_offset(aoc_service *service, aoc_direction dir)
+{
+	struct aoc_ipc_service_header *s =
+		(struct aoc_ipc_service_header *)service;
+
+	if (!service || !aoc_service_is_ring(service) || !VALID_DIRECTION(dir))
+		return 0;
+
+	return ioread32(&(s->regions[dir].wp));
 }
 
 bool aoc_ring_is_push(aoc_service *service)

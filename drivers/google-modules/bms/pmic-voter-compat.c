@@ -127,7 +127,7 @@ static void pmic_voter_compat_cb(struct gvotable_election *el,
 
 /* Allow redefining the allocator: required for testing */
 #ifndef kzalloc_votable
-#define kzalloc_votable(p, f) kzalloc(sizeof(*p), f)
+#define kzalloc_votable(p, f) (typeof(p))kzalloc(sizeof(*(p)), f)
 #endif
 
 struct votable *create_votable(const char *name,
@@ -155,17 +155,17 @@ struct votable *create_votable(const char *name,
 	vd->name = name;
 
 	switch (votable_type) {
-		case VOTE_MIN:
-			comp_fn = gvotable_comparator_int_min;
+	case VOTE_MIN:
+		comp_fn = gvotable_comparator_int_min;
 		break;
-		case VOTE_MAX:
-			comp_fn = gvotable_comparator_int_max;
+	case VOTE_MAX:
+		comp_fn = gvotable_comparator_int_max;
 		break;
-		case VOTE_SET_ANY:
+	case VOTE_SET_ANY:
 		break;
-		default:
-			kfree(vd);
-			return ERR_PTR(-EINVAL);
+	default:
+		kfree(vd);
+		return ERR_PTR(-EINVAL);
 		break;
 	}
 

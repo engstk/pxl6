@@ -23,18 +23,18 @@
 #include "dw3000.h"
 #include "dw3000_txpower_adjustment.h"
 
-/* UWB High band 802.15.4a-2007. Only channels 5 & 9 for DW3000. */
-#define DW3000_SUPPORTED_CHANNELS ((1 << 5) | (1 << 9))
-
 /* clang-format off */
 #define CHAN_PRF_PARAMS (4 * DW3000_CALIBRATION_PRF_MAX)
 #define ANT_CHAN_PARAMS (CHAN_PRF_PARAMS * DW3000_CALIBRATION_CHANNEL_MAX)
 #define ANT_OTHER_PARAMS (3) /* port, selector_gpio... */
 #define ANTPAIR_CHAN_PARAMS (2 * DW3000_CALIBRATION_CHANNEL_MAX + 1)
-#define OTHER_PARAMS (9) /* xtal_trim, temperature_reference, smart_tx_power,
-			    spi_pid, dw3000_pid, auto_sleep_margin,
- 			    restricted_channels, alternate_pulse_shape,
-			    phrMode */
+
+#define OTHER_PARAMS (13) /* xtal_trim, temperature_reference,
+			    smart_tx_power, spi_pid, dw3000_pid,
+			    auto_sleep_margin, restricted_channels
+			    phrMode, alternate_pulse_shape,
+			    wificoex_gpio, wificoex_delay_us,
+			    wificoex_interval_us, wificoex_margin_us */
 
 #define MAX_CALIB_KEYS ((ANTMAX * (ANT_CHAN_PARAMS + ANT_OTHER_PARAMS)) + \
 			(ANTPAIR_MAX * ANTPAIR_CHAN_PARAMS) +		\
@@ -67,8 +67,7 @@
 	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[0].pdoa_offset),	\
 	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[0].pdoa_lut),	\
 	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[1].pdoa_offset),	\
-	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[1].pdoa_lut),    \
-	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].spacing_mm_q11)
+	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[1].pdoa_lut)
 
 static const struct {
 	unsigned int offset;
@@ -98,9 +97,13 @@ static const struct {
 	DW_INFO(spi_pid),
 	DW_INFO(dw3000_pid),
 	DW_INFO(restricted_channels),
+	DW_INFO(config.phrMode),
+	DW_INFO(coex_gpio),
+	DW_INFO(coex_delay_us),
+	DW_INFO(coex_margin_us),
+	DW_INFO(coex_interval_us),
 	/* country */
 	DW_INFO(config.alternate_pulse_shape),
-	DW_INFO(config.phrMode),
 	/* other with defaults from OTP */
 	OTP_INFO(xtal_trim),
 	OTP_INFO(tempP),
@@ -127,8 +130,7 @@ static const struct {
 
 #define ANTPAIR_CAL_LABEL(x,y)			\
 	PDOA_CAL_LABEL(x, y, 5),		\
-	PDOA_CAL_LABEL(x, y, 9),		\
-	"ant" #x ".ant" #y ".spacing_mm_q11"
+	PDOA_CAL_LABEL(x, y, 9)
 
 /*
  * calibration parameters keys table
@@ -155,9 +157,13 @@ static const char *const dw3000_calib_keys[MAX_CALIB_KEYS + 1] = {
 	"spi_pid",
 	"dw3000_pid",
 	"restricted_channels",
+	"phr_mode",
+	"coex_gpio",
+	"coex_delay_us",
+	"coex_margin_us",
+	"coex_interval_us",
 	/* country */
 	"alternate_pulse_shape",
-	"phr_mode",
 	/* other (OTP) */
 	"xtal_trim",
 	"temperature_reference",
@@ -339,8 +345,6 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 	/* Update PDOA offset */
 	config->pdoaOffset = antpair_calib->ch[chanidx].pdoa_offset;
 	config->pdoaLut = &antpair_calib->ch[chanidx].pdoa_lut;
-	/* Update antpair spacing */
-	config->antpair_spacing_mm_q11 = antpair_calib->spacing_mm_q11;
 
 	/* Smart TX power */
 	/* When deactivated, reset register to default value (if change occurs

@@ -56,6 +56,38 @@ static const struct dw3000_chip_register c0_registers[] = {
 	{ "AES RAM", 0x17, 0x80, 0, DW3000_CHIPREG_DUMP, NULL },
 	{ "SET_X", 0x18, 0x1d0, 0, DW3000_CHIPREG_DUMP, NULL },
 	{ "IN_PTR_CFG", 0x1f, 0x12, 0, DW3000_CHIPREG_DUMP, NULL },
+	{ "euid", 0x000004, 0x08, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "frame_filter", 0x000010, 0x01, 0x01, DW3000_CHIPREG_WP, NULL },
+	{ "rx_phrmode", 0x000010, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "tx_phrrate", 0x000010, 0x01, 0x20, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sts_mode", 0x000011, 0x01, 0x8, DW3000_CHIPREG_WP, NULL },
+	{ "pdoa_mode", 0x000012, 0x01, 0x3, DW3000_CHIPREG_WP, NULL },
+	{ "role", 0x000015, 0x01, 0x1, DW3000_CHIPREG_WP, NULL },
+	{ "frame_filter_cfg", 0x000014, 0x02, 0xfeff, DW3000_CHIPREG_WP, NULL },
+	{ "datarate", 0x000021, 0x01, 0x4, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pream_len", 0x000021, 0x01, 0xf0, DW3000_CHIPREG_WP, NULL },
+	{ "tx_antdly", 0x00007c, 0x02, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "txrf_pwrfin", 0x010004, 0x01, 0xfc, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pwr", 0x010004, 0x04, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sfdtype", 0x010008, 0x01, 0x6, DW3000_CHIPREG_WP, NULL },
+	{ "channel", 0x010008, 0x01, 0x01, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pream_ch", 0x010008, 0x01, 0xf8, DW3000_CHIPREG_WP, NULL },
+	{ "prf", 0x010008, 0x01, 0x1f, DW3000_CHIPREG_WP, NULL },
+	{ "rx_phr_rate", 0x010010, 0x01, 0x20, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sts_len", 0x020000, 0x01, 0xff, DW3000_CHIPREG_WP, NULL },
+	{ "ext_clkdly", 0x040000, 0x02, 0x7f8, DW3000_CHIPREG_WP, NULL },
+	{ "ext_clkdly_en", 0x040001, 0x01, 0x8, DW3000_CHIPREG_WP, NULL },
+	{ "gpiodir", 0x050008, 0x02, 0x1ff, DW3000_CHIPREG_WP, NULL },
+	{ "gpioout", 0x05000c, 0x02, 0x1ff, DW3000_CHIPREG_WP, NULL },
+	{ "rx_paclen", 0x060000, 0x01, 0x03, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sfd_to", 0x060002, 0x02, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "chan_pg_delay", 0x07001c, 0x01, 0x3f, DW3000_CHIPREG_WP, NULL },
+	{ "chan_pll_cfg", 0x090001, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "xtal_trim", 0x090014, 0x01, 0x3f, DW3000_CHIPREG_WP, NULL },
+	{ "rx_antdly", 0x0e0000, 0x01, 0xf8, DW3000_CHIPREG_WP, NULL },
+	{ "rx_diag", 0x0e0002, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "digi_diag_en", 0x0f0000, 0x01, 0x1, DW3000_CHIPREG_WP, NULL },
+	{ "digi_diag_clr", 0x0f0000, 0x01, 0x2, DW3000_CHIPREG_WP, NULL },
 };
 
 const struct dw3000_chip_register *dw3000_c0_get_registers(struct dw3000 *dw,
@@ -69,12 +101,12 @@ const u32 *dw3000_c0_get_config_mrxlut_chan(struct dw3000 *dw, u8 channel)
 {
 	/* Lookup table default values for channel 5 */
 	static const u32 dw3000_c0_configmrxlut_ch5[DW3000_CONFIGMRXLUT_MAX] = {
-		0x1c0fd, 0x1c47d, 0x1c67d, 0x1c7fd, 0x1cf7d, 0x1cffd, 0x0fffd
+		0x1c0fd, 0x1c43e, 0x1c6be, 0x1c77e, 0x1cf36, 0x1cfb5, 0x1cff5
 	};
 
 	/* Lookup table default values for channel 9 */
 	static const u32 dw3000_c0_configmrxlut_ch9[DW3000_CONFIGMRXLUT_MAX] = {
-		0x2a07d, 0x2a3fd, 0x2a57d, 0x2a77d, 0x2a7fd, 0x2ad7d, 0x2affd
+		0x2a8fe, 0x2ac36, 0x2a5fe, 0x2af3e, 0x2af7d, 0x2afb5, 0x2afb5
 	};
 
 	switch (channel) {
@@ -111,8 +143,19 @@ static int dw3000_c0_coex_gpio(struct dw3000 *dw, bool state, int delay_us)
 	return 0;
 }
 
+static int dw3000_c0_check_tx_ok(struct dw3000 *dw)
+{
+	u32 state;
+	int rc = dw3000_reg_read32(dw, DW3000_SYS_STATE_LO_ID, 0, &state);
+	if (rc || state == DW3000_SYS_STATE_TXERR) {
+		dw3000_forcetrxoff(dw);
+		return -ETIME;
+	}
+	return 0;
+}
+
 /**
- * dw3000_prog_ldo_and_bias_tune() - Programs the device's LDO and BIAS tuning
+ * dw3000_c0_prog_ldo_and_bias_tune() - Programs the device's LDO and BIAS tuning
  * @dw: The DW device.
  *
  * Return: zero on success, else a negative error code.
@@ -159,7 +202,7 @@ static int dw3000_c0_pre_read_sys_time(struct dw3000 *dw)
 }
 
 /**
- * dw3000_c0_get_dgc_dbg() - Read DGC_DBG register content
+ * dw3000_c0_get_dgc_dec() - Read DGC_DBG register content
  * @dw: The DW device.
  * @value: Pointer to store DGC DECISION value.
  *
@@ -224,16 +267,97 @@ int dw3000_c0_prog_pll_coarse_code(struct dw3000 *dw)
 	return rc;
 }
 
+/**
+ * dw3000_c0_set_mrxlut() - Configure mrxlut
+ * @dw: The DW device.
+ * @lut: Pointer to LUT to write to DGC_LUT_X_CFG registers
+ *
+ * Return: zero on success, else a negative error code.
+ */
+int dw3000_c0_set_mrxlut(struct dw3000 *dw, const u32 *lut)
+{
+	int rc;
+
+	/* Update LUT registers */
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_0_CFG_ID, 0x0, lut[0]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_1_CFG_ID, 0x0, lut[1]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_2_CFG_ID, 0x0, lut[2]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_3_CFG_ID, 0x0, lut[3]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_4_CFG_ID, 0x0, lut[4]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_5_CFG_ID, 0x0, lut[5]);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_LUT_6_CFG_ID, 0x0, lut[6]);
+	if (rc)
+		return rc;
+
+	/* Update DGC CFG. Leave this at end for C0/D0 chip. */
+	rc = dw3000_reg_write32(dw, DW3000_DGC_CFG0_ID, 0x0, DW3000_DGC_CFG0);
+	if (rc)
+		return rc;
+	rc = dw3000_reg_write32(dw, DW3000_DGC_CFG1_ID, 0x0, DW3000_DGC_CFG1);
+	return rc;
+}
+
+/**
+ * dw3000_c0_kick_ops_table_on_wakeup() - kick the OPS table
+ * @dw: The DW device.
+ *
+ * kick the desired operating parameter set (OPS) table upon wakeup from sleep
+ * It will load the required OPS table configuration based upon what OPS table
+ * was set to be used
+ *
+ * Return: zero on success, else a negative error code.
+ */
+static int dw3000_c0_kick_ops_table_on_wakeup(struct dw3000 *dw)
+{
+	return 0;
+}
+
+/**
+ * dw3000_c0_kick_dgc_on_wakeup() - kick the DGC
+ * @dw: The DW device.
+ *
+ * kick the DGC upon wakeup from sleep
+ * It will load the required DGC configuration from OTP based upon what channel was set to be used
+ *
+ * Return: zero on success, else a negative error code.
+ */
+static int dw3000_c0_kick_dgc_on_wakeup(struct dw3000 *dw)
+{
+	u8 channel = dw->config.chan;
+	u16 dgc_sel = (channel == 5 ? 0 : DW3000_NVM_CFG_DGC_SEL_BIT_MASK);
+
+	/* The DGC_SEL bit must be set to '0' for channel 5 and '1' for channel 9 */
+	return dw3000_reg_modify16(dw, DW3000_NVM_CFG_ID, 0,
+				   (u16) ~(DW3000_NVM_CFG_DGC_SEL_BIT_MASK),
+				   dgc_sel | DW3000_NVM_CFG_DGC_KICK_BIT_MASK);
+}
+
 const struct dw3000_chip_ops dw3000_chip_c0_ops = {
 	.softreset = dw3000_c0_softreset,
 	.init = dw3000_c0_init,
 	.coex_init = dw3000_c0_coex_init,
 	.coex_gpio = dw3000_c0_coex_gpio,
+	.check_tx_ok = dw3000_c0_check_tx_ok,
 	.prog_ldo_and_bias_tune = dw3000_c0_prog_ldo_and_bias_tune,
 	.get_config_mrxlut_chan = dw3000_c0_get_config_mrxlut_chan,
 	.get_dgc_dec = dw3000_c0_get_dgc_dec,
 	.pre_read_sys_time = dw3000_c0_pre_read_sys_time,
 	.pll_calibration_from_scratch = dw3000_c0_pll_calibration_from_scratch,
 	.prog_pll_coarse_code = dw3000_c0_prog_pll_coarse_code,
+	.set_mrxlut = dw3000_c0_set_mrxlut,
+	.kick_ops_table_on_wakeup = dw3000_c0_kick_ops_table_on_wakeup,
+	.kick_dgc_on_wakeup = dw3000_c0_kick_dgc_on_wakeup,
 	.get_registers = dw3000_c0_get_registers,
 };

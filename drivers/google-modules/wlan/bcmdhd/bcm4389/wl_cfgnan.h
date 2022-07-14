@@ -1,7 +1,7 @@
 /*
  * Neighbor Awareness Networking
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -134,6 +134,7 @@
 #define NAN_SRF_MAX_MAC			(NAN_BLOOM_LENGTH_DEFAULT / ETHER_ADDR_LEN)
 #define NAN_MAX_PMK_LEN			32u
 #define NAN_ERROR_STR_LEN		255u
+#define NAN_MAX_SCID_BUF_LEN		1024u
 
 /* NAN related Capabilities */
 #define MAX_CONCURRENT_NAN_CLUSTERS		1u
@@ -481,6 +482,7 @@ typedef struct nan_datapath_cmd_data {
 	uint8 num_ndp_instances;
 	uint8 duration;
 	char ndp_iface[IFNAMSIZ+1];
+	nan_str_data_t scid;        /* security context information */
 } nan_datapath_cmd_data_t;
 
 typedef struct nan_rssi_cmd_data {
@@ -540,6 +542,7 @@ typedef struct nan_config_cmd_data {
 	uint32 dw_early_termination;
 	uint32 instant_mode_en;
 	uint32 instant_chan;
+	uint8 chre_req;
 } nan_config_cmd_data_t;
 
 typedef struct nan_event_hdr {
@@ -677,7 +680,12 @@ typedef struct wl_nan_iov {
 
 #ifdef WL_NAN_DISC_CACHE
 
-#define NAN_MAX_CACHE_DISC_RESULT 16
+#ifndef CUSTOM_NAN_MAX_CACHE_DISC_RESULT
+#define NAN_MAX_CACHE_DISC_RESULT 40
+#else
+#define NAN_MAX_CACHE_DISC_RESULT CUSTOM_NAN_MAX_CACHE_DISC_RESULT
+#endif /* CUSTOM_NAN_MAX_CACHE_DISC_RESULT */
+
 typedef struct {
 	bool valid;
 	wl_nan_instance_id_t pub_id;
@@ -714,10 +722,21 @@ typedef struct wl_ndi_data
 	struct net_device *nan_ndev;
 } wl_ndi_data_t;
 
+/* Google mobile platforms have 2 processors which can request NAN
+ * APP - main application processor
+ * CHRE - Low power processor
+ * We need to differentiate the request for handling (non)concurrency
+ */
+typedef enum {
+	ENABLE_FOR_APP = 0,
+	ENABLE_FOR_CHRE = 1
+} nan_enab_reason;
+
 typedef struct wl_nancfg
 {
 	struct bcm_cfg80211 *cfg;
 	bool nan_enable;
+	nan_enab_reason enab_reason;
 	nan_svc_inst_t nan_inst_ctrl[NAN_ID_CTRL_SIZE];
 	struct ether_addr initiator_ndi;
 	uint8 nan_dp_state;
@@ -810,6 +829,14 @@ int wl_cfgnan_set_enable_merge(struct net_device *ndev,
 int wl_cfgnan_attach(struct bcm_cfg80211 *cfg);
 void wl_cfgnan_detach(struct bcm_cfg80211 *cfg);
 int wl_cfgnan_get_status(struct net_device *ndev, wl_nan_conf_status_t *nan_status);
+#ifdef WL_NAN_INSTANT_MODE
+extern void wl_cfgnan_inst_chan_support(struct bcm_cfg80211 *cfg,
+	wl_chanspec_list_v1_t *chan_list, uint32 band_mask,
+	uint8 *nan_2g, uint8 *nan_pri_5g, uint8* nan_sec_5g);
+#endif /* WL_NAN_INSTANT_MODE */
+#line 825
+int
+wl_cfgnan_check_for_valid_5gchan(struct net_device *ndev, uint8 chan);
 
 #ifdef RTT_SUPPORT
 int wl_cfgnan_trigger_ranging(struct net_device *ndev,
@@ -981,7 +1008,8 @@ typedef enum {
 	NAN_ATTRIBUTE_NUM_CHANNELS			= 229,
 	NAN_ATTRIBUTE_INSTANT_MODE_ENABLE		= 230,
 	NAN_ATTRIBUTE_INSTANT_COMM_CHAN			= 231,
-	NAN_ATTRIBUTE_MAX				= 232
+	NAN_ATTRIBUTE_CHRE_REQUEST			= 232,
+	NAN_ATTRIBUTE_MAX				= 233
 } NAN_ATTRIBUTE;
 
 enum geofence_suspend_reason {

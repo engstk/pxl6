@@ -40,6 +40,9 @@ struct exynos_dqe_state {
 	struct histogram_bins *bins;
 	struct exynos_drm_pending_histogram_event *event;
 	u32 histogram_threshold;
+	enum exynos_prog_pos histogram_pos;
+	bool rcd_enabled;
+	struct drm_gem_object *cgc_gem;
 };
 
 struct dither_debug_override {
@@ -88,7 +91,7 @@ struct matrix_debug_override {
 };
 
 enum dump_type {
-	DUMP_TYPE_CGC_DIHTER = 0,
+	DUMP_TYPE_CGC_DIHTER	= 0,
 	DUMP_TYPE_DISP_DITHER,
 	DUMP_TYPE_DEGAMMA_LUT,
 	DUMP_TYPE_REGAMMA_LUT,
@@ -97,6 +100,7 @@ enum dump_type {
 	DUMP_TYPE_GAMMA_MATRIX,
 	DUMP_TYPE_HISTOGRAM,
 	DUMP_TYPE_ATC,
+	DUMP_TYPE_DQE_MAX	= DUMP_TYPE_ATC,
 	DUMP_TYPE_HDR_EOTF,
 	DUMP_TYPE_HDR_OETF,
 	DUMP_TYPE_HDR_GAMMUT,
@@ -144,7 +148,7 @@ int histogram_cancel_ioctl(struct drm_device *drm_dev, void *data,
 				struct drm_file *file);
 void handle_histogram_event(struct exynos_dqe *dqe);
 void exynos_dqe_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state,
-		u32 width, u32 height);
+			u32 width, u32 height);
 void exynos_dqe_reset(struct exynos_dqe *dqe);
 struct exynos_dqe *exynos_dqe_register(struct decon_device *decon);
 void exynos_dqe_save_lpd_data(struct exynos_dqe *dqe);

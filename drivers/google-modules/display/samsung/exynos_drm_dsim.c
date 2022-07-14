@@ -24,6 +24,7 @@
 #include <drm/drm_vblank.h>
 
 #include <linux/clk.h>
+#include <linux/console.h>
 #include <linux/gpio/consumer.h>
 #include <linux/irq.h>
 #include <linux/of_address.h>
@@ -43,8 +44,14 @@
 #include <soc/google/exynos-cpupm.h>
 #endif
 
-#include <dt-bindings/soc/google/gs101-devfreq.h>
+#if IS_ENABLED(CONFIG_ARM_EXYNOS_DEVFREQ)
 #include <soc/google/exynos-devfreq.h>
+#if defined(CONFIG_SOC_GS101)
+#include <dt-bindings/soc/google/gs101-devfreq.h>
+#elif defined(CONFIG_SOC_GS201)
+#include <dt-bindings/soc/google/gs201-devfreq.h>
+#endif
+#endif
 
 #include <regs-dsim.h>
 
@@ -67,6 +74,12 @@ MODULE_PARM_DESC(panel_name, "preferred panel name");
 static char sec_panel_name[PANEL_DRV_LEN];
 module_param_string(sec_panel_name, sec_panel_name, sizeof(sec_panel_name), 0644);
 MODULE_PARM_DESC(sec_panel_name, "secondary panel name");
+
+enum panel_priority_index {
+	PANEL_PRIORITY_PRI_IDX = 0,
+	PANEL_PRIORITY_SEC_IDX = 1,
+};
+static u8 panel_usage = {0};
 
 #define dsim_info(dsim, fmt, ...)	\
 pr_info("%s[%d]: "fmt, dsim->dev->driver->name, dsim->id, ##__VA_ARGS__)
@@ -136,8 +149,11 @@ static struct drm_crtc *drm_encoder_get_old_crtc(struct drm_encoder *encoder,
 static void dsim_dump(struct dsim_device *dsim)
 {
 	struct dsim_regs regs;
+	struct drm_printer p = console_set_on_cmdline ?
+		drm_debug_printer("[drm]") : drm_info_printer(dsim->dev);
 
-	dsim_info(dsim, "=== DSIM SFR DUMP ===\n");
+	drm_printf(&p, "%s[%d]: === DSIM SFR DUMP ===\n",
+		dsim->dev->driver->name, dsim->id);
 
 	if (dsim->state != DSIM_STATE_HSCLKEN)
 		return;
@@ -146,7 +162,7 @@ static void dsim_dump(struct dsim_device *dsim)
 	regs.ss_regs = dsim->res.ss_reg_base;
 	regs.phy_regs = dsim->res.phy_regs;
 	regs.phy_regs_ex = dsim->res.phy_regs_ex;
-	__dsim_dump(dsim->id, &regs);
+	__dsim_dump(&p, dsim->id, &regs);
 }
 
 static int dsim_phy_power_on(struct dsim_device *dsim)
@@ -402,6 +418,9 @@ static void _dsim_disable(struct dsim_device *dsim)
 	mutex_unlock(&dsim->state_lock);
 
 	dsim_phy_power_off(dsim);
+	dsim->total_pend_ph = 0;
+	dsim->total_pend_pl = 0;
+	dsim->force_batching = false;
 
 #if defined(CONFIG_CPU_IDLE)
 	exynos_update_ip_idle_status(dsim->idle_ip_index, 1);
@@ -1187,7 +1206,8 @@ static const struct drm_encoder_funcs dsim_encoder_funcs = {
         .early_unregister = dsim_encoder_early_unregister,
 };
 
-static int dsim_add_mipi_dsi_device(struct dsim_device *dsim, const char *pname)
+static int dsim_add_mipi_dsi_device(struct dsim_device *dsim,
+	const char *pname, enum panel_priority_index idx)
 {
 	struct mipi_dsi_device_info info = {
 		.node = NULL,
@@ -1199,6 +1219,8 @@ static int dsim_add_mipi_dsi_device(struct dsim_device *dsim, const char *pname)
 	dsim_debug(dsim, "preferred panel is %s\n", pname);
 
 	for_each_available_child_of_node(dsim->dsi_host.dev->of_node, node) {
+		bool found;
+
 		/*
 		 * panel w/ reg node will be added in mipi_dsi_host_register,
 		 * abort panel detection in that case
@@ -1225,8 +1247,17 @@ static int dsim_add_mipi_dsi_device(struct dsim_device *dsim, const char *pname)
 			continue;
 
 		/* if panel name is not specified pick the first device found */
-		if (pname[0] == '\0' || !strncmp(name, pname, PANEL_DRV_LEN)) {
-			strlcpy(info.type, name, sizeof(info.type));
+		found = !strncmp(name, pname, PANEL_DRV_LEN);
+		if (pname[0] == '\0' || found) {
+			/*
+			 * The default is primary panel. If not, add priority
+			 * index in the panel name, i.e. "priority-index:panel-name"
+			 */
+			if (found && idx > PANEL_PRIORITY_PRI_IDX)
+				scnprintf(info.type, sizeof(info.type),
+					"%d:%s", idx, name);
+			else
+				strlcpy(info.type, name, sizeof(info.type));
 			info.node = of_node_get(node);
 		}
 	}
@@ -1243,6 +1274,8 @@ static int dsim_add_mipi_dsi_device(struct dsim_device *dsim, const char *pname)
 		if (dsim->dual_dsi != DSIM_DUAL_DSI_SEC)
 			mipi_dsi_device_register_full(&dsim->dsi_host, &info);
 
+		if (dsim->dual_dsi == DSIM_DUAL_DSI_NONE)
+			panel_usage |= BIT(idx);
 		return 0;
 	}
 
@@ -1278,14 +1311,17 @@ static const char *dsim_get_panel_name(const struct dsim_device *dsim, const cha
 static int dsim_parse_panel_name(struct dsim_device *dsim)
 {
 	const char *name;
+	enum panel_priority_index idx;
 
 	name = dsim_get_panel_name(dsim, panel_name, PANEL_DRV_LEN);
-	if (name)
-		return dsim_add_mipi_dsi_device(dsim, name);
+	idx = PANEL_PRIORITY_PRI_IDX;
+	if (name && !(panel_usage & BIT(idx)))
+		return dsim_add_mipi_dsi_device(dsim, name, idx);
 
 	name = dsim_get_panel_name(dsim, sec_panel_name, PANEL_DRV_LEN);
-	if (name)
-		return dsim_add_mipi_dsi_device(dsim, name);
+	idx = PANEL_PRIORITY_SEC_IDX;
+	if (name && name[0] && !(panel_usage & BIT(idx)))
+		return dsim_add_mipi_dsi_device(dsim, name, idx);
 
 	return -ENODEV;
 }
@@ -1454,6 +1490,8 @@ err:
 	return ret;
 }
 
+
+#if IS_ENABLED(CONFIG_ARM_EXYNOS_DEVFREQ)
 static void dsim_underrun_info(struct dsim_device *dsim, u32 underrun_cnt)
 {
 	printk_ratelimited("underrun irq occurs(%u): MIF(%lu), INT(%lu), DISP(%lu)\n",
@@ -1462,6 +1500,12 @@ static void dsim_underrun_info(struct dsim_device *dsim, u32 underrun_cnt)
 			exynos_devfreq_get_domain_freq(DEVFREQ_INT),
 			exynos_devfreq_get_domain_freq(DEVFREQ_DISP));
 }
+#else
+static void dsim_underrun_info(struct dsim_device *dsim, u32 underrun_cnt)
+{
+	printk_ratelimited("underrun irq occurs(%u)\n", underrun_cnt);
+}
+#endif
 
 static irqreturn_t dsim_irq_handler(int irq, void *dev_id)
 {
@@ -1518,7 +1562,7 @@ static irqreturn_t dsim_irq_handler(int irq, void *dev_id)
 			dsim_underrun_info(dsim, decon->d.underrun_cnt + 1);
 			DPU_EVENT_LOG(DPU_EVT_DSIM_UNDERRUN, decon->id, NULL);
 			if (time_after(jiffies, last_dumptime + msecs_to_jiffies(5000))) {
-				decon_dump_all(decon, DPU_EVT_CONDITION_UNDERRUN, true);
+				decon_dump_event_condition(decon, DPU_EVT_CONDITION_UNDERRUN);
 				last_dumptime = jiffies;
 			}
 		} else {
@@ -1556,6 +1600,9 @@ static int dsim_register_irq(struct dsim_device *dsim)
 
 static int dsim_get_phys(struct dsim_device *dsim)
 {
+	if (IS_ENABLED(CONFIG_BOARD_EMULATOR))
+		return 0;
+
 	dsim->res.phy = devm_phy_get(dsim->dev, "dsim_dphy");
 	if (IS_ERR(dsim->res.phy)) {
 		dsim_err(dsim, "failed to get dsim phy\n");
@@ -1713,6 +1760,7 @@ static int dsim_wait_for_cmd_fifo_empty(struct dsim_device *dsim, bool is_long)
 {
 	int ret = 0;
 
+	DPU_ATRACE_BEGIN(__func__);
 	if (is_long)
 		ret = __dsim_wait_for_pl_fifo_empty(dsim);
 
@@ -1721,6 +1769,7 @@ static int dsim_wait_for_cmd_fifo_empty(struct dsim_device *dsim, bool is_long)
 	if (ret)
 		dsim_dump(dsim);
 
+	DPU_ATRACE_END(__func__);
 	return ret;
 }
 
@@ -1821,6 +1870,9 @@ static void need_wait_vblank(struct dsim_device *dsim)
 	if (!crtc)
 		return;
 
+	if (drm_crtc_vblank_get(crtc))
+		return;
+
 	vblank = &crtc->dev->vblank[crtc->index];
 	ready_allow_period =
 		mult_frac(vblank->framedur_ns, 95, 100) - PKTGO_READY_MARGIN_NS;
@@ -1832,8 +1884,12 @@ static void need_wait_vblank(struct dsim_device *dsim)
 	dsim_debug(dsim, "last(%lld) cur(%lld) diff(%lld) ready allow period(%d)\n",
 			last_vblanktime, cur_time, diff, ready_allow_period);
 
-	if (diff > ready_allow_period)
+	if (diff > ready_allow_period) {
+		DPU_ATRACE_BEGIN("dsim_pktgo_wait_vblank");
 		drm_crtc_wait_one_vblank(crtc);
+		DPU_ATRACE_END("dsim_pktgo_wait_vblank");
+	}
+	drm_crtc_vblank_put(crtc);
 }
 
 #define PL_FIFO_THRESHOLD	mult_frac(MAX_PL_FIFO, 75, 100) /* 75% */
@@ -1843,8 +1899,18 @@ dsim_write_data(struct dsim_device *dsim, const struct mipi_dsi_msg *msg)
 {
 	int ret = 0;
 	u16 flags = msg->flags;
-	bool is_long = mipi_dsi_packet_format_is_long(msg->type);
+	bool is_long;
+	bool is_empty_msg;
+	bool is_last;
 
+	if (flags & EXYNOS_DSI_MSG_FORCE_BATCH) {
+		WARN_ON(dsim->force_batching);
+		dsim->force_batching = true;
+		return 0;
+	}
+
+	DPU_ATRACE_BEGIN(__func__);
+	is_long = mipi_dsi_packet_format_is_long(msg->type);
 	if (dsim->config.mode == DSIM_VIDEO_MODE) {
 		ret = dsim_write_single_cmd_locked(dsim, msg, is_long);
 		goto err;
@@ -1860,22 +1926,30 @@ dsim_write_data(struct dsim_device *dsim, const struct mipi_dsi_msg *msg)
 		goto err;
 	}
 
-	if (!IS_LAST(msg->flags) &&
+	is_last = (IS_LAST(flags) && !dsim->force_batching) || (flags & EXYNOS_DSI_MSG_FORCE_FLUSH);
+	is_empty_msg = msg->tx_len == 0;
+	if (flags & EXYNOS_DSI_MSG_FORCE_FLUSH) {
+		dsim->force_batching = false;
+		WARN_ON(!is_empty_msg);
+	}
+
+	if (!is_last && !is_empty_msg &&
 		(((dsim->total_pend_ph + 1) == MAX_PH_FIFO) ||
 		((dsim->total_pend_pl + msg->tx_len) > PL_FIFO_THRESHOLD))) {
 		dsim_warn(dsim, "warning. changed last command. pend pl/pl(%u,%u)\n",
 				dsim->total_pend_ph, dsim->total_pend_pl);
-		flags |= MIPI_DSI_MSG_LASTCOMMAND;
+		is_last = true;
 	}
 
-	dsim_debug(dsim, "%s last command\n", IS_LAST(flags) ? "" : "Not");
+	dsim_debug(dsim, "%s last command\n", is_last ? "" : "Not");
 
-	if (IS_LAST(flags)) {
+	if (is_last) {
 		if (dsim->total_pend_ph) {
 			reinit_completion(is_long ?
 					&dsim->pl_wr_comp : &dsim->ph_wr_comp);
 
-			__dsim_write_data(dsim, msg, is_long);
+			if (!is_empty_msg)
+				__dsim_write_data(dsim, msg, is_long);
 
 			if (!(flags & EXYNOS_DSI_MSG_IGNORE_VBLANK))
 				need_wait_vblank(dsim);
@@ -1891,10 +1965,10 @@ dsim_write_data(struct dsim_device *dsim, const struct mipi_dsi_msg *msg)
 			}
 
 			pm_runtime_put_sync(dsim->dev);
-		} else {
+		} else if (!is_empty_msg) {
 			ret = dsim_write_single_cmd_locked(dsim, msg, is_long);
 		}
-	} else {
+	} else if (!is_empty_msg) {
 		if (!dsim->total_pend_ph) {
 			pm_runtime_get_sync(dsim->dev);
 			dsim_reg_enable_packetgo(dsim->id, true);
@@ -1907,6 +1981,7 @@ dsim_write_data(struct dsim_device *dsim, const struct mipi_dsi_msg *msg)
 	}
 
 err:
+	DPU_ATRACE_END(__func__);
 	return ret;
 }
 

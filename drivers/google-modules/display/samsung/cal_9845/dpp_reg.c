@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * dpu30/cal_9845/dpp_regs.c
+ * cal_9845/dpp_regs.c
  *
  * Copyright (c) 2019 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -23,11 +23,11 @@
 
 #include <exynos_dpp_coef.h>
 #include <exynos_hdr_lut.h>
-#include <cal_config.h>
 #include <dpp_cal.h>
 #include <hdr_cal.h>
 
 #include "regs-dpp.h"
+#include "../cal_9855/dpp_cal_internal.h"
 
 #include "../exynos_drm_format.h"
 #include "../exynos_drm_plane.h"
@@ -39,27 +39,7 @@
 #define DPP_SC_RATIO_4_8	((1 << 20) * 8 / 4)
 #define DPP_SC_RATIO_3_8	((1 << 20) * 8 / 3)
 
-static struct cal_regs_desc regs_dpp[REGS_DPP_TYPE_MAX][REGS_DPP_ID_MAX];
-
-#define dpp_regs_desc(id)			(&regs_dpp[REGS_DPP][id])
-#define dpp_read(id, offset)			\
-	cal_read(dpp_regs_desc(id), offset)
-#define dpp_write(id, offset, val)		\
-	cal_write(dpp_regs_desc(id), offset, val)
-#define dpp_read_mask(id, offset, mask)	\
-	cal_read_mask(dpp_regs_desc(id), offset, mask)
-#define dpp_write_mask(id, offset, val, mask)	\
-	cal_write_mask(dpp_regs_desc(id), offset, val, mask)
-
-#define dma_regs_desc(id)			(&regs_dpp[REGS_DMA][id])
-#define dma_read(id, offset)			\
-	cal_read(dma_regs_desc(id), offset)
-#define dma_write(id, offset, val)		\
-	cal_write(dma_regs_desc(id), offset, val)
-#define dma_read_mask(id, offset, mask)	\
-	cal_read_mask(dma_regs_desc(id), offset, mask)
-#define dma_write_mask(id, offset, val, mask)	\
-	cal_write_mask(dma_regs_desc(id), offset, val, mask)
+struct cal_regs_desc regs_dpp[REGS_DPP_TYPE_MAX][REGS_DPP_ID_MAX];
 
 void dpp_regs_desc_init(void __iomem *regs, phys_addr_t start, const char *name,
 		enum dpp_regs_type type, unsigned int id)
@@ -245,7 +225,7 @@ static void idma_reg_print_irqs_msg(u32 id, u32 irqs)
 		cal_log_err(id, "IDMA FBC error irq occur\n");
 
 	if (irqs & IDMA_READ_SLAVE_ERROR)
-		cal_log_err(id, "IDMA read slave error irq occur\n");
+		cal_log_err(id, "IDMA read error irq occur\n");
 
 	if (irqs & IDMA_STATUS_DEADLOCK_IRQ)
 		cal_log_err(id, "IDMA deadlock irq occur\n");
@@ -345,7 +325,7 @@ static void odma_reg_print_irqs_msg(u32 id, u32 irqs)
 	u32 cfg_err;
 
 	if (irqs & ODMA_WRITE_SLAVE_ERR_IRQ)
-		cal_log_err(id, "ODMA write slave error irq occur\n");
+		cal_log_err(id, "ODMA write error irq occur\n");
 
 	if (irqs & ODMA_DEADLOCK_IRQ)
 		cal_log_err(id, "ODMA deadlock error irq occur\n");
@@ -823,6 +803,9 @@ static int dma_dpp_reg_set_format(u32 id, struct dpp_params_info *p,
  */
 void dpp_reg_init(u32 id, const unsigned long attr)
 {
+	if (test_bit(DPP_ATTR_RCD, &attr))
+		rcd_reg_init(id);
+
 	if (test_bit(DPP_ATTR_IDMA, &attr)) {
 		if (dma_read(id, RDMA_IRQ) & IDMA_DEADLOCK_IRQ) {
 			idma_reg_set_sw_reset(id);
@@ -866,6 +849,11 @@ int dpp_reg_deinit(u32 id, bool reset, const unsigned long attr)
 	if (test_bit(DPP_ATTR_IDMA, &attr)) {
 		idma_reg_clear_irq(id, IDMA_ALL_IRQ_CLEAR);
 		idma_reg_set_irq_mask_all(id, 1);
+	}
+
+	if (test_bit(DPP_ATTR_RCD, &attr)) {
+		if (rcd_reg_deinit(id, reset, attr))
+			return -1;
 	}
 
 	if (test_bit(DPP_ATTR_DPP, &attr)) {
@@ -923,6 +911,11 @@ void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 {
 	const struct dpu_fmt *fmt = dpu_find_fmt_info(p->format);
 
+	if (test_bit(DPP_ATTR_RCD, &attr)) {
+		rcd_reg_configure_params(id, p, attr);
+		return;
+	}
+
 	if (test_bit(DPP_ATTR_CSC, &attr) && IS_YUV(fmt))
 		dpp_reg_set_csc_params(id, p->standard, p->range, attr);
 
@@ -967,6 +960,16 @@ void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 #endif
 }
 
+void cgc_reg_set_config(u32 id, bool en, dma_addr_t addr)
+{
+	cgc_reg_set_config_internal(id, en, addr);
+}
+
+void cgc_reg_set_cgc_start(u32 id)
+{
+	cgc_reg_set_cgc_start_internal(id);
+}
+
 u32 dpp_reg_get_irq_and_clear(u32 id)
 {
 	u32 val;
@@ -1004,6 +1007,15 @@ u32 odma_reg_get_irq_and_clear(u32 id)
 	return val;
 }
 
+u32 cgc_reg_get_irq_and_clear(u32 id)
+{
+	u32 val;
+
+	val = cgc_reg_get_irq_and_clear_internal(id);
+
+	return val;
+}
+
 void dma_reg_get_shd_addr(u32 id, u32 shd_addr[], const unsigned long attr)
 {
 	if (test_bit(DPP_ATTR_IDMA, &attr)) {
@@ -1021,13 +1033,13 @@ void dma_reg_get_shd_addr(u32 id, u32 shd_addr[], const unsigned long attr)
 			shd_addr[0], shd_addr[1], shd_addr[2], shd_addr[3]);
 }
 
-static void dpp_reg_dump_ch_data(int id, enum dpp_reg_area reg_area,
+static void dpp_reg_dump_ch_data(struct drm_printer *p, int id, enum dpp_reg_area reg_area,
 					const u32 sel[], u32 cnt)
 {
 	/* TODO: This will be implemented in the future */
 }
 
-static void dma_reg_dump_com_debug_regs(int id)
+static void dma_reg_dump_com_debug_regs(struct drm_printer *p, int id)
 {
 	static bool checked;
 	const u32 sel_glb[99] = {
@@ -1046,83 +1058,118 @@ static void dma_reg_dump_com_debug_regs(int id)
 		0xC001, 0xC002, 0xC005
 	};
 
-	cal_log_info(id, "%s: checked = %d\n", __func__, checked);
+	cal_drm_printf(p, id, "%s: checked = %d\n", __func__, checked);
 	if (checked)
 		return;
 
-	cal_log_info(id, "-< DMA COMMON DEBUG SFR >-\n");
-	dpp_reg_dump_ch_data(id, REG_AREA_DMA_COM, sel_glb, 99);
+	cal_drm_printf(p, id, "-< DMA COMMON DEBUG SFR >-\n");
+	dpp_reg_dump_ch_data(p, id, REG_AREA_DMA_COM, sel_glb, 99);
 
 	checked = true;
 }
 
-static void dma_reg_dump_debug_regs(int id)
+static void dma_reg_dump_debug_regs(struct drm_printer *p, int id)
 {
 	/* TODO: This will be implemented in the future */
 }
 
-static void dpp_reg_dump_debug_regs(int id)
+static void dpp_reg_dump_debug_regs(struct drm_printer *p, int id)
 {
 	/* TODO: This will be implemented in the future */
 }
 
-static void dma_dump_regs(u32 id, void __iomem *dma_regs)
+static void dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
 {
-	cal_log_info(id, "\n=== DPU_DMA%d SFR DUMP ===\n", id);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0000, 0x144);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0200, 0x8);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0300, 0x24);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0730, 0x4);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0740, 0x4);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0D00, 0x28);
+	cal_drm_printf(p, id, "\n=== DPU_DMA%d SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0200, 0x8);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300, 0x24);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0730, 0x4);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0740, 0x4);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0D00, 0x28);
 
 	/* L0,2,4 only */
 	if ((id % 2) == 0) {
-		dpu_print_hex_dump(dma_regs, dma_regs + 0x0E00, 0x14);
-		dpu_print_hex_dump(dma_regs, dma_regs + 0x0F00, 0x40);
+		dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0E00, 0x14);
+		dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0F00, 0x40);
 	}
 
-	cal_log_info(id, "=== DPU_DMA%d SHADOW SFR DUMP ===\n", id);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0000 + DMA_SHD_OFFSET, 0x144);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0200 + DMA_SHD_OFFSET, 0x8);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0300 + DMA_SHD_OFFSET, 0x24);
-	dpu_print_hex_dump(dma_regs, dma_regs + 0x0D00 + 0x80, 0x28);
+	cal_drm_printf(p, id, "=== DPU_DMA%d SHADOW SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000 + DMA_SHD_OFFSET, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0200 + DMA_SHD_OFFSET, 0x8);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300 + DMA_SHD_OFFSET, 0x24);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0D00 + 0x80, 0x28);
 
 }
 
-static void dpp_dump_regs(u32 id, void __iomem *regs, unsigned long attr)
+static void rcd_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
 {
-	cal_log_info(id, "=== DPP%d SFR DUMP ===\n", id);
-	dpu_print_hex_dump(regs, regs + 0x0000, 0x64);
+	cal_drm_printf(p, id, "\n=== DPU_DMA(RCD%d) SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300, 0x24);
+
+	cal_drm_printf(p, id, "=== DPU_DMA%d SHADOW SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000 + DMA_SHD_OFFSET, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300 + DMA_SHD_OFFSET, 0x24);
+}
+
+static void cgc_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
+{
+	cal_drm_printf(p, id, "\n=== DPU_DMA(CGC%d) SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300, 0x24);
+
+	cal_drm_printf(p, id, "=== DPU_DMA%d SHADOW SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000 + DMA_SHD_OFFSET, 0x144);
+	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300 + DMA_SHD_OFFSET, 0x24);
+}
+
+static void dpp_dump_regs(struct drm_printer *p, u32 id, void __iomem *regs, unsigned long attr)
+{
+	cal_drm_printf(p, id, "=== DPP%d SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, regs, regs + 0x0000, 0x64);
 	if (id % 2) {
 		/* L1,3,5 only */
-		dpu_print_hex_dump(regs, regs + 0x0200, 0xC);
+		dpu_print_hex_dump(p, regs, regs + 0x0200, 0xC);
 		// skip coef : 0x210 ~ 0x56C
-		dpu_print_hex_dump(regs, regs + 0x0570, 0x30);
+		dpu_print_hex_dump(p, regs, regs + 0x0570, 0x30);
 	}
 
-	cal_log_info(id, "=== DPP%d SHADOW SFR DUMP ===\n", id);
-	dpu_print_hex_dump(regs, regs + DPP_COM_SHD_OFFSET, 0x64);
+	cal_drm_printf(p, id, "=== DPP%d SHADOW SFR DUMP ===\n", id);
+	dpu_print_hex_dump(p, regs, regs + DPP_COM_SHD_OFFSET, 0x64);
 	if (id % 2) {
 		/* L1,3,5 only */
-		dpu_print_hex_dump(regs, regs + 0x0200 + DPP_SCL_SHD_OFFSET,
+		dpu_print_hex_dump(p, regs, regs + 0x0200 + DPP_SCL_SHD_OFFSET,
 				0xC);
 		// skip coef : (0x210 ~ 0x56C) + DPP_SCL_SHD_OFFSET
-		dpu_print_hex_dump(regs, regs + 0x0570 + DPP_SCL_SHD_OFFSET,
+		dpu_print_hex_dump(p, regs, regs + 0x0570 + DPP_SCL_SHD_OFFSET,
 				0x30);
 	}
 }
 
-void __dpp_dump(u32 id, void __iomem *regs, void __iomem *dma_regs,
+void __dpp_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
 		unsigned long attr)
 {
-	dma_reg_dump_com_debug_regs(id);
+	dma_reg_dump_com_debug_regs(p, id);
 
-	dma_dump_regs(id, dma_regs);
-	dma_reg_dump_debug_regs(id);
+	dma_dump_regs(p, id, dma_regs);
+	dma_reg_dump_debug_regs(p, id);
 
-	dpp_dump_regs(id, regs, attr);
-	dpp_reg_dump_debug_regs(id);
+	dpp_dump_regs(p, id, regs, attr);
+	dpp_reg_dump_debug_regs(p, id);
+}
+
+void __rcd_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
+		unsigned long attr)
+{
+	dma_reg_dump_com_debug_regs(p, id);
+
+	rcd_dma_dump_regs(p, id, dma_regs);
+}
+
+void __cgc_dump(struct drm_printer *p, u32 id, void __iomem *dma_regs)
+{
+	cgc_dma_dump_regs(p, id, dma_regs);
 }
 
 int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr)

@@ -199,6 +199,7 @@ int kbase_context_common_init(struct kbase_context *kctx)
 
 	init_waitqueue_head(&kctx->event_queue);
 	atomic_set(&kctx->event_count, 0);
+
 #if !MALI_USE_CSF
 	atomic_set(&kctx->event_closed, false);
 #if IS_ENABLED(CONFIG_GPU_TRACEPOINTS)
@@ -206,11 +207,14 @@ int kbase_context_common_init(struct kbase_context *kctx)
 #endif
 #endif
 
+#if MALI_USE_CSF
+	atomic64_set(&kctx->num_fixable_allocs, 0);
+	atomic64_set(&kctx->num_fixed_allocs, 0);
+#endif
+
 	bitmap_copy(kctx->cookies, &cookies_mask, BITS_PER_LONG);
 
 	kctx->id = atomic_add_return(1, &(kctx->kbdev->ctx_num)) - 1;
-
-	mutex_init(&kctx->legacy_hwcnt_lock);
 
 	mutex_lock(&kctx->kbdev->kctx_list_lock);
 
@@ -332,7 +336,7 @@ int kbase_context_mmu_init(struct kbase_context *kctx)
 {
 	return kbase_mmu_init(
 		kctx->kbdev, &kctx->mmu, kctx,
-		base_context_mmu_group_id_get(kctx->create_flags));
+		kbase_context_mmu_group_id_get(kctx->create_flags));
 }
 
 void kbase_context_mmu_term(struct kbase_context *kctx)
