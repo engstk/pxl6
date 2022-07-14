@@ -24,9 +24,7 @@
 #define __DW3000_NFCC_COEX_MCPS_H
 
 #include <linux/module.h>
-
-/* Forward declaration. */
-struct dw3000;
+#include "dw3000.h"
 
 int dw3000_nfcc_coex_vendor_cmd(struct dw3000 *dw, u32 vendor_id, u32 subcmd,
 				void *data, size_t data_len);

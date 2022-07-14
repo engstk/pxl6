@@ -19,11 +19,20 @@ lwis-objs += lwis_event.o
 lwis-objs += lwis_buffer.o
 lwis-objs += lwis_util.o
 lwis-objs += lwis_debug.o
+lwis-objs += lwis_io_entry.o
+lwis-objs += lwis_allocator.o
+lwis-objs += lwis_version.o
 
-# GS101 specific files
+# Anchorage specific files
 ifeq ($(CONFIG_SOC_GS101), y)
-lwis-objs += platform/gs101/lwis_platform_gs101.o
-lwis-objs += platform/gs101/lwis_platform_gs101_dma.o
+lwis-objs += platform/anchorage/lwis_platform_anchorage.o
+lwis-objs += platform/anchorage/lwis_platform_anchorage_dma.o
+endif
+
+# Busan specific files
+ifeq ($(CONFIG_SOC_GS201), y)
+lwis-objs += platform/busan/lwis_platform_busan.o
+lwis-objs += platform/busan/lwis_platform_busan_dma.o
 endif
 
 # Device tree specific file

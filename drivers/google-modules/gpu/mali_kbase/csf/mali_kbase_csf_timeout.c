@@ -100,7 +100,7 @@ static ssize_t progress_timeout_store(struct device * const dev,
 	if (!err) {
 		kbase_csf_scheduler_pm_active(kbdev);
 
-		err = kbase_pm_wait_for_desired_state(kbdev);
+		err = kbase_csf_scheduler_wait_mcu_active(kbdev);
 		if (!err)
 			err = kbase_csf_firmware_set_timeout(kbdev, timeout);
 
@@ -139,8 +139,7 @@ static ssize_t progress_timeout_show(struct device * const dev,
 
 }
 
-static DEVICE_ATTR(progress_timeout, 0644, progress_timeout_show,
-	progress_timeout_store);
+static DEVICE_ATTR_RW(progress_timeout);
 
 int kbase_csf_timeout_init(struct kbase_device *const kbdev)
 {

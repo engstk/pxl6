@@ -27,6 +27,10 @@
 #define FTS_TS_DRV_VERSION	"6.0.3"
 #define FTS_TS_DRV_VER		0x06000004
 
+#define PINCTRL_STATE_ACTIVE    "pmx_ts_active"
+#define PINCTRL_STATE_SUSPEND   "pmx_ts_suspend"
+#define PINCTRL_STATE_RELEASE   "pmx_ts_release"
+
 #define MAX_FIFO_EVENT	100 /* /< max number of events that the FIFO can
 				 * collect  */
 
@@ -99,6 +103,13 @@ struct fts_ts_info {
 						 * device tree */
 	struct regulator *vdd_reg;	/* /< DVDD power regulator */
 	struct regulator *avdd_reg;	/* /< AVDD power regulator */
+
+	struct pinctrl       *ts_pinctrl;		/* touch pin control state holder */
+	struct pinctrl_state *pinctrl_state_active;	/* Active pin state*/
+	struct pinctrl_state *pinctrl_state_suspend;	/* Suspend pin state*/
+	struct pinctrl_state *pinctrl_state_release;	/* Release pin state*/
+
+
 	struct input_dev *input_dev; /* /< Input device structure */
 	struct mutex input_report_mutex;/* /< mutex for handling the report
 						 * of the pressure of keys */

@@ -51,6 +51,7 @@ static void kbase_report_gpu_fault(struct kbase_device *kbdev, int multiple)
 		address);
 	if (multiple)
 		dev_warn(kbdev->dev, "There were multiple GPU faults - some have not been reported\n");
+
 }
 
 void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
@@ -65,8 +66,12 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 	if (val & PRFCNT_SAMPLE_COMPLETED)
 		kbase_instr_hwcnt_sample_done(kbdev);
 
-	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_CLEAR, NULL, val);
-	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR), val);
+	/* Defer clearing CLEAN_CACHES_COMPLETED to kbase_clean_caches_done.
+	 * We need to acquire hwaccess_lock to avoid a race condition with
+	 * kbase_gpu_cache_flush_and_busy_wait
+	 */
+	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_CLEAR, NULL, val & ~CLEAN_CACHES_COMPLETED);
+	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR), val & ~CLEAN_CACHES_COMPLETED);
 
 	/* kbase_pm_check_transitions (called by kbase_pm_power_changed) must
 	 * be called after the IRQ has been cleared. This is because it might
@@ -96,3 +101,41 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 
 	KBASE_KTRACE_ADD(kbdev, CORE_GPU_IRQ_DONE, NULL, val);
 }
+
+#if !IS_ENABLED(CONFIG_MALI_NO_MALI)
+void kbase_reg_write(struct kbase_device *kbdev, u32 offset, u32 value)
+{
+	KBASE_DEBUG_ASSERT(kbdev->pm.backend.gpu_powered);
+	KBASE_DEBUG_ASSERT(kbdev->dev != NULL);
+
+	writel(value, kbdev->reg + offset);
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	if (unlikely(kbdev->io_history.enabled))
+		kbase_io_history_add(&kbdev->io_history, kbdev->reg + offset,
+				     value, 1);
+#endif /* CONFIG_DEBUG_FS */
+	dev_dbg(kbdev->dev, "w: reg %08x val %08x", offset, value);
+}
+KBASE_EXPORT_TEST_API(kbase_reg_write);
+
+u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset)
+{
+	u32 val;
+
+	KBASE_DEBUG_ASSERT(kbdev->pm.backend.gpu_powered);
+	KBASE_DEBUG_ASSERT(kbdev->dev != NULL);
+
+	val = readl(kbdev->reg + offset);
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	if (unlikely(kbdev->io_history.enabled))
+		kbase_io_history_add(&kbdev->io_history, kbdev->reg + offset,
+				     val, 0);
+#endif /* CONFIG_DEBUG_FS */
+	dev_dbg(kbdev->dev, "r: reg %08x val %08x", offset, val);
+
+	return val;
+}
+KBASE_EXPORT_TEST_API(kbase_reg_read);
+#endif /* !IS_ENABLED(CONFIG_MALI_NO_MALI) */

@@ -123,6 +123,13 @@ struct dpp_device {
 	struct exynos_hdr hdr;
 };
 
+struct exynos_dma {
+	int id;
+	void __iomem *regs;
+	int dma_irq;
+	spinlock_t dma_slock;
+};
+
 #ifdef CONFIG_OF
 struct dpp_device *of_find_dpp_by_node(struct device_node *np);
 #else
@@ -132,8 +139,10 @@ static struct dpp_device *of_find_dpp_by_node(struct device_node *np)
 }
 #endif
 
-void dpp_dump(struct dpp_device *dpp);
-void dpp_dump_buffer(struct dpp_device *dpp);
+void dpp_dump(struct drm_printer *p, struct dpp_device *dpp);
+void rcd_dump(struct drm_printer *p, struct dpp_device *dpp);
+void dpp_dump_buffer(struct drm_printer *p, struct dpp_device *dpp);
+void cgc_dump(struct drm_printer *p, struct exynos_dma *dma);
 
 static __always_inline const char *get_comp_src_name(u64 comp_src)
 {
@@ -144,4 +153,6 @@ static __always_inline const char *get_comp_src_name(u64 comp_src)
 	else
 		return "";
 }
+
+struct exynos_dma *exynos_cgc_dma_register(struct decon_device *decon);
 #endif

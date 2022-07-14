@@ -20,7 +20,6 @@
 #include <linux/usb/pd.h>
 #include <linux/usb/tcpm.h>
 #include <linux/alarmtimer.h>
-#include <misc/logbuffer.h>
 #include "google_bms.h"
 #include "google_psy.h"
 #include "google_dc_pps.h"
@@ -32,16 +31,6 @@
 #endif
 
 #define PPS_UPDATE_DELAY_MS		2000
-
-#define OP_SNK_MW			7600 /* see b/159863291 */
-#define PD_SNK_MAX_MV			9000
-#define PD_SNK_MIN_MV			5000
-#define PD_SNK_MAX_MA			3000
-#define PD_SNK_MAX_MA_9V		2200
-
-
-#define PDO_FIXED_FLAGS \
-	(PDO_FIXED_DUAL_ROLE | PDO_FIXED_DATA_SWAP | PDO_FIXED_USB_COMM)
 
 #define get_boot_sec() div_u64(ktime_to_ns(ktime_get_boottime()), NSEC_PER_SEC)
 
@@ -120,7 +109,7 @@ static int pps_check_type(struct pd_pps_data *pps_data,
 }
 
 /* always call with a tcpm_psy */
-static struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy)
+struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy)
 {
 	union power_supply_propval pval;
 	void *port = NULL;
@@ -135,35 +124,13 @@ static struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy)
 
 	/* TODO: make sure that tcpm_psy is really a tcpm source */
 
-	return port;
+	return (struct tcpm_port *)port;
 }
 
-/*
- * called from google_charger direcly on a tcpm_psy.
- * NOTE: Do not call on anything else!
- */
-int chg_update_capability(struct power_supply *tcpm_psy, unsigned int nr_pdo,
-		          u32 pps_cap)
-{
-	struct tcpm_port *port;
-	const u32 pdo[] = {PDO_FIXED(5000, PD_SNK_MAX_MA, PDO_FIXED_FLAGS),
-			   PDO_FIXED(PD_SNK_MAX_MV, PD_SNK_MAX_MA_9V, 0),
-			   pps_cap};
-	int ret = -ENODEV;
-
-	if (!tcpm_psy || !nr_pdo || nr_pdo > PDO_MAX_SUPP)
-		return -EINVAL;
-
-	port = chg_get_tcpm_port(tcpm_psy);
-	if (port)
-		ret = tcpm_update_sink_capabilities(port, pdo, nr_pdo, OP_SNK_MW);
-
-	return ret;
-}
 
 /* false when not present or error (either way don't run) */
-static unsigned int pps_is_avail(struct pd_pps_data *pps,
-				 struct power_supply *tcpm_psy)
+static enum pd_pps_stage pps_is_avail(struct pd_pps_data *pps,
+				      struct power_supply *tcpm_psy)
 {
 	/* TODO: make silent, check return value and value */
 	pps->max_uv = GPSY_GET_PROP(tcpm_psy, POWER_SUPPLY_PROP_VOLTAGE_MAX);
@@ -308,7 +275,10 @@ not_supp:
 }
 // EXPORT_SYMBOL_GPL(pps_prog_check_online);
 
-/* enable PPS prog mode (Internal), also start the negotiation */
+/*
+ * enable PPS prog mode (Internal), also start the negotiation.
+ * <0 when not supported, 0 if supported (and update state)
+ */
 static int pps_prog_online(struct pd_pps_data *pps,
 			   struct power_supply *tcpm_psy)
 {
@@ -365,75 +335,6 @@ void pps_adjust_volt(struct pd_pps_data *pps, int mod)
 	}
 }
 
-/*
- * Note: Some adapters have several PPS profiles providing different voltage
- * ranges and different maximal currents. If the device demands more power from
- * the adapter but reached the maximum it can get in the current profile,
- * search if there exists another profile providing more power. If it demands
- * less power, search if there exists another profile providing enough power
- * with higher current.
- *
- * return negative on errors or no suitable profile
- * return 0 on successful profile switch
- */
-int chg_switch_profile(struct pd_pps_data *pps, struct power_supply *tcpm_psy,
-		       bool more_pwr)
-{
-	u32 max_mv, max_ma, max_mw;
-	u32 current_mw, current_ma;
-	int i, ret = -ENODATA;
-	u32 pdo;
-
-	if (!pps || !tcpm_psy || pps->nr_src_cap < 2)
-		return -EINVAL;
-
-	current_ma = pps->op_ua / 1000;
-	current_mw = (pps->out_uv / 1000) * current_ma / 1000;
-
-	for (i = 1; i < pps->nr_src_cap; i++) {
-		pdo = pps->src_caps[i];
-
-		if (pdo_type(pdo) != PDO_TYPE_APDO)
-			continue;
-
-		/* TODO: use pps_data sink capabilities */
-		max_mv = min_t(u32, PD_SNK_MAX_MV,
-			       pdo_pps_apdo_max_voltage(pdo));
-		/* TODO: use pps_data sink capabilities */
-		max_ma = min_t(u32, PD_SNK_MAX_MA,
-			       pdo_pps_apdo_max_current(pdo));
-		max_mw = max_mv * max_ma / 1000;
-
-		if (more_pwr && max_mw > current_mw) {
-			/* export maximal capability, TODO: use sink cap */
-			pdo = PDO_PPS_APDO(PD_SNK_MIN_MV,
-					   PD_SNK_MAX_MV,
-					   PD_SNK_MAX_MA);
-			ret = chg_update_capability(tcpm_psy, PDO_PPS, pdo);
-			if (ret < 0)
-				pps_log(pps, "Failed to update sink caps, ret %d",
-					ret);
-			break;
-		} else if (!more_pwr && max_mw >= current_mw &&
-			   max_ma > current_ma) {
-
-			/* TODO: tune the max_mv, fix this */
-			pdo = PDO_PPS_APDO(PD_SNK_MIN_MV, 6000, PD_SNK_MAX_MA);
-			ret = chg_update_capability(tcpm_psy, PDO_PPS, pdo);
-			if (ret < 0)
-				pps_log(pps, "Failed to update sink caps, ret %d",
-					ret);
-			break;
-		}
-	}
-
-	if (ret == 0) {
-		pps->keep_alive_cnt = 0;
-		pps->stage = PPS_NONE;
-	}
-
-	return ret;
-}
 
 /* ------------------------------------------------------------------------ */
 
@@ -656,20 +557,19 @@ void pps_free(struct pd_pps_data *pps_data)
 /*
  * This is the first part of the DC/PPS charging state machine.
  * Detect and configure the PPS adapter for the PPS profile.
- *
  * pps->stage is updated to PPS_NONE, PPS_AVAILABLE, PPS_ACTIVE or
- * PPS_NOTSUPP. Returns:
+ * PPS_NOTSUPP.
+ *
+ * Returns:
  * . 0 to disable the PPS update interval voter
  * . <0 for error
  * . the max update interval pps should request
- *
- * The power suppy POWER_SUPPLY_PROP_PRESENT property
  */
 int pps_work(struct pd_pps_data *pps, struct power_supply *pps_psy)
 {
 	union power_supply_propval pval;
 	int ret, type_ok, pd_online;
-	unsigned int stage;
+	enum pd_pps_stage stage;
 
 	if (!pps)
 		return -EINVAL;
@@ -763,6 +663,7 @@ int pps_work(struct pd_pps_data *pps, struct power_supply *pps_psy)
 	if (type_ok && pd_online == PPS_PSY_FIXED_ONLINE) {
 		int rc;
 
+		/* 0 = when in PROG */
 		rc = pps_prog_online(pps, pps_psy);
 		switch (rc) {
 		case 0:

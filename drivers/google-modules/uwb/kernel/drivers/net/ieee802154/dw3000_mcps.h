@@ -28,10 +28,4 @@ int dw3000_mcps_register(struct dw3000 *dw);
 void dw3000_mcps_unregister(struct dw3000 *dw);
 void dw3000_mcps_free(struct dw3000 *dw);
 
-/**
- * dw3000_mcps_reset() - Hard reset of decawave.
- * @dw: Driver context.
- */
-void dw3000_mcps_reset(struct dw3000 *dw);
-
 #endif /* __DW3000_MCPS_H */

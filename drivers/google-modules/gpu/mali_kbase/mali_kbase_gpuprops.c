@@ -312,7 +312,9 @@ static void kbase_gpuprops_calculate_props(
 	struct base_gpu_props * const gpu_props, struct kbase_device *kbdev)
 {
 	int i;
+#if !MALI_USE_CSF
 	u32 gpu_id;
+#endif
 
 	/* Populate the base_gpu_props structure */
 	kbase_gpuprops_update_core_props_gpu_id(gpu_props);
@@ -368,9 +370,12 @@ static void kbase_gpuprops_calculate_props(
 	/* MIDHARC-2364 was intended for tULx.
 	 * Workaround for the incorrectly applied THREAD_FEATURES to tDUx.
 	 */
+#if !MALI_USE_CSF
 	gpu_id = kbdev->gpu_props.props.raw_props.gpu_id;
+#endif
 
 #if MALI_USE_CSF
+	CSTD_UNUSED(gpu_id);
 	gpu_props->thread_props.max_registers =
 		KBASE_UBFX32(gpu_props->raw_props.thread_features,
 			     0U, 22);
@@ -661,6 +666,19 @@ int kbase_gpuprops_update_l2_features(struct kbase_device *kbdev)
 		dev_info(kbdev->dev, "Reflected L2_CONFIG is 0x%08x\n",
 			 regdump.l2_config);
 
+		if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_ASN_HASH)) {
+			int idx;
+			const bool asn_he = regdump.l2_config &
+					    L2_CONFIG_ASN_HASH_ENABLE_MASK;
+			if (!asn_he && kbdev->l2_hash_values_override)
+				dev_err(kbdev->dev,
+					"Failed to use requested ASN_HASH, fallback to default");
+			for (idx = 0; idx < ASN_HASH_COUNT; idx++)
+				dev_info(kbdev->dev,
+					 "%s ASN_HASH[%d] is [0x%08x]\n",
+					 asn_he ? "Overridden" : "Default", idx,
+					 regdump.l2_asn_hash[idx]);
+		}
 
 		/* Update gpuprops with reflected L2_FEATURES */
 		gpu_props->raw_props.l2_features = regdump.l2_features;
@@ -746,8 +764,8 @@ static struct {
 			raw_props.thread_max_workgroup_size),
 	PROP(RAW_THREAD_MAX_BARRIER_SIZE, raw_props.thread_max_barrier_size),
 	PROP(RAW_THREAD_FEATURES,         raw_props.thread_features),
-	PROP(RAW_THREAD_TLS_ALLOC,        raw_props.thread_tls_alloc),
 	PROP(RAW_COHERENCY_MODE,          raw_props.coherency_mode),
+	PROP(RAW_THREAD_TLS_ALLOC,        raw_props.thread_tls_alloc),
 	PROP(RAW_GPU_FEATURES,            raw_props.gpu_features),
 	PROP(COHERENCY_NUM_GROUPS,        coherency_info.num_groups),
 	PROP(COHERENCY_NUM_CORE_GROUPS,   coherency_info.num_core_groups),

@@ -23,6 +23,7 @@
 #include <mali_kbase_hwaccess_time.h>
 #include <device/mali_kbase_device.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
+#include <mali_kbase_config_defaults.h>
 
 void kbase_backend_get_gpu_time_norequest(struct kbase_device *kbdev,
 					  u64 *cycle_counter,
@@ -31,18 +32,8 @@ void kbase_backend_get_gpu_time_norequest(struct kbase_device *kbdev,
 {
 	u32 hi1, hi2;
 
-	if (cycle_counter) {
-		/* Read hi, lo, hi to ensure a coherent u64 */
-		do {
-			hi1 = kbase_reg_read(kbdev,
-					     GPU_CONTROL_REG(CYCLE_COUNT_HI));
-			*cycle_counter = kbase_reg_read(kbdev,
-					     GPU_CONTROL_REG(CYCLE_COUNT_LO));
-			hi2 = kbase_reg_read(kbdev,
-					     GPU_CONTROL_REG(CYCLE_COUNT_HI));
-		} while (hi1 != hi2);
-		*cycle_counter |= (((u64) hi1) << 32);
-	}
+	if (cycle_counter)
+		*cycle_counter = kbase_backend_get_cycle_cnt(kbdev);
 
 	if (system_time) {
 		/* Read hi, lo, hi to ensure a coherent u64 */
@@ -76,6 +67,9 @@ void kbase_backend_get_gpu_time_norequest(struct kbase_device *kbdev,
  */
 static bool timedwait_cycle_count_active(struct kbase_device *kbdev)
 {
+#if IS_ENABLED(CONFIG_MALI_NO_MALI)
+	return true;
+#else
 	bool success = false;
 	const unsigned int timeout = 100;
 	const unsigned long remaining = jiffies + msecs_to_jiffies(timeout);
@@ -88,6 +82,7 @@ static bool timedwait_cycle_count_active(struct kbase_device *kbdev)
 		}
 	}
 	return success;
+#endif
 }
 #endif
 
@@ -106,4 +101,88 @@ void kbase_backend_get_gpu_time(struct kbase_device *kbdev, u64 *cycle_counter,
 #if !MALI_USE_CSF
 	kbase_pm_release_gpu_cycle_counter(kbdev);
 #endif
+}
+
+unsigned int kbase_get_timeout_ms(struct kbase_device *kbdev,
+				  enum kbase_timeout_selector selector)
+{
+	/* Timeout calculation:
+	 * dividing number of cycles by freq in KHz automatically gives value
+	 * in milliseconds. nr_cycles will have to be multiplied by 1e3 to
+	 * get result in microseconds, and 1e6 to get result in nanoseconds.
+	 */
+
+	u64 timeout, nr_cycles = 0;
+	/* Default value to mean 'no cap' */
+	u64 timeout_cap = U64_MAX;
+	u64 freq_khz = kbdev->lowest_gpu_freq_khz;
+	/* Only for debug messages, safe default in case it's mis-maintained */
+	const char *selector_str = "(unknown)";
+
+	WARN_ON(!freq_khz);
+
+	switch (selector) {
+	case KBASE_TIMEOUT_SELECTOR_COUNT:
+	default:
+#if !MALI_USE_CSF
+		WARN(1, "Invalid timeout selector used! Using default value");
+		nr_cycles = JM_DEFAULT_TIMEOUT_CYCLES;
+		break;
+#else
+		/* Use Firmware timeout if invalid selection */
+		WARN(1,
+		     "Invalid timeout selector used! Using CSF Firmware timeout");
+		fallthrough;
+	case CSF_FIRMWARE_TIMEOUT:
+		selector_str = "CSF_FIRMWARE_TIMEOUT";
+		nr_cycles = CSF_FIRMWARE_TIMEOUT_CYCLES;
+		/* Setup a cap on CSF FW timeout to FIRMWARE_PING_INTERVAL_MS,
+		 * if calculated timeout exceeds it. This should be adapted to
+		 * a direct timeout comparison once the
+		 * FIRMWARE_PING_INTERVAL_MS option is added to this timeout
+		 * function. A compile-time check such as BUILD_BUG_ON can also
+		 * be done once the firmware ping interval in cycles becomes
+		 * available as a macro.
+		 */
+		timeout_cap = FIRMWARE_PING_INTERVAL_MS;
+		break;
+	case CSF_PM_TIMEOUT:
+		selector_str = "CSF_PM_TIMEOUT";
+		nr_cycles = CSF_PM_TIMEOUT_CYCLES;
+		break;
+	case CSF_GPU_RESET_TIMEOUT:
+		selector_str = "CSF_GPU_RESET_TIMEOUT";
+		nr_cycles = CSF_GPU_RESET_TIMEOUT_CYCLES;
+		break;
+#endif
+	}
+
+	timeout = div_u64(nr_cycles, freq_khz);
+	if (timeout > timeout_cap) {
+		dev_dbg(kbdev->dev, "Capped %s %llu to %llu", selector_str,
+			(unsigned long long)timeout, (unsigned long long)timeout_cap);
+		timeout = timeout_cap;
+	}
+	if (WARN(timeout > UINT_MAX,
+		 "Capping excessive timeout %llums for %s at freq %llukHz to UINT_MAX ms",
+		 (unsigned long long)timeout, selector_str, (unsigned long long)freq_khz))
+		timeout = UINT_MAX;
+	return (unsigned int)timeout;
+}
+
+u64 kbase_backend_get_cycle_cnt(struct kbase_device *kbdev)
+{
+	u32 hi1, hi2, lo;
+
+	/* Read hi, lo, hi to ensure a coherent u64 */
+	do {
+		hi1 = kbase_reg_read(kbdev,
+					GPU_CONTROL_REG(CYCLE_COUNT_HI));
+		lo = kbase_reg_read(kbdev,
+					GPU_CONTROL_REG(CYCLE_COUNT_LO));
+		hi2 = kbase_reg_read(kbdev,
+					GPU_CONTROL_REG(CYCLE_COUNT_HI));
+	} while (hi1 != hi2);
+
+	return lo | (((u64) hi1) << 32);
 }

@@ -35,8 +35,13 @@ int fira_digest(const u8 *key, unsigned int key_len, const u8 *data,
 	int r;
 
 	tfm = crypto_alloc_shash("cmac(aes)", 0, 0);
-	if (IS_ERR(tfm))
+	if (IS_ERR(tfm)) {
+		if (PTR_ERR(tfm) == -ENOENT) {
+			pr_err("The crypto transform cmac(aes) seems to be missing."
+			       " Please check your kernel configuration.\n");
+		}
 		return PTR_ERR(tfm);
+	}
 
 	r = crypto_shash_setkey(tfm, key, key_len);
 	if (r)

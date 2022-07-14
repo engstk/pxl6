@@ -45,7 +45,8 @@ enum edgetpu_telemetry_type {
 
 struct edgetpu_telemetry_header {
 	u32 head;
-	u32 reserved0[15]; /* Place head and tail into different cache lines */
+	u32 size;
+	u32 reserved0[14]; /* Place head and tail into different cache lines */
 	u32 tail;
 	u32 entries_dropped; /* Number of entries dropped due to buffer full */
 	u32 reserved1[14]; /* Pad to 128 bytes in total */

@@ -28,8 +28,6 @@ static void mcps802154_fproc_stopped_enter(struct mcps802154_local *local)
 {
 	mcps802154_ca_notify_stop(local);
 	local->started = false;
-	skb_queue_purge(&local->ca.queue);
-	atomic_set(&local->ca.n_queued, 0);
 	wake_up(&local->wq);
 }
 

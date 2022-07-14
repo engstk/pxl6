@@ -1,7 +1,7 @@
 /*
  * Common function shared by Linux WEXT, cfg80211 and p2p drivers
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -22,6 +22,7 @@
  */
 
 #include <osl.h>
+#include <linuxver.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/netdevice.h>
@@ -102,14 +103,13 @@ static s32 wldev_ioctl(
 	strlcpy(ifr.ifr_name, dev->name, sizeof(ifr.ifr_name));
 	ifr.ifr_data = (caddr_t)&ioc;
 
-	fs = get_fs();
-	set_fs(get_ds());
+	GETFS_AND_SETFS_TO_KERNEL_DS(fs);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31)
 	ret = dev->do_ioctl(dev, &ifr, SIOCDEVPRIVATE);
 #else
 	ret = dev->netdev_ops->ndo_do_ioctl(dev, &ifr, SIOCDEVPRIVATE);
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31) */
-	set_fs(fs);
+	SETFS(fs);
 
 	ret = 0;
 #endif /* defined(BCMDONGLEHOST) */
@@ -499,6 +499,7 @@ int wldev_set_band(
 	}
 	return error;
 }
+
 int wldev_get_datarate(struct net_device *dev, int *datarate)
 {
 	int error = 0;
@@ -523,7 +524,7 @@ int wldev_get_mode(
 	int chanspec = 0;
 	uint16 band = 0;
 	uint16 bandwidth = 0;
-	wl_bss_info_t *bss = NULL;
+	wl_bss_info_v109_t *bss = NULL;
 	char* buf = NULL;
 
 	buf = kzalloc(WL_EXTRA_BUF_MAX, GFP_KERNEL);
@@ -540,7 +541,7 @@ int wldev_get_mode(
 		buf = NULL;
 		return error;
 	}
-	bss = (wl_bss_info_t*)(buf + 4);
+	bss = (wl_bss_info_v109_t*)(buf + 4);
 	chanspec = wl_chspec_driver_to_host(bss->chanspec);
 
 	band = chanspec & WL_CHANSPEC_BAND_MASK;
@@ -573,6 +574,7 @@ int wldev_get_mode(
 	buf = NULL;
 	return error;
 }
+
 int wldev_set_country(
 	struct net_device *dev, char *country_code, bool notify, int revinfo)
 {

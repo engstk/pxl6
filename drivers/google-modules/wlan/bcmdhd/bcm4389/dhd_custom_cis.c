@@ -2,7 +2,7 @@
  * Process CIS information from OTP for customer platform
  * (Handle the MAC address and module information)
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -297,6 +297,7 @@ naming_info_t bcm4389_naming_table[] = {
 	{ {"1wk_es50"}, {"_1wk_es50_c1"}, {"_c1"} },
 	{ {"1wk_es51"}, {"_1wk_es51_c1"}, {"_c1"} },
 	{ {"1wk_es60"}, {"_1wk_es60_c1"}, {"_c1"} },
+	{ {"1wk_es61"}, {"_1wk_es61_c1"}, {"_c1"} },
 	{ {"1wk_es10"}, {"_1wk_es10_c1"}, {"_c1"} },
 	{ {"1wk_es11"}, {"_1wk_es11_c1"}, {"_c1"} },
 	{ {"usi_es10"}, {"_ES10"}, {"_c0"} },
@@ -307,6 +308,7 @@ naming_info_t bcm4389_naming_table[] = {
 	{ {"usi_es17"}, {"_ES17"}, {""} },
 	{ {"usi_es19"}, {"_ES19"}, {""} },
 	{ {"usi_es21"}, {"_ES21"}, {""} },
+	{ {"usi_es31"}, {"_ES31"}, {""} },
 };
 
 /* select the NVRAM/FW tag naming table */
@@ -684,7 +686,7 @@ dhd_otp_process_iov_resp_buf(void *ctx, void *iov_resp, uint16 cmd_id,
 
 	/* check for version */
 	version = dtoh16(*(uint16 *)iov_resp);
-	if (version != WL_OTP_IOV_VERSION) {
+	if (version != WL_OTP_IOV_VERSION_1_1) {
 		return BCME_VERSION;
 	}
 
@@ -730,7 +732,7 @@ dhd_otp_get_iov_resp(dhd_pub_t *dhdp, const uint16 cmd_id, void *ctx,
 	}
 
 	/* fill header portion */
-	iov_buf->version = WL_OTP_IOV_VERSION;
+	iov_buf->version = WL_OTP_IOV_VERSION_1_1;
 	iov_buf->len = (buflen_start - buflen);
 	iov_buf->id = cmd_id;
 
@@ -903,99 +905,6 @@ fail:
 	return ret;
 
 }
-
-#if defined(CONFIG_WIFI_BROADCOM_COB) && defined(BCM4389_CHIP_DEF)
-static int
-dhd_otp_packfn_hw_rgnstatus(void *ctx, uint8 *buf, uint16 *buflen)
-{
-	uint8 *pxtlv = buf;
-	int ret = BCME_OK;
-	uint16 len = *buflen;
-	uint8 rgnid = OTP_RGN_HW;
-
-	BCM_REFERENCE(ctx);
-
-	/* pack option <-r region> */
-	ret = bcm_pack_xtlv_entry(&pxtlv, &len, WL_OTP_XTLV_RGN, sizeof(rgnid),
-			&rgnid, BCM_XTLV_OPTION_ALIGN32);
-	if (ret != BCME_OK) {
-		DHD_ERROR(("%s: Failed pack xtlv entry of region: %d\n", __FUNCTION__, ret));
-		return ret;
-	}
-
-	*buflen = len;
-	return ret;
-}
-
-static int
-dhd_otp_packfn_hw_rgndump(void *ctx, uint8 *buf, uint16 *buflen)
-{
-	uint8 *pxtlv = buf;
-	int ret = BCME_OK;
-	uint16 len = *buflen, size = WLC_IOCTL_MAXLEN;
-	uint8 rgnid = OTP_RGN_HW;
-
-	/* pack option <-r region> */
-	ret = bcm_pack_xtlv_entry(&pxtlv, &len, WL_OTP_XTLV_RGN,
-			sizeof(rgnid), &rgnid, BCM_XTLV_OPTION_ALIGN32);
-	if (ret != BCME_OK) {
-		DHD_ERROR(("%s: Failed pack xtlv entry of region: %d\n", __FUNCTION__, ret));
-		goto fail;
-	}
-
-	/* pack option [-s size] */
-	ret = bcm_pack_xtlv_entry(&pxtlv, &len, WL_OTP_XTLV_SIZE,
-			sizeof(size), (uint8 *)&size, BCM_XTLV_OPTION_ALIGN32);
-	if (ret != BCME_OK) {
-		DHD_ERROR(("%s: Failed pack xtlv entry of size: %d\n", __FUNCTION__, ret));
-		goto fail;
-	}
-	*buflen = len;
-fail:
-	return ret;
-}
-
-int
-dhd_read_otp_hw_rgn(dhd_pub_t *dhdp)
-{
-	int ret = BCME_OK;
-	otp_rgn_rw_info_t rw_info;
-	otp_rgn_stat_info_t stat_info;
-
-	memset(&rw_info, 0, sizeof(rw_info));
-	memset(&stat_info, 0, sizeof(stat_info));
-
-	/* initialization */
-	otpinfo_val = -1;
-
-	ret = dhd_otp_get_iov_resp(dhdp, WL_OTP_CMD_RGNSTATUS, &stat_info,
-			dhd_otp_packfn_hw_rgnstatus, dhd_otp_cbfn_rgnstatus);
-	if (ret != BCME_OK) {
-		DHD_ERROR(("%s: otp region status failed, ret=%d\n", __FUNCTION__, ret));
-		goto fail;
-	}
-
-	rw_info.rgnsize = stat_info.rgnsize;
-	ret = dhd_otp_get_iov_resp(dhdp, WL_OTP_CMD_RGNDUMP, &rw_info,
-			dhd_otp_packfn_hw_rgndump, dhd_otp_cbfn_rgndump);
-	if (ret != BCME_OK) {
-		if (ret == BCME_NOTFOUND) {
-			otpinfo_val = 0;
-			DHD_ERROR(("%s: OTP not found otpinfo_val = %d \n",
-				__FUNCTION__, otpinfo_val));
-
-		}
-		DHD_ERROR(("%s: otp region dump failed, ret=%d\n", __FUNCTION__, ret));
-		goto fail;
-	}
-
-	otpinfo_val = 1;
-	DHD_INFO(("%s: OTP written otpinfo_val = %d\n", __FUNCTION__, otpinfo_val));
-fail:
-	return ret;
-
-}
-#endif /* CONFIG_WIFI_BROADCOM_COB && BCM4389_CHIP_DEF */
 
 #if defined(GET_MAC_FROM_OTP) || defined(USE_CID_CHECK)
 static tuple_entry_t*
@@ -1757,6 +1666,7 @@ vid_info_t vid_info[] = {
 	{ 3, { 0x50, 0x22, }, { "murata_mur_1wk_es50" } },
 	{ 3, { 0x51, 0x24, }, { "murata_mur_1wk_es51" } },
 	{ 3, { 0x60, 0x24, }, { "murata_mur_1wk_es60" } },
+	{ 3, { 0x61, 0x24, }, { "murata_mur_1wk_es61" } },
 	{ 3, { 0x10, 0x25, }, { "murata_mur_1wk_es10" } },
 	{ 3, { 0x11, 0x25, }, { "murata_mur_1wk_es11" } },
 	{ 3, { 0x10, 0x99, }, { "USI_WM_usi_es10" } },
@@ -1767,6 +1677,7 @@ vid_info_t vid_info[] = {
 	{ 3, { 0x17, 0x99, }, { "USI_WM_usi_es17" } },
 	{ 3, { 0x19, 0x99, }, { "USI_WM_usi_es19" } },
 	{ 3, { 0x21, 0x99, }, { "USI_WM_usi_es21" } },
+	{ 3, { 0x31, 0x99, }, { "USI_WM_usi_es31" } },
 #endif /* SUPPORT_MIXED_MODULES */
 };
 #else

@@ -1,7 +1,7 @@
 /*
  * Platform Dependent file for Hikey
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -151,14 +151,20 @@ sku_info_t sku_table[] = {
 	{ {"G8V0U"}, {"MMW"} },
 	{ {"GFQM1"}, {"MMW"} },
 	{ {"GB62Z"}, {"MMW"} },
+	{ {"GE2AE"}, {"MMW"} },
+	{ {"GQML3"}, {"MMW"} },
 	{ {"GB7N6"}, {"ROW"} },
 	{ {"GLU0G"}, {"ROW"} },
 	{ {"GNA8F"}, {"ROW"} },
 	{ {"GX7AS"}, {"ROW"} },
+	{ {"GP4BC"}, {"ROW"} },
+	{ {"GVU6C"}, {"ROW"} },
 	{ {"GR1YH"}, {"JPN"} },
 	{ {"GF5KQ"}, {"JPN"} },
 	{ {"GPQ72"}, {"JPN"} },
 	{ {"GB17L"}, {"JPN"} },
+	{ {"GFE4J"}, {"JPN"} },
+	{ {"G03Z5"}, {"JPN"} },
 	{ {"G1AZG"}, {"EU"} }
 };
 
@@ -530,15 +536,6 @@ dhd_wifi_init_gpio(void)
 	/* ========== WLAN_PWR_EN ============ */
 	DHD_INFO(("%s: gpio_wlan_power : %d\n", __FUNCTION__, wlan_reg_on));
 
-#ifdef EXYNOS_PCIE_RC_ONOFF
-	if (of_property_read_u32(root_node, "ch-num", &pcie_ch_num)) {
-		DHD_INFO(("%s: Failed to parse the channel number\n", __FUNCTION__));
-		return -EINVAL;
-	}
-	/* ========== WLAN_PCIE_NUM ============ */
-	DHD_INFO(("%s: pcie_ch_num : %d\n", __FUNCTION__, pcie_ch_num));
-#endif /* EXYNOS_PCIE_RC_ONOFF */
-
 	/*
 	 * For reg_on, gpio_request will fail if the gpio is configured to output-high
 	 * in the dts using gpio-hog, so do not return error for failure.
@@ -568,12 +565,7 @@ dhd_wifi_init_gpio(void)
 
 	/* Wait for WIFI_TURNON_DELAY due to power stability */
 	msleep(WIFI_TURNON_DELAY);
-#ifdef EXYNOS_PCIE_RC_ONOFF
-	if (exynos_pcie_pm_resume(pcie_ch_num)) {
-		WARN(1, "pcie link up failure\n");
-		return -ENODEV;
-	}
-#endif /* EXYNOS_PCIE_RC_ONOFF */
+
 #ifdef CONFIG_BCMDHD_OOB_HOST_WAKE
 	/* ========== WLAN_HOST_WAKE ============ */
 	wlan_host_wake_up = of_get_named_gpio(root_node,
@@ -644,6 +636,29 @@ dhd_wlan_reset(int onoff)
 static int
 dhd_wlan_set_carddetect(int val)
 {
+#ifdef EXYNOS_PCIE_RC_ONOFF
+	struct device_node *root_node = NULL;
+	char *wlan_node = DHD_DT_COMPAT_ENTRY;
+
+	root_node = of_find_compatible_node(NULL, NULL, wlan_node);
+	if (!root_node) {
+		DHD_ERROR(("failed to get device node of BRCM WLAN\n"));
+		return -ENODEV;
+	}
+
+	if (of_property_read_u32(root_node, "ch-num", &pcie_ch_num)) {
+		DHD_INFO(("%s: Failed to parse the channel number\n", __FUNCTION__));
+		return -EINVAL;
+	}
+	/* ========== WLAN_PCIE_NUM ============ */
+	DHD_INFO(("%s: pcie_ch_num : %d\n", __FUNCTION__, pcie_ch_num));
+#endif /* EXYNOS_PCIE_RC_ONOFF */
+
+	if (val) {
+		exynos_pcie_pm_resume(pcie_ch_num);
+	} else {
+		printk(KERN_INFO "%s Ignore carddetect: %d\n", __FUNCTION__, val);
+	}
 	return 0;
 }
 
@@ -945,6 +960,7 @@ int dhd_plat_pcie_resume(void *plat_info)
 {
 	int ret = 0;
 	ret = exynos_pcie_pm_resume(pcie_ch_num);
+	is_irq_on_big_core = true;
 	return ret;
 }
 

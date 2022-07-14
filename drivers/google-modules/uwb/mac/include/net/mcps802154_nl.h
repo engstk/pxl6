@@ -38,10 +38,12 @@
  *	Set the scheduler used to manage the schedule.
  * @MCPS802154_CMD_SET_SCHEDULER_PARAMS:
  *	Set the parameters of the current scheduler.
- * @MCPS802154_CMD_SET_SCHEDULER_REGIONS:
- *	Set and configure the scheduler regions.
  * @MCPS802154_CMD_CALL_SCHEDULER:
  *	Call specific scheduler procedure.
+ * @MCPS802154_CMD_SET_SCHEDULER_REGIONS:
+ *	Set and configure the scheduler regions.
+ * @MCPS802154_CMD_SET_REGIONS_PARAMS:
+ *	Set the parameters of a specific region.
  * @MCPS802154_CMD_CALL_REGION:
  *	Call specific region procedure.
  * @MCPS802154_CMD_SET_CALIBRATIONS:
@@ -72,9 +74,10 @@ enum mcps802154_commands {
 
 	MCPS802154_CMD_SET_SCHEDULER,
 	MCPS802154_CMD_SET_SCHEDULER_PARAMS,
-	MCPS802154_CMD_SET_SCHEDULER_REGIONS,
-
 	MCPS802154_CMD_CALL_SCHEDULER,
+
+	MCPS802154_CMD_SET_SCHEDULER_REGIONS,
+	MCPS802154_CMD_SET_REGIONS_PARAMS,
 	MCPS802154_CMD_CALL_REGION,
 
 	MCPS802154_CMD_SET_CALIBRATIONS,

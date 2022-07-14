@@ -360,7 +360,7 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
  * Returns 0 on success.
  */
 int edgetpu_mmap_csr(struct edgetpu_device_group *group,
-		     struct vm_area_struct *vma);
+		     struct vm_area_struct *vma, bool is_external);
 /*
  * Maps the cmd/resp queue memory.
  *
@@ -368,7 +368,7 @@ int edgetpu_mmap_csr(struct edgetpu_device_group *group,
  */
 int edgetpu_mmap_queue(struct edgetpu_device_group *group,
 		       enum mailbox_queue_type type,
-		       struct vm_area_struct *vma);
+		       struct vm_area_struct *vma, bool is_external);
 
 /* Set group eventfd for event notification */
 int edgetpu_group_set_eventfd(struct edgetpu_device_group *group, uint event_id,

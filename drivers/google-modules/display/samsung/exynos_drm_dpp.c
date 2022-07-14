@@ -42,6 +42,9 @@
 #include "exynos_drm_fb.h"
 #include "exynos_drm_format.h"
 
+#define dpp_drm_printf(p, dpp, fmt, ...) \
+drm_printf(p, "%s[%d]: "fmt, dpp->dev->driver->name, dpp->id, ##__VA_ARGS__)
+
 #define dpp_info(dpp, fmt, ...)	\
 pr_info("%s[%d]: "fmt, dpp->dev->driver->name, dpp->id, ##__VA_ARGS__)
 
@@ -102,6 +105,10 @@ static const uint32_t dpp_vg_formats[] = {
 	DRM_FORMAT_P010,
 	DRM_FORMAT_YUV420_8BIT,
 	DRM_FORMAT_YUV420_10BIT,
+};
+
+static const uint32_t rcd_alpha_formats[] = {
+	DRM_FORMAT_C8,
 };
 
 const struct dpp_restriction dpp_drv_data = {
@@ -165,30 +172,30 @@ static inline const char *get_comp_type_str(enum dpp_comp_type type)
 		return "";
 }
 
-void dpp_dump_buffer(struct dpp_device *dpp)
+void dpp_dump_buffer(struct drm_printer *p, struct dpp_device *dpp)
 {
 	const struct drm_plane_state *plane_state;
 	struct drm_framebuffer *fb;
 	void *vaddr;
 
 	if (dpp->state != DPP_STATE_ON) {
-		dpp_info(dpp, "dpp state is off\n");
+		dpp_drm_printf(p, dpp, "dpp state is off\n");
 		return;
 	}
 
 	if (dpp->win_config.comp_type == COMP_TYPE_NONE) {
-		dpp_info(dpp, "buffer doesn't have compressed data\n");
+		dpp_drm_printf(p, dpp, "buffer doesn't have compressed data\n");
 		return;
 	}
 
 	if (dpp->protection) {
-		dpp_info(dpp, "dpp is protected\n");
+		dpp_drm_printf(p, dpp, "dpp is protected\n");
 		return;
 	}
 
 	plane_state = dpp->plane.base.state;
 	if (!plane_state || !plane_state->fb) {
-		dpp_info(dpp, "framebuffer not found\n");
+		dpp_drm_printf(p, dpp, "framebuffer not found\n");
 		return;
 	}
 
@@ -197,26 +204,42 @@ void dpp_dump_buffer(struct dpp_device *dpp)
 
 	vaddr = exynos_drm_fb_to_vaddr(fb);
 	if (vaddr) {
-		pr_info("=== buffer dump[%s:%s]: dpp%d dma addr 0x%llx, vaddr 0x%pK ===\n",
+		dpp_drm_printf(p, dpp,
+				"=== buffer dump[%s:%s]: dpp%d dma addr 0x%llx, vaddr 0x%pK ===\n",
 				get_comp_type_str(dpp->win_config.comp_type),
 				get_comp_src_name(dpp->comp_src),
 				dpp->id, dpp->win_config.addr[0], vaddr);
-		print_hex_dump(KERN_INFO, "", DUMP_PREFIX_ADDRESS, 32, 4, vaddr, 256, false);
+		print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_ADDRESS, 32, 4, vaddr, 256, false);
 	} else {
-		dpp_info(dpp, "unable to find vaddr\n");
+		dpp_drm_printf(p, dpp, "unable to find vaddr\n");
 	}
 
 	drm_framebuffer_put(fb);
 }
 
-void dpp_dump(struct dpp_device *dpp)
+void dpp_dump(struct drm_printer *p, struct dpp_device *dpp)
 {
 	if (dpp->state != DPP_STATE_ON) {
-		dpp_info(dpp, "dpp state is off\n");
+		dpp_drm_printf(p, dpp, "dpp state is off\n");
 		return;
 	}
-	__dpp_dump(dpp->id, dpp->regs.dpp_base_regs, dpp->regs.dma_base_regs,
+	__dpp_dump(p, dpp->id, dpp->regs.dpp_base_regs, dpp->regs.dma_base_regs,
 			dpp->attr);
+}
+
+void rcd_dump(struct drm_printer *p, struct dpp_device *dpp)
+{
+	if (dpp->state != DPP_STATE_ON) {
+		dpp_drm_printf(p, dpp, "rcd state is off\n");
+		return;
+	}
+	__rcd_dump(p, dpp->id, dpp->regs.dpp_base_regs, dpp->regs.dma_base_regs,
+			dpp->attr);
+}
+
+void cgc_dump(struct drm_printer *p, struct exynos_dma *dma)
+{
+	__cgc_dump(p, dma->id, dma->regs);
 }
 
 static dma_addr_t dpp_alloc_map_buf_test(void)
@@ -415,7 +438,16 @@ static void dpp_convert_plane_state_to_config(struct dpp_params_info *config,
 		config->v_ratio = mult_frac(1 << 20, config->src.h, config->dst.h);
 	}
 
-	config->is_block = false;
+	if (state->block) {
+		struct decon_win_rect *block = (struct decon_win_rect *)state->block->data;
+		config->block.x = block->x;
+		config->block.y = block->y;
+		config->block.w = block->w;
+		config->block.h = block->h;
+		config->is_block = config->block.w > 0 && config->block.h > 0;
+	} else {
+		config->is_block = false;
+	}
 	config->rcv_num = exynos_devfreq_get_domain_freq(DEVFREQ_DISP) ? : 0x7FFFFFFF;
 }
 
@@ -428,7 +460,8 @@ static void __dpp_enable(struct dpp_device *dpp)
 
 	dpp->state = DPP_STATE_ON;
 	enable_irq(dpp->dma_irq);
-	enable_irq(dpp->dpp_irq);
+	if (test_bit(DPP_ATTR_DPP, &dpp->attr))
+		enable_irq(dpp->dpp_irq);
 
 	dpp_debug(dpp, "enabled\n");
 }
@@ -438,12 +471,14 @@ static void __dpp_enable(struct dpp_device *dpp)
 static void set_resource_protection(bool dpu_protected)
 {
 	u32 decon_id;
+	u32 dqe_id;
 	u32 dsim_id;
 
 	pr_debug("%s DPU protection status changed to %d", __func__, dpu_protected);
 	for (decon_id = 0; decon_id < MAX_DECON_CNT; ++decon_id)
 		decon_reg_set_drm_write_protected(decon_id, dpu_protected);
-	dqe_reg_set_drm_write_protected(dpu_protected);
+	for (dqe_id = 0; dqe_id < REGS_DQE_ID_MAX; ++dqe_id)
+		dqe_reg_set_drm_write_protected(dqe_id, dpu_protected);
 	for (dsim_id = 0; dsim_id < MAX_DSI_CNT; ++dsim_id)
 		dsim_reg_set_drm_write_protected(dsim_id, dpu_protected);
 }
@@ -562,7 +597,8 @@ static void __dpp_disable(struct dpp_device *dpp)
 		hdr_reg_set_tm(dpp->id, NULL);
 	}
 
-	disable_irq(dpp->dpp_irq);
+	if (test_bit(DPP_ATTR_DPP, &dpp->attr))
+		disable_irq(dpp->dpp_irq);
 	disable_irq(dpp->dma_irq);
 
 	dpp_reg_deinit(dpp->id, false, dpp->attr);
@@ -904,7 +940,9 @@ static int dpp_update(struct dpp_device *dpp,
 	dpp_debug(dpp, "in/force bpc(%d/%d)\n", exynos_crtc_state->in_bpc,
 			exynos_crtc_state->force_bpc);
 
-	dpp_hdr_update(dpp, state);
+	if (test_bit(DPP_ATTR_HDR, &dpp->attr))
+		dpp_hdr_update(dpp, state);
+
 	set_protection(dpp, plane_state->fb->modifier);
 
 	dpp_reg_configure_params(dpp->id, config, dpp->attr);
@@ -1009,6 +1047,9 @@ static int exynos_dpp_parse_dt(struct dpp_device *dpp, struct device_node *np)
 	if (dpp->is_support & DPP_SUPPORT_VIDEO) {
 		dpp->pixel_formats = dpp_vg_formats;
 		dpp->num_pixel_formats = ARRAY_SIZE(dpp_vg_formats);
+	} else if (test_bit(DPP_ATTR_RCD, &dpp->attr)) {
+		dpp->pixel_formats = rcd_alpha_formats;
+		dpp->num_pixel_formats = ARRAY_SIZE(rcd_alpha_formats);
 	} else {
 		dpp->pixel_formats = dpp_gf_formats;
 		dpp->num_pixel_formats = ARRAY_SIZE(dpp_gf_formats);
@@ -1029,13 +1070,12 @@ fail:
 static irqreturn_t dpp_irq_handler(int irq, void *priv)
 {
 	struct dpp_device *dpp = priv;
-	u32 dpp_irq = 0;
 
 	spin_lock(&dpp->slock);
 	if (dpp->state == DPP_STATE_OFF)
 		goto irq_end;
 
-	dpp_irq = dpp_reg_get_irq_and_clear(dpp->id);
+	dpp_reg_get_irq_and_clear(dpp->id);
 
 irq_end:
 	spin_unlock(&dpp->slock);
@@ -1110,6 +1150,23 @@ static irqreturn_t dma_irq_handler(int irq, void *priv)
 irq_end:
 
 	spin_unlock(&dpp->dma_slock);
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t cgc_irq_handler(int irq, void *priv)
+{
+	struct decon_device *decon = priv;
+	struct exynos_dma *dma = decon->cgc_dma;
+	u32 irqs;
+
+	spin_lock(&dma->dma_slock);
+
+	irqs = cgc_reg_get_irq_and_clear(dma->id);
+
+	if (irqs & IDMA_STATUS_FRAMEDONE_IRQ)
+		DPU_EVENT_LOG(DPU_EVT_CGC_FRAMEDONE, decon->id, NULL);
+
+	spin_unlock(&dma->dma_slock);
 	return IRQ_HANDLED;
 }
 
@@ -1188,6 +1245,60 @@ static int dpp_init_resources(struct dpp_device *dpp)
 	ret = __dpp_init_resources(dpp);
 
 	return ret;
+}
+
+struct exynos_dma *exynos_cgc_dma_register(struct decon_device *decon)
+{
+	struct device *dev = decon->dev;
+	struct device_node *np = dev->of_node;
+	struct exynos_dma *dma;
+	struct platform_device *pdev;
+	int i, ret = 0;
+	struct resource res;
+
+	pdev = container_of(dev, struct platform_device, dev);
+
+	i = of_property_match_string(np, "reg-names", "cgc-dma");
+	if (i < 0) {
+		pr_debug("cgc-dma is not supported\n");
+		return NULL;
+	}
+
+	if (of_address_to_resource(np, i, &res)) {
+		pr_err("failed to get cgc dma resource\n");
+		return NULL;
+	}
+
+	dma = devm_kzalloc(dev, sizeof(struct exynos_dma), GFP_KERNEL);
+	if (!dma)
+		return NULL;
+
+	dma->regs = of_iomap(np, i);
+	if (IS_ERR(dma->regs)) {
+		pr_err("failed to remap cgc-dma registers\n");
+		return NULL;
+	}
+
+	ret = of_property_read_u32(np, "cgc-dma,id", &dma->id);
+	if (ret < 0) {
+		pr_err("failed to get cgc-dma id\n");
+		return NULL;
+	}
+
+	dpp_regs_desc_init(dma->regs, res.start, "cgc-dma", REGS_DMA, dma->id);
+
+	spin_lock_init(&dma->dma_slock);
+	dma->dma_irq = of_irq_get_byname(np, "cgc-dma");
+	ret = devm_request_irq(dev, dma->dma_irq, cgc_irq_handler, 0,
+			pdev->name, decon);
+	if (ret) {
+		pr_err("failed to install CGC DMA irq\n");
+		return NULL;
+	}
+
+	pr_debug("cgc-dma is supported\n");
+
+	return dma;
 }
 
 static int dpp_probe(struct platform_device *pdev)

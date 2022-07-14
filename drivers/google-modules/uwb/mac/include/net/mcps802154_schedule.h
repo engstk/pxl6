@@ -75,6 +75,7 @@ enum mcps802154_access_tx_return_reason {
 	MCPS802154_ACCESS_TX_RETURN_REASON_CONSUMED,
 	MCPS802154_ACCESS_TX_RETURN_REASON_FAILURE,
 	MCPS802154_ACCESS_TX_RETURN_REASON_CANCEL,
+	MCPS802154_TX_ERROR_HPDWARN,
 };
 
 /**
@@ -129,9 +130,9 @@ struct mcps802154_region_demand {
 	 */
 	u32 timestamp_dtu;
 	/**
-	 * @duration_dtu: Duration of the demand, 0 for endless.
+	 * @max_duration_dtu: Maximum duration of the demand, 0 for endless.
 	 */
-	int duration_dtu;
+	int max_duration_dtu;
 };
 
 /**
@@ -186,6 +187,10 @@ struct mcps802154_access {
 	 */
 	struct mcps802154_access_frame *frames;
 	/**
+	 * @promiscuous: If true, promiscuous mode is activated for this access.
+	 */
+	bool promiscuous;
+	/**
 	 * @hw_addr_filt: Hardware address filter parameters. This is used at the
 	 * start of multiple frames access to change the filter for this access.
 	 * The filter is restored after the access.
@@ -206,16 +211,16 @@ struct mcps802154_access {
 };
 
 /**
- * struct mcps802154_access_ops - Callbacks to implement an access, common part
- * to all access methods.
+ * struct mcps802154_access_common_ops - Callbacks to implement an access,
+ * common part to all access methods.
  */
 struct mcps802154_access_common_ops {
 	/**
 	 * @access_done: Called when the access is done, successfully or
 	 * not, ignored if NULL.
-	 * @error: Code used to signal internal MAC/driver/config error.
+	 * @error: Boolean used to signal internal MAC/driver/config error.
 	 */
-	void (*access_done)(struct mcps802154_access *access, int error);
+	void (*access_done)(struct mcps802154_access *access, bool error);
 };
 
 /**
@@ -256,6 +261,14 @@ struct mcps802154_access_ops {
 	void (*tx_return)(struct mcps802154_access *access, int frame_idx,
 			  struct sk_buff *skb,
 			  enum mcps802154_access_tx_return_reason reason);
+	/**
+	 * @access_extend: Extend the current access with new frames.
+	 *
+	 * Current frame index and n_frames are reset before call.
+	 * The region can override the frames array to extend the current
+	 * access.
+	 */
+	void (*access_extend)(struct mcps802154_access *access);
 };
 
 /**
@@ -325,6 +338,14 @@ struct mcps802154_region {
 	 * @ops: Callbacks for the region.
 	 */
 	const struct mcps802154_region_ops *ops;
+	/**
+	 * @ca_entry: Entry in list of CA regions.
+	 */
+	struct list_head ca_entry;
+	/**
+	 * @id: Assigned region ID.
+	 */
+	int id;
 };
 
 /**
@@ -383,6 +404,11 @@ struct mcps802154_region_ops {
 	struct mcps802154_access *(*get_access)(
 		struct mcps802154_region *region, u32 next_timestamp_dtu,
 		int next_in_region_dtu, int region_duration_dtu);
+	/**
+	 * @xmit_skb: Transmit buffer. Warning: Bypass the FSM lock mechanism.
+	 * Return 1 if the region accepted to transmit the buffer, 0 otherwise.
+	 */
+	int (*xmit_skb)(struct mcps802154_region *region, struct sk_buff *skb);
 };
 
 /**
@@ -417,6 +443,11 @@ struct mcps802154_schedule_update {
  * private data appended after this structure.
  */
 struct mcps802154_scheduler {
+	/**
+	 * @n_regions: Number of regions possible to add in the scheduler,
+	 * zero means infinite number of regions can be added to the scheduler.
+	 */
+	u32 n_regions;
 	/**
 	 * @ops: Callbacks for the scheduler.
 	 */
@@ -461,24 +492,10 @@ struct mcps802154_scheduler_ops {
 			      const struct nlattr *attrs,
 			      struct netlink_ext_ack *extack);
 	/**
-	 * @set_region_parameters: Configure the region inside the scheduler.
-	 */
-	int (*set_region_parameters)(struct mcps802154_scheduler *scheduler,
-				     u32 region_id, const char *region_name,
-				     const struct nlattr *attrs,
-				     struct netlink_ext_ack *extack);
-	/**
 	 * @call: Call scheduler specific procedure.
 	 */
 	int (*call)(struct mcps802154_scheduler *scheduler, u32 call_id,
 		    const struct nlattr *attrs, const struct genl_info *info);
-	/**
-	 * @call_region: Call region specific procedure.
-	 */
-	int (*call_region)(struct mcps802154_scheduler *scheduler,
-			   u32 region_id, const char *region_name, u32 call_id,
-			   const struct nlattr *attrs,
-			   const struct genl_info *info);
 	/**
 	 * @update_schedule: Called to initialize and update the schedule.
 	 */
@@ -644,6 +661,38 @@ mcps802154_region_event_alloc_skb(struct mcps802154_llhw *llhw,
 int mcps802154_region_event(struct mcps802154_llhw *llhw, struct sk_buff *skb);
 
 /**
+ * mcps802154_region_xmit_resume() - Signal buffer transmit can resume.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ * @queue_index: Queue index.
+ */
+void mcps802154_region_xmit_resume(struct mcps802154_llhw *llhw,
+				   struct mcps802154_region *region,
+				   int queue_index);
+
+/**
+ * mcps802154_region_xmit_done() - Signal buffer transmit completion.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ * @skb: Buffer.
+ * @ok: True if the buffer was successfully transmitted.
+ */
+void mcps802154_region_xmit_done(struct mcps802154_llhw *llhw,
+				 struct mcps802154_region *region,
+				 struct sk_buff *skb, bool ok);
+
+/**
+ * mcps802154_region_rx_skb() - Signal the reception of a buffer.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ * @skb: Received buffer.
+ * @lqi: Link Quality Indicator (LQI).
+ */
+void mcps802154_region_rx_skb(struct mcps802154_llhw *llhw,
+			      struct mcps802154_region *region,
+			      struct sk_buff *skb, u8 lqi);
+
+/**
  * mcps802154_scheduler_register() - Register a scheduler, to be called when
  * your module is loaded.
  * @scheduler_ops: Scheduler to register.
@@ -725,5 +774,19 @@ void mcps802154_reschedule(struct mcps802154_llhw *llhw);
  * when for example some parameters changed.
  */
 void mcps802154_schedule_invalidate(struct mcps802154_llhw *llhw);
+
+/**
+ * mcps802154_schedule_get_regions() - Get opened regions.
+ * @llhw: Low-level device pointer.
+ * @regions: pointer to list of regions.
+ *
+ * FSM mutex should be locked.
+ *
+ * Get the list of current regions opened.
+ *
+ * Return: Number of regions.
+ */
+int mcps802154_schedule_get_regions(struct mcps802154_llhw *llhw,
+				    struct list_head **regions);
 
 #endif /* NET_MCPS802154_SCHEDULE_H */
