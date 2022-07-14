@@ -80,6 +80,8 @@ struct exynos_dsc {
 	u32 slice_width;
 	u32 slice_height;
 	const struct drm_dsc_config *cfg;
+
+	unsigned int delay_reg_init_us;
 };
 
 /* return compressed DSC slice width */

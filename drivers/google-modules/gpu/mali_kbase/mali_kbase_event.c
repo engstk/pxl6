@@ -87,9 +87,9 @@ int kbase_event_dequeue(struct kbase_context *ctx, struct base_jd_event_v2 *ueve
 	if (atom->core_req & BASE_JD_REQ_EXTERNAL_RESOURCES)
 		kbase_jd_free_external_resources(atom);
 
-	mutex_lock(&ctx->jctx.lock);
+	rt_mutex_lock(&ctx->jctx.lock);
 	uevent->udata = kbase_event_process(ctx, atom);
-	mutex_unlock(&ctx->jctx.lock);
+	rt_mutex_unlock(&ctx->jctx.lock);
 
 	return 0;
 }
@@ -111,9 +111,9 @@ static void kbase_event_process_noreport_worker(struct kthread_work *data)
 	if (katom->core_req & BASE_JD_REQ_EXTERNAL_RESOURCES)
 		kbase_jd_free_external_resources(katom);
 
-	mutex_lock(&kctx->jctx.lock);
+	rt_mutex_lock(&kctx->jctx.lock);
 	kbase_event_process(kctx, katom);
-	mutex_unlock(&kctx->jctx.lock);
+	rt_mutex_unlock(&kctx->jctx.lock);
 }
 
 /**

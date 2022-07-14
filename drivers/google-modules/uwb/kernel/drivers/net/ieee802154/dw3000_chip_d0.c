@@ -29,6 +29,7 @@
 
 int dw3000_c0_get_dgc_dec(struct dw3000 *dw, u8 *value);
 int dw3000_c0_prog_pll_coarse_code(struct dw3000 *dw);
+int dw3000_c0_set_mrxlut(struct dw3000 *dw, const u32 *lut);
 
 static const struct dw3000_chip_register d0_registers[] = {
 	/* registres virtuels pour dump des fileID */
@@ -59,6 +60,38 @@ static const struct dw3000_chip_register d0_registers[] = {
 	{ "AES RAM", 0x17, 0x80, 0, DW3000_CHIPREG_DUMP, NULL },
 	{ "SET_X", 0x18, 0x1d0, 0, DW3000_CHIPREG_DUMP, NULL },
 	{ "IN_PTR_CFG", 0x1f, 0x12, 0, DW3000_CHIPREG_DUMP, NULL },
+	{ "euid", 0x000004, 0x08, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "frame_filter", 0x000010, 0x01, 0x01, DW3000_CHIPREG_WP, NULL },
+	{ "rx_phrmode", 0x000010, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "tx_phrrate", 0x000010, 0x01, 0x20, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sts_mode", 0x000011, 0x01, 0x8, DW3000_CHIPREG_WP, NULL },
+	{ "pdoa_mode", 0x000012, 0x01, 0x3, DW3000_CHIPREG_WP, NULL },
+	{ "role", 0x000015, 0x01, 0x1, DW3000_CHIPREG_WP, NULL },
+	{ "frame_filter_cfg", 0x000014, 0x02, 0xfeff, DW3000_CHIPREG_WP, NULL },
+	{ "datarate", 0x000021, 0x01, 0x4, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pream_len", 0x000021, 0x01, 0xf0, DW3000_CHIPREG_WP, NULL },
+	{ "tx_antdly", 0x00007c, 0x02, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "txrf_pwrfin", 0x010004, 0x01, 0xfc, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pwr", 0x010004, 0x04, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sfdtype", 0x010008, 0x01, 0x6, DW3000_CHIPREG_WP, NULL },
+	{ "channel", 0x010008, 0x01, 0x01, DW3000_CHIPREG_WP, NULL },
+	{ "tx_pream_ch", 0x010008, 0x01, 0xf8, DW3000_CHIPREG_WP, NULL },
+	{ "prf", 0x010008, 0x01, 0x1f, DW3000_CHIPREG_WP, NULL },
+	{ "rx_phr_rate", 0x010010, 0x01, 0x20, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sts_len", 0x020000, 0x01, 0xff, DW3000_CHIPREG_WP, NULL },
+	{ "ext_clkdly", 0x040000, 0x02, 0x7f8, DW3000_CHIPREG_WP, NULL },
+	{ "ext_clkdly_en", 0x040001, 0x01, 0x8, DW3000_CHIPREG_WP, NULL },
+	{ "gpiodir", 0x050008, 0x02, 0x1ff, DW3000_CHIPREG_WP, NULL },
+	{ "gpioout", 0x05000c, 0x02, 0x1ff, DW3000_CHIPREG_WP, NULL },
+	{ "rx_paclen", 0x060000, 0x01, 0x03, DW3000_CHIPREG_WP, NULL },
+	{ "rx_sfd_to", 0x060002, 0x02, 0x00, DW3000_CHIPREG_WP, NULL },
+	{ "chan_pg_delay", 0x07001c, 0x01, 0x3f, DW3000_CHIPREG_WP, NULL },
+	{ "chan_pll_cfg", 0x090001, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "xtal_trim", 0x090014, 0x01, 0x3f, DW3000_CHIPREG_WP, NULL },
+	{ "rx_antdly", 0x0e0000, 0x01, 0xf8, DW3000_CHIPREG_WP, NULL },
+	{ "rx_diag", 0x0e0002, 0x01, 0x10, DW3000_CHIPREG_WP, NULL },
+	{ "digi_diag_en", 0x0f0000, 0x01, 0x1, DW3000_CHIPREG_WP, NULL },
+	{ "digi_diag_clr", 0x0f0000, 0x01, 0x2, DW3000_CHIPREG_WP, NULL },
 };
 
 const struct dw3000_chip_register *dw3000_d0_get_registers(struct dw3000 *dw,
@@ -177,6 +210,11 @@ static int dw3000_d0_coex_gpio(struct dw3000 *dw, bool state, int delay_us)
 	return 0;
 }
 
+static int dw3000_d0_check_tx_ok(struct dw3000 *dw)
+{
+	return 0;
+}
+
 /**
  * dw3000_d0_prog_ldo_and_bias_tune() - Programs the device's LDO and BIAS tuning
  * @dw: The DW device.
@@ -226,10 +264,12 @@ const struct dw3000_chip_ops dw3000_chip_d0_ops = {
 	.init = dw3000_d0_init,
 	.coex_init = dw3000_d0_coex_init,
 	.coex_gpio = dw3000_d0_coex_gpio,
+	.check_tx_ok = dw3000_d0_check_tx_ok,
 	.prog_ldo_and_bias_tune = dw3000_d0_prog_ldo_and_bias_tune,
 	.get_config_mrxlut_chan = dw3000_d0_get_config_mrxlut_chan,
 	.get_dgc_dec = dw3000_c0_get_dgc_dec,
 	.pll_calibration_from_scratch = dw3000_d0_pll_calibration_from_scratch,
 	.prog_pll_coarse_code = dw3000_c0_prog_pll_coarse_code,
+	.set_mrxlut = dw3000_c0_set_mrxlut,
 	.get_registers = dw3000_d0_get_registers,
 };

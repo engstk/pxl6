@@ -49,17 +49,20 @@ exynos_drm_gem_prime_import_sg_table(struct drm_device *dev,
 	const unsigned long size = attach->dmabuf->size;
 	struct exynos_drm_gem *exynos_gem_obj =
 		exynos_drm_gem_alloc(dev, size, 0);
+	dma_addr_t dma_addr;
 
 	if (IS_ERR(exynos_gem_obj))
 		return ERR_CAST(exynos_gem_obj);
 
 	exynos_gem_obj->sgt = sgt;
-	exynos_gem_obj->dma_addr = sg_dma_address(sgt->sgl);
-	if (IS_ERR_VALUE(exynos_gem_obj->dma_addr)) {
-		pr_err("Failed to allocate IOVM\n");
+	dma_addr = sg_dma_address(sgt->sgl);
+	if (IS_ERR_VALUE(dma_addr)) {
+		pr_err("Failed to allocate IOVM (%lld)\n", dma_addr);
 		kfree(exynos_gem_obj);
-		return ERR_PTR(exynos_gem_obj->dma_addr);
+		return ERR_PTR(dma_addr);
 	}
+
+	exynos_gem_obj->dma_addr = dma_addr;
 
 	pr_debug("mapped dma_addr: 0x%llx\n", exynos_gem_obj->dma_addr);
 
@@ -197,6 +200,22 @@ struct drm_gem_object *exynos_drm_gem_prime_import(struct drm_device *dev,
 	struct exynos_drm_private *priv = drm_to_exynos_dev(dev);
 
 	return drm_gem_prime_import_dev(dev, dma_buf, priv->iommu_client);
+}
+
+struct drm_gem_object *exynos_drm_gem_fd_to_obj(struct drm_device *dev, int val)
+{
+	struct dma_buf *dma_buf;
+	struct drm_gem_object *obj;
+
+	dma_buf = dma_buf_get(val);
+	if (IS_ERR(dma_buf)) {
+		pr_err("failed to get dma buf\n");
+		return NULL;
+	}
+	obj = exynos_drm_gem_prime_import(dev, dma_buf);
+	dma_buf_put(dma_buf);
+
+	return obj;
 }
 
 static int exynos_drm_gem_mmap_object(struct exynos_drm_gem *exynos_gem_obj,

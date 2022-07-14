@@ -38,6 +38,38 @@
 #define NOT_DIRTY false
 #define NOT_RECLAIMED false
 
+static bool mali_kbase_mem_pool_order_pages_enabled = false;
+static void kbase_mem_pool_ordered_add_locked(struct kbase_mem_pool *pool,
+		struct page *p);
+static struct page *kbase_mem_pool_ordered_spill(
+		struct kbase_mem_pool *next_pool, struct page *p);
+static void kbase_mem_pool_ordered_free(struct kbase_mem_pool *pool, struct page *p,
+		bool dirty);
+static void kbase_mem_pool_ordered_free_locked(struct kbase_mem_pool *pool, struct page *p,
+		bool dirty);
+static void kbase_mem_pool_ordered_free_pages(struct kbase_mem_pool *pool,
+		size_t nr_pages, struct tagged_addr *pages, bool dirty,
+		bool reclaimed);
+static void kbase_mem_pool_ordered_free_pages_locked(
+		struct kbase_mem_pool *pool, size_t nr_pages,
+		struct tagged_addr *pages, bool dirty, bool reclaimed);
+static struct page *kbase_mem_pool_ordered_add_spill(
+		struct kbase_mem_pool *pool, struct page *p);
+static struct page *kbase_mem_pool_ordered_add_spill_locked(
+		struct kbase_mem_pool *pool, struct page *p);
+static void kbase_mem_pool_ordered_add_list_spill(struct kbase_mem_pool *pool,
+		struct list_head *page_list, struct list_head *spillover_list);
+static void kbase_mem_pool_ordered_add_list_spill_locked(
+		struct kbase_mem_pool *pool, struct list_head *page_list,
+		struct list_head *spillover_list);
+static void kbase_mem_pool_ordered_add_array_spill(struct kbase_mem_pool *pool,
+		size_t nr_pages, struct tagged_addr *pages,
+		struct list_head *spillover_list, bool zero, bool sync);
+static void kbase_mem_pool_ordered_add_array_spill_locked(
+		struct kbase_mem_pool *pool, size_t nr_pages,
+		struct tagged_addr *pages, struct list_head *spillover_list,
+		bool zero, bool sync);
+
 static size_t kbase_mem_pool_capacity(struct kbase_mem_pool *pool)
 {
 	ssize_t max_size = kbase_mem_pool_max_size(pool);
@@ -59,6 +91,11 @@ static bool kbase_mem_pool_is_empty(struct kbase_mem_pool *pool)
 static void kbase_mem_pool_add_locked(struct kbase_mem_pool *pool,
 		struct page *p)
 {
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_add_locked(pool, p);
+		return;
+	}
+
 	lockdep_assert_held(&pool->pool_lock);
 
 	list_add(&p->lru, &pool->page_list);
@@ -126,6 +163,7 @@ static void kbase_mem_pool_sync_page(struct kbase_mem_pool *pool,
 		struct page *p)
 {
 	struct device *dev = pool->kbdev->dev;
+
 	dma_sync_single_for_device(dev, kbase_dma_addr(p),
 			(PAGE_SIZE << pool->order), DMA_BIDIRECTIONAL);
 }
@@ -144,6 +182,11 @@ static void kbase_mem_pool_zero_page(struct kbase_mem_pool *pool,
 static void kbase_mem_pool_spill(struct kbase_mem_pool *next_pool,
 		struct page *p)
 {
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_spill(next_pool, p);
+		return;
+	}
+
 	/* Zero page before spilling */
 	kbase_mem_pool_zero_page(next_pool, p);
 
@@ -435,14 +478,27 @@ void kbase_mem_pool_term(struct kbase_mem_pool *pool)
 
 	kbase_mem_pool_unlock(pool);
 
-	if (next_pool && nr_to_spill) {
-		list_for_each_entry(p, &spill_list, lru)
-			kbase_mem_pool_zero_page(pool, p);
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		if (next_pool && (!list_empty(&spill_list) ||
+				!list_empty(&free_list))) {
+			list_splice_init(&free_list, &spill_list);
+			list_for_each_entry(p, &spill_list, lru)
+				kbase_mem_pool_zero_page(pool, p);
+			kbase_mem_pool_ordered_add_list_spill(
+					next_pool, &spill_list, &free_list);
+		}
+	} else {
+		if (next_pool && nr_to_spill) {
+			list_for_each_entry(p, &spill_list, lru)
+				kbase_mem_pool_zero_page(pool, p);
 
-		/* Add new page list to next_pool */
-		kbase_mem_pool_add_list(next_pool, &spill_list, nr_to_spill);
+			/* Add new page list to next_pool */
+			kbase_mem_pool_add_list(next_pool, &spill_list,
+					nr_to_spill);
 
-		pool_dbg(pool, "terminate() spilled %zu pages\n", nr_to_spill);
+			pool_dbg(pool, "terminate() spilled %zu pages\n",
+					nr_to_spill);
+		}
 	}
 
 	list_for_each_entry_safe(p, tmp, &free_list, lru) {
@@ -490,6 +546,11 @@ void kbase_mem_pool_free(struct kbase_mem_pool *pool, struct page *p,
 {
 	struct kbase_mem_pool *next_pool = pool->next_pool;
 
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_free(pool, p, dirty);
+		return;
+	}
+
 	pool_dbg(pool, "free()\n");
 
 	if (!kbase_mem_pool_is_full(pool)) {
@@ -510,6 +571,11 @@ void kbase_mem_pool_free(struct kbase_mem_pool *pool, struct page *p,
 void kbase_mem_pool_free_locked(struct kbase_mem_pool *pool, struct page *p,
 		bool dirty)
 {
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_free_locked(pool, p, dirty);
+		return;
+	}
+
 	pool_dbg(pool, "free_locked()\n");
 
 	lockdep_assert_held(&pool->pool_lock);
@@ -548,6 +614,7 @@ int kbase_mem_pool_alloc_pages(struct kbase_mem_pool *pool, size_t nr_4k_pages,
 	nr_from_pool = min(nr_pages_internal, kbase_mem_pool_size(pool));
 	while (nr_from_pool--) {
 		int j;
+
 		p = kbase_mem_pool_remove_locked(pool);
 		if (pool->order) {
 			pages[i++] = as_tagged_tag(page_to_phys(p),
@@ -744,6 +811,12 @@ void kbase_mem_pool_free_pages(struct kbase_mem_pool *pool, size_t nr_pages,
 	LIST_HEAD(to_pool_list);
 	size_t i = 0;
 
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_free_pages(pool, nr_pages, pages, dirty,
+				reclaimed);
+		return;
+	}
+
 	pool_dbg(pool, "free_pages(%zu):\n", nr_pages);
 
 	if (!reclaimed) {
@@ -795,6 +868,12 @@ void kbase_mem_pool_free_pages_locked(struct kbase_mem_pool *pool,
 	LIST_HEAD(to_pool_list);
 	size_t i = 0;
 
+	if (mali_kbase_mem_pool_order_pages_enabled) {
+		kbase_mem_pool_ordered_free_pages_locked(pool, nr_pages, pages,
+				dirty, reclaimed);
+		return;
+	}
+
 	lockdep_assert_held(&pool->pool_lock);
 
 	pool_dbg(pool, "free_pages_locked(%zu):\n", nr_pages);
@@ -827,4 +906,302 @@ void kbase_mem_pool_free_pages_locked(struct kbase_mem_pool *pool,
 	}
 
 	pool_dbg(pool, "free_pages_locked(%zu) done\n", nr_pages);
+}
+
+static void kbase_mem_pool_ordered_add_locked(struct kbase_mem_pool *pool,
+		struct page *p)
+{
+	struct page* page_in_list;
+	phys_addr_t page_phys_addr;
+	bool added = false;
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	page_phys_addr = page_to_phys(p);
+	list_for_each_entry(page_in_list, &pool->page_list, lru) {
+		if (page_phys_addr < page_to_phys(page_in_list)) {
+			list_add_tail(&p->lru, &page_in_list->lru);
+			added = true;
+			break;
+		}
+	}
+	if (!added) {
+		list_add_tail(&p->lru, &pool->page_list);
+	}
+	pool->cur_size++;
+
+	pool_dbg(pool, "added page\n");
+}
+
+static struct page *kbase_mem_pool_ordered_spill(
+		struct kbase_mem_pool *next_pool, struct page *p)
+{
+	/* Zero page before spilling */
+	kbase_mem_pool_zero_page(next_pool, p);
+
+	return kbase_mem_pool_ordered_add_spill(next_pool, p);
+}
+
+static void kbase_mem_pool_ordered_free(struct kbase_mem_pool *pool,
+		struct page *p, bool dirty)
+{
+	struct kbase_mem_pool *next_pool = pool->next_pool;
+	struct page *spilled_page;
+
+	pool_dbg(pool, "free()\n");
+
+	/* Add to our own pool */
+	if (dirty)
+		kbase_mem_pool_sync_page(pool, p);
+	spilled_page = kbase_mem_pool_ordered_add_spill(pool, p);
+
+	if (next_pool && spilled_page) {
+		/* Spill to next pool */
+		spilled_page = kbase_mem_pool_ordered_spill(next_pool,
+				spilled_page);
+	}
+
+	if (spilled_page) {
+		/* Free page */
+		kbase_mem_pool_free_page(pool, spilled_page);
+	}
+}
+
+static void kbase_mem_pool_ordered_free_locked(struct kbase_mem_pool *pool,
+		struct page *p, bool dirty)
+{
+	struct page *spilled_page;
+
+	pool_dbg(pool, "free_locked()\n");
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	/* Add to our own pool */
+	if (dirty)
+		kbase_mem_pool_sync_page(pool, p);
+	spilled_page = kbase_mem_pool_ordered_add_spill_locked(pool, p);
+
+	if (spilled_page) {
+		/* Free page */
+		kbase_mem_pool_free_page(pool, spilled_page);
+	}
+}
+
+static void kbase_mem_pool_ordered_free_pages(struct kbase_mem_pool *pool,
+		size_t nr_pages, struct tagged_addr *pages, bool dirty,
+		bool reclaimed)
+{
+	struct kbase_mem_pool *next_pool = pool->next_pool;
+	struct page *p;
+	struct page *tmp;
+	LIST_HEAD(to_pool_list);
+	LIST_HEAD(spillover_list);
+
+	pool_dbg(pool, "free_pages(%zu):\n", nr_pages);
+
+	if (!reclaimed) {
+		/* Add to this pool, spilling over to any next pool */
+		if (next_pool) {
+			kbase_mem_pool_ordered_add_array_spill(pool, nr_pages,
+					pages, &spillover_list, false, dirty);
+			kbase_mem_pool_ordered_add_list_spill(next_pool,
+					&spillover_list, &to_pool_list);
+		} else {
+			kbase_mem_pool_ordered_add_array_spill(pool, nr_pages,
+					pages, &to_pool_list, false, dirty);
+		}
+	}
+
+	/* Free any remaining pages to kernel */
+	list_for_each_entry_safe(p, tmp, &to_pool_list, lru) {
+		list_del_init(&p->lru);
+		kbase_mem_pool_free_page(pool, p);
+	}
+
+	pool_dbg(pool, "free_pages(%zu) done\n", nr_pages);
+}
+
+static void kbase_mem_pool_ordered_free_pages_locked(
+		struct kbase_mem_pool *pool, size_t nr_pages,
+		struct tagged_addr *pages, bool dirty, bool reclaimed)
+{
+	struct kbase_mem_pool *next_pool = pool->next_pool;
+	struct page *p;
+	struct page *tmp;
+	LIST_HEAD(to_pool_list);
+	LIST_HEAD(spillover_list);
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	pool_dbg(pool, "free_pages_locked(%zu):\n", nr_pages);
+
+	if (!reclaimed) {
+		/* Add to this pool, spilling over to any next pool */
+		if (next_pool) {
+			kbase_mem_pool_ordered_add_array_spill_locked(pool,
+					nr_pages, pages, &spillover_list, false,
+					dirty);
+			kbase_mem_pool_ordered_add_list_spill_locked(next_pool,
+					&spillover_list, &to_pool_list);
+		} else {
+			kbase_mem_pool_ordered_add_array_spill_locked(pool,
+					nr_pages, pages, &to_pool_list, false,
+					dirty);
+		}
+	}
+
+	/* Free any remaining pages to kernel */
+	list_for_each_entry_safe(p, tmp, &to_pool_list, lru) {
+		list_del_init(&p->lru);
+		kbase_mem_pool_free_page(pool, p);
+	}
+
+	pool_dbg(pool, "free_pages_locked(%zu) done\n", nr_pages);
+}
+
+static struct page *kbase_mem_pool_ordered_add_spill(
+		struct kbase_mem_pool *pool, struct page *p)
+{
+	struct page *spilled_page;
+
+	kbase_mem_pool_lock(pool);
+	spilled_page = kbase_mem_pool_ordered_add_spill_locked(pool, p);
+	kbase_mem_pool_unlock(pool);
+
+	return spilled_page;
+}
+
+static struct page *kbase_mem_pool_ordered_add_spill_locked(
+		struct kbase_mem_pool *pool, struct page *p)
+{
+	struct page* spilled_page = NULL;
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	kbase_mem_pool_add_locked(pool, p);
+
+	if (pool->cur_size > kbase_mem_pool_max_size(pool)) {
+		spilled_page = list_last_entry(
+				&pool->page_list, struct page, lru);
+		list_del_init(&spilled_page->lru);
+		pool->cur_size--;
+	}
+
+	return spilled_page;
+}
+
+static void kbase_mem_pool_ordered_add_list_spill(struct kbase_mem_pool *pool,
+		struct list_head *page_list, struct list_head *spillover_list)
+{
+	kbase_mem_pool_lock(pool);
+	kbase_mem_pool_ordered_add_list_spill_locked(
+			pool, page_list, spillover_list);
+	kbase_mem_pool_unlock(pool);
+}
+
+static void kbase_mem_pool_ordered_add_list_spill_locked(
+		struct kbase_mem_pool *pool, struct list_head *page_list,
+		struct list_head *spillover_list)
+{
+	struct page* page;
+	struct page* spilled_page;
+	struct page* tmp;
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	list_for_each_entry_safe(page, tmp, page_list, lru) {
+		list_del_init(&page->lru);
+		spilled_page = kbase_mem_pool_ordered_add_spill_locked(
+				pool, page);
+		if (spilled_page) {
+			list_add(&spilled_page->lru, spillover_list);
+		}
+	}
+}
+
+static void kbase_mem_pool_ordered_add_array_spill(
+		struct kbase_mem_pool *pool, size_t nr_pages,
+		struct tagged_addr *pages, struct list_head *spillover_list,
+		bool zero, bool sync)
+{
+	struct page *p;
+	size_t nr_to_pool = 0;
+	LIST_HEAD(new_page_list);
+	size_t i;
+
+	if (!nr_pages)
+		return;
+
+	pool_dbg(pool, "add_array(%zu, zero=%d, sync=%d):\n",
+			nr_pages, zero, sync);
+
+	/* Zero/sync pages first without holding the pool lock */
+	for (i = 0; i < nr_pages; i++) {
+		if (unlikely(!as_phys_addr_t(pages[i])))
+			continue;
+
+		if (is_huge_head(pages[i]) || !is_huge(pages[i])) {
+			p = as_page(pages[i]);
+			if (zero)
+				kbase_mem_pool_zero_page(pool, p);
+			else if (sync)
+				kbase_mem_pool_sync_page(pool, p);
+
+			list_add(&p->lru, &new_page_list);
+			nr_to_pool++;
+		}
+		pages[i] = as_tagged(0);
+	}
+
+	/* Add new page list to pool */
+	kbase_mem_pool_ordered_add_list_spill(
+			pool, &new_page_list, spillover_list);
+
+	pool_dbg(pool, "add_array(%zu) added %zu pages\n",
+			nr_pages, nr_to_pool);
+}
+
+static void kbase_mem_pool_ordered_add_array_spill_locked(
+		struct kbase_mem_pool *pool,
+		size_t nr_pages, struct tagged_addr *pages,
+		struct list_head *spillover_list,
+		bool zero, bool sync)
+{
+	struct page *p;
+	size_t nr_to_pool = 0;
+	LIST_HEAD(new_page_list);
+	size_t i;
+
+	lockdep_assert_held(&pool->pool_lock);
+
+	if (!nr_pages)
+		return;
+
+	pool_dbg(pool, "add_array(%zu, zero=%d, sync=%d):\n",
+			nr_pages, zero, sync);
+
+	/* Zero/sync pages first without holding the pool lock */
+	for (i = 0; i < nr_pages; i++) {
+		if (unlikely(!as_phys_addr_t(pages[i])))
+			continue;
+
+		if (is_huge_head(pages[i]) || !is_huge(pages[i])) {
+			p = as_page(pages[i]);
+			if (zero)
+				kbase_mem_pool_zero_page(pool, p);
+			else if (sync)
+				kbase_mem_pool_sync_page(pool, p);
+
+			list_add(&p->lru, &new_page_list);
+			nr_to_pool++;
+		}
+		pages[i] = as_tagged(0);
+	}
+
+	/* Add new page list to pool */
+	kbase_mem_pool_ordered_add_list_spill_locked(pool, &new_page_list,
+			spillover_list);
+
+	pool_dbg(pool, "add_array(%zu) added %zu pages\n",
+			nr_pages, nr_to_pool);
 }

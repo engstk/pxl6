@@ -59,14 +59,16 @@ enum base_hw_issue {
 	BASE_HW_ISSUE_TTRX_3464,
 	BASE_HW_ISSUE_TTRX_3485,
 	BASE_HW_ISSUE_GPU2019_3212,
+	BASE_HW_ISSUE_TURSEHW_1997,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_generic[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_generic[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tMIx_r0p0_05dev0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tMIx_r0p0_05dev0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -86,7 +88,7 @@ static const enum base_hw_issue base_hw_issues_tMIx_r0p0_05dev0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tMIx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tMIx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -106,7 +108,7 @@ static const enum base_hw_issue base_hw_issues_tMIx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tMIx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tMIx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -126,7 +128,7 @@ static const enum base_hw_issue base_hw_issues_tMIx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tMIx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tMIx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_7891,
@@ -141,7 +143,7 @@ static const enum base_hw_issue base_hw_issues_model_tMIx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tHEx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tHEx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -154,7 +156,7 @@ static const enum base_hw_issue base_hw_issues_tHEx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tHEx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tHEx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -167,7 +169,7 @@ static const enum base_hw_issue base_hw_issues_tHEx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tHEx_r0p2[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tHEx_r0p2[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_11054,
@@ -180,7 +182,7 @@ static const enum base_hw_issue base_hw_issues_tHEx_r0p2[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tHEx_r0p3[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tHEx_r0p3[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_10682,
 	BASE_HW_ISSUE_TMIX_7891,
@@ -192,7 +194,7 @@ static const enum base_hw_issue base_hw_issues_tHEx_r0p3[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tHEx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tHEx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_7891,
@@ -202,7 +204,7 @@ static const enum base_hw_issue base_hw_issues_model_tHEx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tSIx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tSIx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_11054,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -215,7 +217,7 @@ static const enum base_hw_issue base_hw_issues_tSIx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tSIx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tSIx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_11054,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -228,7 +230,7 @@ static const enum base_hw_issue base_hw_issues_tSIx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tSIx_r1p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tSIx_r1p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_11054,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -240,7 +242,7 @@ static const enum base_hw_issue base_hw_issues_tSIx_r1p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tSIx_r1p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tSIx_r1p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
 	BASE_HW_ISSUE_TSIX_1116,
@@ -251,7 +253,7 @@ static const enum base_hw_issue base_hw_issues_tSIx_r1p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tSIx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tSIx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -261,7 +263,7 @@ static const enum base_hw_issue base_hw_issues_model_tSIx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tDVx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tDVx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
 	BASE_HW_ISSUE_TSIX_1116,
@@ -272,7 +274,7 @@ static const enum base_hw_issue base_hw_issues_tDVx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tDVx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tDVx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -282,7 +284,7 @@ static const enum base_hw_issue base_hw_issues_model_tDVx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tNOx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tNOx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
 	BASE_HW_ISSUE_TSIX_1116,
@@ -294,7 +296,7 @@ static const enum base_hw_issue base_hw_issues_tNOx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tNOx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tNOx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -304,7 +306,7 @@ static const enum base_hw_issue base_hw_issues_model_tNOx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tGOx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tGOx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
 	BASE_HW_ISSUE_TSIX_1116,
@@ -316,7 +318,7 @@ static const enum base_hw_issue base_hw_issues_tGOx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tGOx_r1p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tGOx_r1p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
 	BASE_HW_ISSUE_TSIX_1116,
@@ -328,7 +330,7 @@ static const enum base_hw_issue base_hw_issues_tGOx_r1p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tGOx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tGOx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TMIX_8133,
@@ -338,7 +340,7 @@ static const enum base_hw_issue base_hw_issues_model_tGOx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tTRx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tTRx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -354,7 +356,7 @@ static const enum base_hw_issue base_hw_issues_tTRx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tTRx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tTRx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -370,7 +372,7 @@ static const enum base_hw_issue base_hw_issues_tTRx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tTRx_r0p2[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tTRx_r0p2[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -385,7 +387,7 @@ static const enum base_hw_issue base_hw_issues_tTRx_r0p2[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tTRx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tTRx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
@@ -397,7 +399,7 @@ static const enum base_hw_issue base_hw_issues_model_tTRx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tNAx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tNAx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -413,7 +415,7 @@ static const enum base_hw_issue base_hw_issues_tNAx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tNAx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tNAx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -428,7 +430,7 @@ static const enum base_hw_issue base_hw_issues_tNAx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tNAx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tNAx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
@@ -440,7 +442,7 @@ static const enum base_hw_issue base_hw_issues_model_tNAx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBEx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBEx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -454,7 +456,7 @@ static const enum base_hw_issue base_hw_issues_tBEx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBEx_r0p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBEx_r0p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -467,7 +469,7 @@ static const enum base_hw_issue base_hw_issues_tBEx_r0p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBEx_r1p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBEx_r1p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -480,7 +482,7 @@ static const enum base_hw_issue base_hw_issues_tBEx_r1p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBEx_r1p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBEx_r1p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -493,7 +495,7 @@ static const enum base_hw_issue base_hw_issues_tBEx_r1p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tBEx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tBEx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
@@ -505,7 +507,7 @@ static const enum base_hw_issue base_hw_issues_model_tBEx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_lBEx_r1p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_lBEx_r1p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -519,7 +521,7 @@ static const enum base_hw_issue base_hw_issues_lBEx_r1p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_lBEx_r1p1[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_lBEx_r1p1[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -532,7 +534,7 @@ static const enum base_hw_issue base_hw_issues_lBEx_r1p1[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBAx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBAx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -545,7 +547,7 @@ static const enum base_hw_issue base_hw_issues_tBAx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tBAx_r1p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tBAx_r1p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -558,7 +560,7 @@ static const enum base_hw_issue base_hw_issues_tBAx_r1p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tBAx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tBAx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
@@ -570,7 +572,7 @@ static const enum base_hw_issue base_hw_issues_model_tBAx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tDUx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tDUx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
@@ -580,7 +582,7 @@ static const enum base_hw_issue base_hw_issues_tDUx_r0p0[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tDUx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tDUx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
@@ -590,50 +592,82 @@ static const enum base_hw_issue base_hw_issues_model_tDUx[] = {
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tODx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tODx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
 	BASE_HW_ISSUE_GPU2019_3212,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tODx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tODx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
 	BASE_HW_ISSUE_GPU2019_3212,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tGRx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tGRx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tGRx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tGRx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_tVAx_r0p0[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tVAx_r0p0[] = {
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 
-static const enum base_hw_issue base_hw_issues_model_tVAx[] = {
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tVAx[] = {
 	BASE_HW_ISSUE_5736,
 	BASE_HW_ISSUE_9435,
 	BASE_HW_ISSUE_TSIX_2033,
 	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
+	BASE_HW_ISSUE_END
+};
+
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_model_tTUx[] = {
+	BASE_HW_ISSUE_5736,
+	BASE_HW_ISSUE_9435,
+	BASE_HW_ISSUE_TSIX_2033,
+	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
+	BASE_HW_ISSUE_END
+};
+
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tTUx_r0p0[] = {
+	BASE_HW_ISSUE_9435,
+	BASE_HW_ISSUE_TSIX_2033,
+	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_TURSEHW_1997,
+	BASE_HW_ISSUE_GPU2019_3878,
+	BASE_HW_ISSUE_END
+};
+
+__attribute__((unused)) static const enum base_hw_issue base_hw_issues_tTUx_r1p0[] = {
+	BASE_HW_ISSUE_9435,
+	BASE_HW_ISSUE_TSIX_2033,
+	BASE_HW_ISSUE_TTRX_1337,
+	BASE_HW_ISSUE_GPU2019_3878,
 	BASE_HW_ISSUE_END
 };
 

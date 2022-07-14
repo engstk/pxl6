@@ -47,9 +47,7 @@ static struct aoc_driver aoc_uwb_sdev = {
 
 static int __init aoc_uwb_service_init(void)
 {
-	int ret;
-
-	ret = aoc_driver_register(&aoc_uwb_sdev);
+	aoc_driver_register(&aoc_uwb_sdev);
 	return 0;
 }
 

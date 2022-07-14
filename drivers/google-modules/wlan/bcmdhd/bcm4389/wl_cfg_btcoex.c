@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver - Dongle Host Driver (DHD) related
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -686,7 +686,7 @@ wl_cfg_uwb_coex_proc_resp_buf(bcm_iov_batch_buf_t *resp, uint16 max_len, uint8 i
 	uint16 tlvs_len;
 
 	version = dtoh16(*(uint16 *)resp);
-	if (version & (BCM_IOV_XTLV_VERSION | BCM_IOV_BATCH_MASK)) {
+	if (version & (BCM_IOV_XTLV_VERSION_0 | BCM_IOV_BATCH_MASK)) {
 		if (!resp->count) {
 			return BCME_RANGE;
 		} else {
@@ -748,7 +748,7 @@ wl_cfg_uwb_coex_fill_ioctl_data(bcm_iov_batch_buf_t *b_buf, const uint8 is_set,
 	bcm_iov_batch_subcmd_t *sub_cmd;
 
 	/* Fill the header */
-	b_buf->version = htol16(BCM_IOV_XTLV_VERSION | BCM_IOV_BATCH_MASK);
+	b_buf->version = htol16(BCM_IOV_XTLV_VERSION_0 | BCM_IOV_BATCH_MASK);
 	b_buf->count = 1;
 	b_buf->is_set = is_set;
 	len = OFFSETOF(bcm_iov_batch_buf_t, cmds[0]);
@@ -794,9 +794,6 @@ wl_cfg_uwb_coex_make_coex_bitmap(int start_ch_idx, int end_ch_idx,
 {
 	int i;
 	uwbcx_coex_bitmap_t *coex_bitmap = (uwbcx_coex_bitmap_t *) (&coex_bitmap_cfg->coex_bitmap);
-	coex_bitmap_cfg->version = UWBCX_COEX_BITMAP_VERSION_V2;
-	coex_bitmap_cfg->len = sizeof(*coex_bitmap_cfg);
-	coex_bitmap_cfg->band = UWBCX_BAND_6G;
 
 	for (i = start_ch_idx; i <= end_ch_idx; i++) {
 		if (i < 16u) {
@@ -880,6 +877,9 @@ wl_cfg_uwb_coex_enable(struct net_device *dev, int enable, int start_ch, int end
 	}
 
 	bzero(&coex_bitmap_cfg, sizeof(uwbcx_coex_bitmap_v2_t));
+	coex_bitmap_cfg.version = UWBCX_COEX_BITMAP_VERSION_V2;
+	coex_bitmap_cfg.len = sizeof(coex_bitmap_cfg);
+	coex_bitmap_cfg.band = UWBCX_BAND_6G;
 
 	/* Validate UWB Coex channel in case of turnning on */
 	if (enable && (((start_ch_idx = wl_cfg_uwb_coex_get_ch_idx(start_ch)) < 0) ||

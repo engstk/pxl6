@@ -36,48 +36,9 @@
  * Set to -1 (disabled) until we want to have deep-sleep enabled by default. */
 #define DW3000_AUTO_DEEP_SLEEP_MARGIN_US -1
 
-static int dw3000_bw_comp = 0;
-module_param_named(bw_compensation, dw3000_bw_comp, int, 0660);
-MODULE_PARM_DESC(bw_compensation,
-		 "Activate/Deactivate bandwidth compensation mechanism");
-
-static int dw3000_thread_cpu = -1;
-module_param_named(cpu, dw3000_thread_cpu, int, 0444);
-MODULE_PARM_DESC(cpu, "CPU on which the DW state machine's thread will run");
-
 int dw3000_qos_latency = 0;
-module_param_named(qos_latency, dw3000_qos_latency, int, 0660);
-MODULE_PARM_DESC(qos_latency,
-		 "Latency request to PM QoS on active ranging in microsecond");
 
-static int dw3000_sp0_rx_antenna = 0;
-module_param_named(sp0_rx_antenna, dw3000_sp0_rx_antenna, int, 0660);
-MODULE_PARM_DESC(sp0_rx_antenna,
-		 "override antenna to use to receive SP0");
-
-static int dw3000_wifi_coex_gpio = 4;
-module_param_named(wificoex_gpio, dw3000_wifi_coex_gpio, int, 0444);
-MODULE_PARM_DESC(wificoex_gpio,
-		 "WiFi coexistence GPIO number, -1 for disabled (default)");
-
-static unsigned dw3000_wifi_coex_delay_us = 1000;
-module_param_named(wificoex_delay_us, dw3000_wifi_coex_delay_us, uint, 0444);
-MODULE_PARM_DESC(wificoex_delay_us,
-		 "Delay between WiFi coexistence GPIO activation and TX in us "
-		 "(default is 1000us)");
-
-static unsigned dw3000_wifi_coex_margin_us = 500;
-module_param_named(wificoex_margin_us, dw3000_wifi_coex_margin_us, uint, 0444);
-MODULE_PARM_DESC(wificoex_margin_us,
-		 "Margin to add to the WiFi Coex delay for SPI transactions "
-		 "(default is 500us)");
-
-static unsigned dw3000_wifi_coex_interval_us = 2000;
-module_param_named(wificoex_interval_us, dw3000_wifi_coex_interval_us, uint,
-		   0444);
-MODULE_PARM_DESC(wificoex_interval_us,
-		 "Minimum interval between two operations in us under which "
-		 "WiFi coexistence GPIO is kept active (default is 2000us)");
+unsigned dw3000_regulator_delay_us = 1000;
 
 static int dw3000_lna_pa_mode = 0;
 module_param_named(lna_pa_mode, dw3000_lna_pa_mode, int, 0444);
@@ -85,10 +46,28 @@ MODULE_PARM_DESC(
 	lna_pa_mode,
 	"Configure LNA/PA mode. May conflict with WiFi coexistence GPIO number, 0 for disabled (default)");
 
+/**
+ * dw3000_spi_probe() - Probe and initialize DW3000 SPI device
+ * @spi: the SPI device to probe and initialize
+ *
+ * Called when module is loaded and an SPI controller driver exist.
+ * This function allocates private device structure and then initialize
+ *
+ * - SPI, HRTimer, waitqueue,
+ * - sysfs/debugfs,
+ * - regulators, GPIO & IRQ from DT,
+ * - IRQ & events processing thread,
+ *
+ * Then, if no errors, the device is registered to MCPS upper-layer and
+ * the processing thread is started to do device probing.
+ *
+ * Return: 0 if device probed correctly else a negative error.
+ */
 static int dw3000_spi_probe(struct spi_device *spi)
 {
 	struct dw3000 *dw;
 	int rc;
+	int dw3000_thread_cpu;
 
 	/* Allocate MCPS 802.15.4 device */
 	dw = dw3000_mcps_alloc(&spi->dev);
@@ -99,31 +78,45 @@ static int dw3000_spi_probe(struct spi_device *spi)
 	dw->llhw->hw->parent = &spi->dev;
 	spi_set_drvdata(spi, dw);
 	dw->spi = spi;
-	dw->coex_gpio = (s8)dw3000_wifi_coex_gpio;
-	dw->coex_delay_us = dw3000_wifi_coex_delay_us;
-	dw->coex_margin_us = dw3000_wifi_coex_margin_us;
-	dw->coex_interval_us = dw3000_wifi_coex_interval_us;
+
+	/* Initialization of the wifi coex parameters */
+	rc = dw3000_setup_wifi_coex(dw);
+	if (rc != 0)
+		goto err_wifi_coex;
+
+	/* Initialization of thread cpu */
+	rc = dw3000_setup_thread_cpu(dw, &dw3000_thread_cpu);
+	if (rc != 0)
+		goto err_thread_cpu;
+
+	/* Initialization of qos latency */
+	rc = dw3000_setup_qos_latency(dw);
+	if (rc != 0)
+		goto err_qos_latency;
+
+	/* Initialization of regulator delay */
+	rc = dw3000_setup_regulator_delay(dw);
+	if (rc != 0)
+		goto err_regulator_delay;
+
 	dw->lna_pa_mode = (s8)dw3000_lna_pa_mode;
 #if (KERNEL_VERSION(4, 13, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE)
 	dw->spi_pid = spi->controller->kworker->task->pid;
+#else
+	dw->spi_pid = spi->controller->kworker.task->pid;
+#endif
 #else
 	dw->spi_pid = spi->master->kworker.task->pid;
 #endif
 	dw->auto_sleep_margin_us = DW3000_AUTO_DEEP_SLEEP_MARGIN_US;
-	dw->bw_comp = dw3000_bw_comp;
 	dw->current_operational_state = DW3000_OP_STATE_OFF;
 	init_waitqueue_head(&dw->operational_state_wq);
 	/* Initialization of the idle timer for wakeup. */
 	hrtimer_init(&dw->idle_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	dw->idle_timer.function = dw3000_idle_timeout;
 
-	if (dw3000_sp0_rx_antenna >= ANTMAX) {
-		dev_warn(dw->dev, "sp0 rx antenna is out of antenna range");
-		dw3000_sp0_rx_antenna = -1;
-	}
-	dw->sp0_rx_antenna = dw3000_sp0_rx_antenna;
-
-	dev_info(dw->dev, "Loading driver UWBM-2.0.0-21121401");
+	dev_info(dw->dev, "Loading driver...2022_03_04");
 	dw3000_sysfs_init(dw);
 
 	/* Setup SPI parameters */
@@ -148,6 +141,27 @@ static int dw3000_spi_probe(struct spi_device *spi)
 	rc = spi_setup(spi);
 	if (rc != 0)
 		goto err_spi_setup;
+#if (KERNEL_VERSION(5, 5, 0) <= LINUX_VERSION_CODE)
+	/* Setup SPI controller CS timings */
+	{
+		struct spi_delay dly = { .unit = SPI_DELAY_UNIT_NSECS,
+					 .value = 0 };
+		rc = spi_set_cs_timing(spi, &dly, &dly, &dly);
+		if (rc != 0)
+			goto err_spi_setup;
+	}
+#endif
+	/* Request and setup regulators if availables*/
+	dw3000_setup_regulators(dw);
+
+	/* Request and setup the reset GPIO pin */
+	/* This leave the DW3000 in reset state until dw3000_hardreset() put
+	   the GPIO back in input mode.
+	   This also ensure no spurious IRQ fire during the dw3000_setup_irq()
+	   call below. (If the GPIO state is well maintained low). */
+	rc = dw3000_setup_reset_gpio(dw);
+	if (rc != 0)
+		goto err_setup_gpios;
 
 	/* Allocate pre-computed SPI messages for fast access some registers */
 	rc = dw3000_transfers_init(dw);
@@ -163,19 +177,9 @@ static int dw3000_spi_probe(struct spi_device *spi)
 			rc);
 		goto err_state_init;
 	}
+
 	dev_info(dw->dev, "SPI pid: %u, dw3000 pid: %u\n", dw->spi_pid,
 		 dw->dw3000_pid);
-
-	/* Request and setup the reset GPIO pin */
-	/* This leave the DW3000 in reset state until dw3000_hardreset() put
-	   the GPIO back in input mode. */
-	rc = dw3000_setup_reset_gpio(dw);
-	if (rc != 0)
-		goto err_setup_gpios;
-
-	/* Request and setup regulators if availables*/
-	dw3000_setup_regulators(dw);
-
 	/* Request and setup the irq GPIO pin */
 	rc = dw3000_setup_irq(dw);
 	if (rc != 0)
@@ -209,6 +213,7 @@ static int dw3000_spi_probe(struct spi_device *spi)
 
 err_debugfs:
 err_state_start:
+	dw3000_pm_qos_remove_request(dw);
 	dw3000_mcps_unregister(dw);
 err_register_hw:
 err_setup_irq:
@@ -218,14 +223,30 @@ err_transfers_init:
 err_setup_gpios:
 err_spi_setup:
 	dw3000_sysfs_remove(dw);
+err_regulator_delay:
+err_qos_latency:
+err_thread_cpu:
+err_wifi_coex:
 	dw3000_mcps_free(dw);
 err_alloc_hw:
 	return rc;
 }
 
+/**
+ * dw3000_spi_remove() - Remove DW3000 SPI device
+ * @spi: the SPI device to remove
+ *
+ * Called when module is unloaded, this function removes all
+ * sysfs/debugfs files, unregister device from the MCPS
+ * module and them free all remaining resources.
+ *
+ * Return: always 0
+ */
 static int dw3000_spi_remove(struct spi_device *spi)
 {
 	struct dw3000 *dw = spi_get_drvdata(spi);
+
+	dw3000_cir_data_alloc_count(dw, 0);
 
 	dw3000_sysfs_remove(dw);
 
@@ -276,6 +297,9 @@ static struct spi_driver dw3000_driver = {
 };
 module_spi_driver(dw3000_driver);
 
+#ifdef GITVERSION
+MODULE_VERSION(GITVERSION);
+#endif
 MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Thomas Venriès <tvenries@sevenhugs.com>");
+MODULE_AUTHOR("David Girault <david.girault@qorvo.com>");
 MODULE_DESCRIPTION("DecaWave DW3000 IEEE 802.15.4 driver");

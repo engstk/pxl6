@@ -26,7 +26,7 @@
 
 static void mcps802154_fproc_broken_enter(struct mcps802154_local *local)
 {
-	pr_err("mcps802154: entering broken state for %s\n",
+	pr_err_ratelimited("mcps802154: entering broken state for %s\n",
 			   wpan_phy_name(local->hw->phy));
 	local->broken = true;
 }

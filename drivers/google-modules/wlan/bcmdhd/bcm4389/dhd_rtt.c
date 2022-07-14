@@ -1,7 +1,7 @@
 /*
  * Broadcom Dongle Host Driver (DHD), RTT
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -494,6 +494,7 @@ ftm_intvl2nsec(const wl_proxd_intvl_t *intvl)
 	}
 	return ret;
 }
+
 uint64
 ftm_intvl2usec(const wl_proxd_intvl_t *intvl)
 {
@@ -533,6 +534,7 @@ ftm_get_statusmap_info(wl_proxd_status_t id, const ftm_status_map_host_entry_t *
 	}
 	return RTT_STATUS_FAILURE; /* not found */
 }
+
 /*
 * lookup 'id' (as a key) from a table
 * if found, return the entry pointer, otherwise return NULL
@@ -727,7 +729,7 @@ rtt_alloc_getset_buf(dhd_pub_t *dhd, wl_proxd_method_t method, wl_proxd_session_
 	}
 
 	/* setup proxd-FTM-method iovar header */
-	p_proxd_iov->version = htol16(WL_PROXD_API_VERSION);
+	p_proxd_iov->version = htol16(WL_PROXD_API_VERSION_3);
 	p_proxd_iov->len = htol16(proxd_iovsize); /* caller may adjust it based on #of TLVs */
 	p_proxd_iov->cmd = htol16(cmdid);
 	p_proxd_iov->method = htol16(method);
@@ -1320,6 +1322,7 @@ dhd_rtt_delete_session(dhd_pub_t *dhd, wl_proxd_session_id_t session_id)
 	return dhd_rtt_common_set_handler(dhd, &subcmd_info,
 			WL_PROXD_METHOD_FTM, session_id);
 }
+
 #ifdef WL_NAN
 int
 dhd_rtt_delete_nan_session(dhd_pub_t *dhd)
@@ -1331,6 +1334,7 @@ dhd_rtt_delete_nan_session(dhd_pub_t *dhd)
 	wl_cfgnan_terminate_directed_rtt_sessions(dev, cfg);
 	return BCME_OK;
 }
+
 /* API to find out if the given Peer Mac from FTM events
 * is nan-peer. Based on this we will handle the SESSION_END
 * event. For nan-peer FTM_SESSION_END event is ignored and handled in
@@ -1475,7 +1479,7 @@ dhd_rtt_event_trigger_failure(dhd_pub_t *dhd, rtt_target_info_t *rtt_target)
 	msg.datalen = hton32(sizeof(p_event));
 	msg.addr = rtt_target->addr;
 
-	p_event.version = htol16(WL_PROXD_API_VERSION);
+	p_event.version = htol16(WL_PROXD_API_VERSION_3);
 	p_event.type = htol16(WL_PROXD_EVENT_SESSION_END);
 	p_event.len = htol16(OFFSETOF(wl_proxd_event_t, tlvs));
 
@@ -2496,6 +2500,7 @@ dhd_rtt_retry(dhd_pub_t *dhd)
 		RTT_SCHED_RTT_RETRY_GEOFENCE);
 
 }
+
 static void
 dhd_rtt_retry_work(struct work_struct *work)
 {
@@ -3152,7 +3157,6 @@ exit:
 	}
 	return err;
 }
-
 
 /* Work thread API to start the RTT.
  * If all targets are AP only, then this API will confgure all sessions
@@ -4134,6 +4138,7 @@ dhd_rtt_convert_results_to_host_v3(rtt_result_t *rtt_result, const uint8 *p_data
 	}
 	return err;
 }
+
 #ifdef WL_CFG80211
 /* Common API for handling Session End.
 * This API will flush out the results for a peer MAC.
@@ -4664,9 +4669,9 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 	}
 	p_event = (wl_proxd_event_t *) event_data;
 	version = ltoh16(p_event->version);
-	if (version < WL_PROXD_API_VERSION) {
+	if (version < WL_PROXD_API_VERSION_3) {
 		DHD_RTT_ERR(("ignore non-ftm event version = 0x%0x < WL_PROXD_API_VERSION (0x%x)\n",
-			version, WL_PROXD_API_VERSION));
+			version, WL_PROXD_API_VERSION_3));
 		return ret;
 	}
 
@@ -5305,7 +5310,7 @@ dhd_rtt_init(dhd_pub_t *dhd)
 	DHD_RTT_MEM(("dhd_rtt_init ENTRY\n"));
 
 	ret = dhd_rtt_get_version(dhd, &version);
-	if (ret == BCME_OK && (version == WL_PROXD_API_VERSION)) {
+	if (ret == BCME_OK && (version == WL_PROXD_API_VERSION_3)) {
 		DHD_RTT_ERR(("%s : FTM is supported\n", __FUNCTION__));
 #ifdef WL_RTT_ONE_WAY
 		rtt_status->rtt_capa.proto |= RTT_CAP_ONE_WAY;
@@ -5332,7 +5337,7 @@ dhd_rtt_init(dhd_pub_t *dhd)
 			DHD_RTT_ERR(("%s : FTM is not supported\n", __FUNCTION__));
 		} else {
 			DHD_RTT_ERR(("%s : FTM version mismatch between HOST (%d) and FW (%d)\n",
-				__FUNCTION__, WL_PROXD_API_VERSION, version));
+				__FUNCTION__, WL_PROXD_API_VERSION_3, version));
 		}
 		goto exit;
 	}

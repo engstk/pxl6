@@ -7,6 +7,7 @@
 
 #include <linux/atomic.h>
 #include <linux/bitops.h>
+#include <linux/cred.h>
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/eventfd.h>
@@ -20,6 +21,8 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/uaccess.h>
+#include <linux/uidgid.h>
 
 #include "edgetpu-async.h"
 #include "edgetpu-config.h"
@@ -89,10 +92,14 @@ static int edgetpu_kci_join_group_worker(struct kci_worker_param *param)
 	struct edgetpu_device_group *group = param->group;
 	uint i = param->idx;
 	struct edgetpu_dev *etdev = edgetpu_device_group_nth_etdev(group, i);
+	int ret;
 
 	etdev_dbg(etdev, "%s: join group %u %u/%u", __func__,
 		  group->workload_id, i + 1, group->n_clients);
-	return edgetpu_kci_join_group(etdev->kci, group->n_clients, i);
+	ret = edgetpu_kci_join_group(etdev->kci, group->n_clients, i);
+	if (!ret)
+		edgetpu_sw_wdt_inc_active_ref(etdev);
+	return ret;
 }
 
 static int edgetpu_kci_leave_group_worker(struct kci_worker_param *param)
@@ -102,12 +109,21 @@ static int edgetpu_kci_leave_group_worker(struct kci_worker_param *param)
 	struct edgetpu_dev *etdev = edgetpu_device_group_nth_etdev(group, i);
 
 	etdev_dbg(etdev, "%s: leave group %u", __func__, group->workload_id);
-	edgetpu_kci_update_usage_async(etdev);
+	edgetpu_sw_wdt_dec_active_ref(etdev);
+	edgetpu_kci_update_usage(etdev);
 	edgetpu_kci_leave_group(etdev->kci);
 	return 0;
 }
 
 #endif /* EDGETPU_HAS_MCP */
+
+static int edgetpu_group_activate_external_mailbox(struct edgetpu_device_group *group)
+{
+	if (!group->ext_mailbox)
+		return 0;
+	edgetpu_mailbox_reinit_external_mailbox(group);
+	return edgetpu_mailbox_activate_external_mailbox(group);
+}
 
 /*
  * Activates the VII mailbox @group owns.
@@ -117,19 +133,32 @@ static int edgetpu_kci_leave_group_worker(struct kci_worker_param *param)
 static int edgetpu_group_activate(struct edgetpu_device_group *group)
 {
 	u8 mailbox_id;
-	int ret;
+	int ret, i;
+	struct edgetpu_dev *etdev;
 
 	if (edgetpu_group_mailbox_detached_locked(group))
 		return 0;
+
 	mailbox_id = edgetpu_group_context_id_locked(group);
 	ret = edgetpu_mailbox_activate(group->etdev, mailbox_id, group->vcid, !group->activated);
-	if (ret)
+	if (ret) {
 		etdev_err(group->etdev, "activate mailbox for VCID %d failed with %d", group->vcid,
 			  ret);
-	else
+	} else {
 		group->activated = true;
+		for (i = 0; i < group->n_clients; i++) {
+			etdev = edgetpu_device_group_nth_etdev(group, i);
+			edgetpu_sw_wdt_inc_active_ref(etdev);
+		}
+	}
 	atomic_inc(&group->etdev->job_count);
 	return ret;
+}
+
+static void edgetpu_group_deactivate_external_mailbox(struct edgetpu_device_group *group)
+{
+	edgetpu_mailbox_deactivate_external_mailbox(group);
+	edgetpu_mailbox_disable_external_mailbox(group);
 }
 
 /*
@@ -140,9 +169,16 @@ static int edgetpu_group_activate(struct edgetpu_device_group *group)
 static void edgetpu_group_deactivate(struct edgetpu_device_group *group)
 {
 	u8 mailbox_id;
+	int i;
+	struct edgetpu_dev *etdev;
 
 	if (edgetpu_group_mailbox_detached_locked(group))
 		return;
+
+	for (i = 0; i < group->n_clients; i++) {
+		etdev = edgetpu_device_group_nth_etdev(group, i);
+		edgetpu_sw_wdt_dec_active_ref(etdev);
+	}
 	mailbox_id = edgetpu_group_context_id_locked(group);
 	edgetpu_mailbox_deactivate(group->etdev, mailbox_id);
 }
@@ -448,15 +484,8 @@ void edgetpu_group_notify(struct edgetpu_device_group *group, uint event_id)
  */
 static void edgetpu_device_group_release(struct edgetpu_device_group *group)
 {
-	int i;
-	struct edgetpu_dev *etdev;
-
 	edgetpu_group_clear_events(group);
 	if (is_finalized_or_errored(group)) {
-		for (i = 0; i < group->n_clients; i++) {
-			etdev = edgetpu_device_group_nth_etdev(group, i);
-			edgetpu_sw_wdt_dec_active_ref(etdev);
-		}
 		edgetpu_device_group_kci_leave(group);
 		/*
 		 * Mappings clear should be performed after had a handshake with
@@ -791,8 +820,7 @@ bool edgetpu_device_group_is_leader(struct edgetpu_device_group *group,
 
 int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 {
-	int ret = 0, i;
-	struct edgetpu_dev *etdev;
+	int ret = 0;
 	bool mailbox_attached = false;
 	struct edgetpu_client *leader;
 
@@ -868,10 +896,6 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 
 	group->status = EDGETPU_DEVICE_GROUP_FINALIZED;
 
-	for (i = 0; i < group->n_clients; i++) {
-		etdev = edgetpu_device_group_nth_etdev(group, i);
-		edgetpu_sw_wdt_inc_active_ref(etdev);
-	}
 	mutex_unlock(&group->lock);
 	return 0;
 
@@ -1145,10 +1169,16 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 
 	if (size == 0)
 		return ERR_PTR(-EINVAL);
+	if (!access_ok((const void *)host_addr, size)) {
+		etdev_err(etdev, "invalid address range in buffer map request");
+		return ERR_PTR(-EFAULT);
+	}
 	offset = host_addr & (PAGE_SIZE - 1);
-	/* overflow check */
-	if (unlikely((size + offset) / PAGE_SIZE >= UINT_MAX - 1 || size + offset < size))
-		return ERR_PTR(-ENOMEM);
+	/* overflow check (should also be caught by access_ok) */
+	if (unlikely((size + offset) / PAGE_SIZE >= UINT_MAX - 1 || size + offset < size)) {
+		etdev_err(etdev, "address overflow in buffer map request");
+		return ERR_PTR(-EFAULT);
+	}
 	num_pages = DIV_ROUND_UP((size + offset), PAGE_SIZE);
 	etdev_dbg(etdev, "%s: hostaddr=%#llx pages=%u", __func__, host_addr, num_pages);
 	/*
@@ -1157,8 +1187,8 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	 */
 	pages = kvmalloc((num_pages * sizeof(*pages)), GFP_KERNEL | __GFP_NOWARN);
 	if (!pages) {
-		etdev_dbg(etdev, "%s: kvmalloc pages failed (%lu bytes)\n",
-			  __func__, (num_pages * sizeof(*pages)));
+		etdev_err(etdev, "out of memory allocating pages (%lu bytes)",
+			  num_pages * sizeof(*pages));
 		return ERR_PTR(-ENOMEM);
 	}
 	/*
@@ -1181,10 +1211,20 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 		*pnum_pages = num_pages;
 		return pages;
 	}
+	if (ret == -EFAULT && !*preadonly) {
+		foll_flags &= ~FOLL_WRITE;
+		*preadonly = true;
+		ret = pin_user_pages_fast(host_addr & PAGE_MASK, num_pages,
+					  foll_flags, pages);
+	}
 	if (ret < 0) {
 		etdev_dbg(etdev, "pin_user_pages failed %u:%pK-%u: %d",
 			  group->workload_id, (void *)host_addr, num_pages,
 			  ret);
+		if (ret == -EFAULT)
+			etdev_err(etdev,
+				  "bad address locking %u pages for %s",
+				  num_pages, *preadonly ? "read" : "write");
 		if (ret != -ENOMEM) {
 			num_pages = 0;
 			goto error;
@@ -1201,8 +1241,8 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	/* Allocate our own vmas array non-contiguous. */
 	vmas = kvmalloc((num_pages * sizeof(*vmas)), GFP_KERNEL | __GFP_NOWARN);
 	if (!vmas) {
-		etdev_dbg(etdev, "%s: kvmalloc vmas failed (%lu bytes)\n",
-			  __func__, (num_pages * sizeof(*pages)));
+		etdev_err(etdev, "out of memory allocating vmas (%lu bytes)",
+			  num_pages * sizeof(*pages));
 		kvfree(pages);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -1213,6 +1253,10 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 		etdev_dbg(etdev, "pin_user_pages failed %u:%pK-%u: %d",
 			  group->workload_id, (void *)host_addr, num_pages,
 			  ret);
+		if (ret == -ENOMEM)
+			etdev_err(etdev,
+				  "system out of memory locking %u pages",
+				  num_pages);
 		num_pages = 0;
 		goto error;
 	}
@@ -1672,11 +1716,14 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 }
 
 int edgetpu_mmap_csr(struct edgetpu_device_group *group,
-		     struct vm_area_struct *vma)
+		     struct vm_area_struct *vma, bool is_external)
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	int ret = 0;
 	ulong phys_base, vma_size, map_size;
+
+	if (is_external && !uid_eq(current_euid(), GLOBAL_ROOT_UID))
+		return -EPERM;
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_group_finalized_and_attached(group)) {
@@ -1684,9 +1731,18 @@ int edgetpu_mmap_csr(struct edgetpu_device_group *group,
 		goto out;
 	}
 
+	if (is_external && (!group->ext_mailbox || !group->ext_mailbox->descriptors)) {
+		ret = -ENOENT;
+		goto out;
+	}
+
 	vma_size = vma->vm_end - vma->vm_start;
 	map_size = min(vma_size, USERSPACE_CSR_SIZE);
-	phys_base = etdev->regs.phys + group->vii.mailbox->cmd_queue_csr_base;
+	if (is_external)
+		phys_base = etdev->regs.phys +
+			    group->ext_mailbox->descriptors[0].mailbox->cmd_queue_csr_base;
+	else
+		phys_base = etdev->regs.phys + group->vii.mailbox->cmd_queue_csr_base;
 	ret = io_remap_pfn_range(vma, vma->vm_start, phys_base >> PAGE_SHIFT,
 				 map_size, vma->vm_page_prot);
 	if (ret)
@@ -1699,11 +1755,14 @@ out:
 
 int edgetpu_mmap_queue(struct edgetpu_device_group *group,
 		       enum mailbox_queue_type type,
-		       struct vm_area_struct *vma)
+		       struct vm_area_struct *vma, bool is_external)
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	int ret = 0;
 	edgetpu_queue_mem *queue_mem;
+
+	if (is_external && !uid_eq(current_euid(), GLOBAL_ROOT_UID))
+		return -EPERM;
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_group_finalized_and_attached(group)) {
@@ -1711,10 +1770,22 @@ int edgetpu_mmap_queue(struct edgetpu_device_group *group,
 		goto out;
 	}
 
-	if (type == MAILBOX_CMD_QUEUE)
-		queue_mem = &(group->vii.cmd_queue_mem);
-	else
-		queue_mem = &(group->vii.resp_queue_mem);
+	if (is_external && (!group->ext_mailbox || !group->ext_mailbox->descriptors)) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	if (type == MAILBOX_CMD_QUEUE) {
+		if (is_external)
+			queue_mem = &(group->ext_mailbox->descriptors[0].cmd_queue_mem);
+		else
+			queue_mem = &(group->vii.cmd_queue_mem);
+	} else {
+		if (is_external)
+			queue_mem = &(group->ext_mailbox->descriptors[0].resp_queue_mem);
+		else
+			queue_mem = &(group->vii.resp_queue_mem);
+	}
 
 	if (!queue_mem->vaddr) {
 		ret = -ENXIO;
@@ -1820,6 +1891,7 @@ void edgetpu_group_close_and_detach_mailbox(struct edgetpu_device_group *group)
 	if (is_finalized_or_errored(group)) {
 		edgetpu_group_deactivate(group);
 		edgetpu_group_detach_mailbox_locked(group);
+		edgetpu_group_deactivate_external_mailbox(group);
 	}
 	mutex_unlock(&group->lock);
 }
@@ -1849,8 +1921,14 @@ int edgetpu_group_attach_and_open_mailbox(struct edgetpu_device_group *group)
 		goto out_unlock;
 	ret = edgetpu_group_activate(group);
 	if (ret)
-		edgetpu_group_detach_mailbox_locked(group);
+		goto error_detach;
+	ret = edgetpu_group_activate_external_mailbox(group);
+	if (!ret)
+		goto out_unlock;
 
+	edgetpu_group_deactivate(group);
+error_detach:
+	edgetpu_group_detach_mailbox_locked(group);
 out_unlock:
 	mutex_unlock(&group->lock);
 	return ret;

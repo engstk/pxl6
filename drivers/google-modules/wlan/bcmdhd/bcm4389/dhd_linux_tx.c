@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD),
  * Linux-specific network interface for transmit(tx) path
  *
- * Copyright (C) 2021, Broadcom.
+ * Copyright (C) 2022, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -189,10 +189,20 @@ BCMFASTPATH(__dhd_sendpkt)(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 	dhd_info_t *dhd = (dhd_info_t *)(dhdp->info);
 	struct ether_header *eh = NULL;
 	uint8 pkt_flow_prio;
+	dhd_if_t *ifp;
+	unsigned long flags;
+	uint datalen;
 
-#if (defined(DHD_L2_FILTER) || (defined(BCM_ROUTER_DHD) && defined(QOS_MAP_SET)))
-	dhd_if_t *ifp = dhd_get_ifp(dhdp, ifidx);
-#endif /* DHD_L2_FILTER || (BCM_ROUTER_DHD && QOS_MAP_SET) */
+	DHD_GENERAL_LOCK(dhdp, flags);
+	ifp = dhd_get_ifp(dhdp, ifidx);
+	if (!ifp || ifp->del_in_progress) {
+		DHD_ERROR(("%s: ifp:%p del_in_progress:%d\n",
+			__FUNCTION__, ifp, ifp ? ifp->del_in_progress : 0));
+		DHD_GENERAL_UNLOCK(dhdp, flags);
+		PKTCFREE(dhdp->osh, pktbuf, TRUE);
+		return -ENODEV;
+	}
+	DHD_GENERAL_UNLOCK(dhdp, flags);
 
 	/* Reject if down */
 	if (!dhdp->up || (dhdp->busstate == DHD_BUS_DOWN)) {
@@ -216,6 +226,8 @@ BCMFASTPATH(__dhd_sendpkt)(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 		PKTCFREE(dhdp->osh, pktbuf, TRUE);
 		return BCME_ERROR;
 	}
+
+	datalen = PKTLEN(dhdp->osh, pktbuf);
 
 #ifdef DHD_L2_FILTER
 	/* if dhcp_unicast is enabled, we need to convert the */
@@ -417,6 +429,24 @@ BCMFASTPATH(__dhd_sendpkt)(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 
 #endif /* BCMDBUS */
 
+	/* Update the packet counters here, as it is called for LB Tx and non-LB Tx too */
+	if (ret) {
+		ifp->stats.tx_dropped++;
+		dhdp->tx_dropped++;
+	} else {
+#ifdef PROP_TXSTATUS
+		/* tx_packets counter can counted only when wlfc is disabled */
+		if (!dhd_wlfc_is_supported(dhdp))
+#endif
+		{
+			dhdp->tx_packets++;
+			dhdp->tx_bytes += datalen;
+			ifp->stats.tx_packets++;
+			ifp->stats.tx_bytes += datalen;
+		}
+		dhdp->actual_tx_pkts++;
+	}
+
 	return ret;
 }
 
@@ -524,7 +554,6 @@ netdev_tx_t
 BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 {
 	int ret;
-	uint datalen;
 	void *pktbuf;
 	dhd_info_t *dhd = DHD_DEV_INFO(net);
 	dhd_if_t *ifp = NULL;
@@ -590,7 +619,7 @@ BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 
 	DHD_GENERAL_LOCK(&dhd->pub, flags);
 	if (DHD_BUS_CHECK_SUSPEND_OR_SUSPEND_IN_PROGRESS(&dhd->pub)) {
-		DHD_ERROR(("%s: bus is in suspend(%d) or suspending(0x%x) state!!\n",
+		DHD_ERROR_RLMT(("%s: bus is in suspend(%d) or suspending(0x%x) state!!\n",
 			__FUNCTION__, dhd->pub.busstate, dhd->pub.dhd_bus_busy_state));
 		DHD_BUS_BUSY_CLEAR_IN_TX(&dhd->pub);
 #ifdef PCIE_FULL_DONGLE
@@ -650,7 +679,13 @@ BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 		DHD_OS_WAKE_UNLOCK(&dhd->pub);
 		return NETDEV_TX_BUSY;
 	}
-
+#ifdef RPM_FAST_TRIGGER
+	/* Xmit is running reset RPM fast trigger */
+	if (dhd->pub.rpm_fast_trigger) {
+		DHD_ERROR(("%s: Reset RPM fast trigger\n", __FUNCTION__));
+		dhd->pub.rpm_fast_trigger = FALSE;
+	}
+#endif /* RPM_FAST_TRIGGER */
 	DHD_GENERAL_UNLOCK(&dhd->pub, flags);
 
 	/* If tput test is in progress */
@@ -671,8 +706,6 @@ BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 		memmove(skb->data, data, length);
 		PKTSETLEN(dhd->pub.osh, skb, length);
 	}
-
-	datalen  = PKTLEN(dhd->pub.osh, skb);
 
 	/* Make sure there's enough room for any header */
 #if !defined(BCM_ROUTER_DHD)
@@ -866,27 +899,9 @@ BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 #else
 	ret = __dhd_sendpkt(&dhd->pub, ifidx, pktbuf);
 #endif
+	BCM_REFERENCE(ret);
 
 done:
-	/* XXX Bus modules may have different "native" error spaces? */
-	/* XXX USB is native linux and it'd be nice to retain errno  */
-	/* XXX meaning, but SDIO is not so we'd need an OSL_ERROR.   */
-	if (ret) {
-		ifp->stats.tx_dropped++;
-		dhd->pub.tx_dropped++;
-	} else {
-#ifdef PROP_TXSTATUS
-		/* tx_packets counter can counted only when wlfc is disabled */
-		if (!dhd_wlfc_is_supported(&dhd->pub))
-#endif
-		{
-			dhd->pub.tx_packets++;
-			ifp->stats.tx_packets++;
-			ifp->stats.tx_bytes += datalen;
-		}
-		dhd->pub.actual_tx_pkts++;
-	}
-
 	DHD_GENERAL_LOCK(&dhd->pub, flags);
 	DHD_BUS_BUSY_CLEAR_IN_TX(&dhd->pub);
 	DHD_IF_CLR_TX_ACTIVE(ifp, DHD_TX_START_XMIT);
@@ -1010,6 +1025,7 @@ dhd_txcomplete(dhd_pub_t *dhdp, void *txp, bool success)
 		if (ifp != NULL) {
 			if (success) {
 				dhd->pub.tx_packets++;
+				dhd->pub.tx_bytes += datalen;
 				ifp->stats.tx_packets++;
 				ifp->stats.tx_bytes += datalen;
 			} else {
@@ -1105,9 +1121,6 @@ dhd_eap_txcomplete(dhd_pub_t *dhdp, void *txp, bool success, int ifidx)
 }
 #endif /* DHD_4WAYM4_FAIL_DISCONNECT */
 
-#ifdef DHD_PKT_LOGGING_DBGRING
-extern void dhd_os_dbg_urgent_pullreq(void *os_priv, int ring_id);
-#endif /* DHD_PKT_LOGGING_DBGRING */
 void
 dhd_handle_pktdata(dhd_pub_t *dhdp, int ifidx, void *pkt, uint8 *pktdata, uint32 pktid,
 	uint32 pktlen, uint16 *pktfate, uint8 *dhd_udr, uint8 *dhd_igmp,
@@ -1228,6 +1241,7 @@ dhd_handle_pktdata(dhd_pub_t *dhdp, int ifidx, void *pkt, uint8 *pktdata, uint32
 	switch (pkt_type) {
 		case PKT_TYPE_DHCP:
 			dhd_dhcp_dump(dhdp, ifidx, pktdata, tx, &pkthash, pktfate);
+			dhd_send_supp_dhcp(dhdp, ifidx, pktdata, tx, pktfate);
 			break;
 		case PKT_TYPE_ICMP:
 			dhd_icmp_dump(dhdp, ifidx, pktdata, tx, &pkthash, pktfate);
@@ -1240,6 +1254,7 @@ dhd_handle_pktdata(dhd_pub_t *dhdp, int ifidx, void *pkt, uint8 *pktdata, uint32
 			break;
 		case PKT_TYPE_EAP:
 			dhd_dump_eapol_message(dhdp, ifidx, pktdata, pktlen, tx, &pkthash, pktfate);
+			dhd_send_supp_eap(dhdp, ifidx, pktdata, pktlen, tx, pktfate);
 			break;
 		default:
 			break;

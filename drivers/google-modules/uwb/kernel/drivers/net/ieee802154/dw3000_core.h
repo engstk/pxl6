@@ -49,6 +49,20 @@
 #define DW3000_STS_MODE_SDC 0x8 /* Enable Super Deterministic Codes */
 #define DW3000_STS_CONFIG_MASK 0xB
 
+/* Offset of each area in CIR accumulator memory */
+#define DW3000_ACC_MEM_IPATOV_OFFSET 0x0 /* Base address */
+#define DW3000_ACC_MEM_PRF64_SIZE 1016 /* Bank size when PRF=64 MHz */
+#define DW3000_ACC_MEM_PRF16_SIZE 992 /* Bank size when PRF=16 MHz */
+#define DW3000_ACC_MEM_STS_OFFSET \
+	1024 /* Base address when STS enabled and pdoa != 3 */
+#define DW3000_ACC_MEM_STS_SIZE \
+	512 /* Bank size when STS enabled and pdoa != 3 */
+#define DW3000_ACC_MEM_STS_PDOA3_OFFSET \
+	(DW3000_ACC_MEM_STS_OFFSET +    \
+	 DW3000_ACC_MEM_STS_SIZE) /* Base address when sts enabled and pdoa mode 3 */
+#define DW3000_ACC_MEM_STS_PDOA3_SZ \
+	512 /* Bank size when sts enabled and pdoa mode 3 */
+
 /**
  * DW3000_GET_STS_LEN_UNIT_VALUE() - Convert STS length enum into unit value
  * @x: value from enum dw3000_sts_lengths
@@ -87,6 +101,14 @@
 #define DW3000_BR_850K 0 /* UWB bit rate 850 kbits/s */
 #define DW3000_BR_6M8 1 /* UWB bit rate 6.8 Mbits/s */
 
+/* Constants for selecting the PHR mode */
+#define DW3000_PHRMODE_STD 0x0 /* standard PHR mode */
+#define DW3000_PHRMODE_EXT 0x1 /* DW proprietary extended frames PHR mode */
+
+/* Constants for selecting the bit rate for the PHR */
+#define DW3000_PHRRATE_STD 0x0 /* standard PHR rate, 850 kbits/s */
+#define DW3000_PHRRATE_DTA 0x1 /* PHR at data rate 6.8 Mbits/s */
+
 /* Constants for specifying Preamble Acquisition Chunk (PAC) Size in symbols */
 #define DW3000_PAC8 0 /* recommended for RX of preamble length  128 and below */
 #define DW3000_PAC16 1 /* recommended for RX of preamble length 256 */
@@ -123,6 +145,12 @@ enum spi_modes {
 #define DW3000_RESET_CTRX 0x0f
 #define DW3000_RESET_RX 0xef
 #define DW3000_RESET_CLEAR 0xff
+
+/* SYS_STATE_LO register information */
+/* TSE is in IDLE (IDLE_PLL) */
+#define DW3000_SYS_STATE_IDLE 0x3
+/* TSE is in TX but TX is in IDLE */
+#define DW3000_SYS_STATE_TXERR 0xD0000
 
 /* Fast commands */
 /* Turn off TX or RX, clear any TX/RX events and put DW3000 into IDLE */
@@ -170,9 +198,11 @@ enum spi_modes {
 
 /* Size of RX LUT configuration tables */
 #define DW3000_CONFIGMRXLUT_MAX 7
-#define DW3000_DGC_CFG 0x32
+#define DW3000_DGC_CFG 0x38
 #define DW3000_DGC_CFG0 0x10000240
-#define DW3000_DGC_CFG1 0x1b6da489
+#define DW3000_DGC_CFG1 0x1a491248
+#define DW3000_DGC_CFG2 0x2db248db
+
 /* DW3000 SLEEP and WAKEUP configuration parameters */
 #define DW3000_PGFCAL 0x0800
 #define DW3000_GOTORX 0x0200
@@ -200,25 +230,49 @@ enum spi_modes {
 #define DW3000_DGC_TUNE_ADDRESS (0x20)
 #define DW3000_PLL_CC_ADDRESS (0x35)
 
-#define DW3000_GPIO0_FUNC_MASK 0x0000007
-#define DW3000_GPIO1_FUNC_MASK 0x0000038
-#define DW3000_GPIO2_FUNC_MASK 0x00001c0
-#define DW3000_GPIO3_FUNC_MASK 0x0000e00
-#define DW3000_GPIO4_FUNC_MASK 0x0007000
-#define DW3000_GPIO5_FUNC_MASK 0x0038000
-#define DW3000_GPIO6_FUNC_MASK 0x01c0000
-#define DW3000_GPIO7_FUNC_MASK 0x0e00000
-#define DW3000_GPIO8_FUNC_MASK 0x7000000
+/* Bit fields to select information to retrieve from OTP memory */
+#define DW3000_READ_OTP_PID 0x10 /* read part ID from OTP */
+#define DW3000_READ_OTP_LID 0x20 /* read lot ID from OTP */
+#define DW3000_READ_OTP_BAT 0x40 /* read ref voltage from OTP */
+#define DW3000_READ_OTP_TMP 0x80 /* read ref temperature from OTP */
 
-#define DW3000_GPIO0_DIR_OUT_MASK 0x0000001
-#define DW3000_GPIO1_DIR_OUT_MASK 0x0000002
-#define DW3000_GPIO2_DIR_OUT_MASK 0x0000004
-#define DW3000_GPIO3_DIR_OUT_MASK 0x0000008
-#define DW3000_GPIO4_DIR_OUT_MASK 0x0000010
-#define DW3000_GPIO5_DIR_OUT_MASK 0x0000020
-#define DW3000_GPIO6_DIR_OUT_MASK 0x0000040
-#define DW3000_GPIO7_DIR_OUT_MASK 0x0000080
-#define DW3000_GPIO8_DIR_OUT_MASK 0x0000100
+/* The mean XTAL TRIM value measured on multiple E0 samples.
+ * During the initialization the XTAL TRIM value can be read from the OTP and
+ * in case it is not present, the default would be used instead. */
+#define DW3000_DEFAULT_XTAL_TRIM 0x1f
+
+/* The XTAL TRIM BIAS value for +/- 5PPM offset */
+#define DW3000_XTAL_BIAS 0
+
+/* Clock offset value under which the PDoA value is assumed bad. */
+#define DW3000_CFO_THRESHOLD ((s16)(4 * (1 << 26) / 1000000))
+
+/* All RX errors mask */
+#define DW3000_SYS_STATUS_ALL_RX_ERR                                           \
+	(DW3000_SYS_STATUS_RXPHE_BIT_MASK | DW3000_SYS_STATUS_RXFCE_BIT_MASK | \
+	 DW3000_SYS_STATUS_RXFSL_BIT_MASK | DW3000_SYS_STATUS_RXSTO_BIT_MASK | \
+	 DW3000_SYS_STATUS_ARFE_BIT_MASK | DW3000_SYS_STATUS_CIAERR_BIT_MASK | \
+	 DW3000_SYS_STATUS_CPERR_BIT_MASK |                                    \
+	 DW3000_SYS_STATUS_LCSSERR_BIT_MASK)
+
+/* User defined RX timeouts (frame wait timeout and preamble detect timeout)
+   mask. */
+#define DW3000_SYS_STATUS_ALL_RX_TO \
+	(DW3000_SYS_STATUS_RXFTO_BIT_MASK | DW3000_SYS_STATUS_RXPTO_BIT_MASK)
+
+/* All RX events after a correct packet reception mask */
+#define DW3000_SYS_STATUS_ALL_RX_GOOD                                         \
+	(DW3000_SYS_STATUS_RXFR_BIT_MASK | DW3000_SYS_STATUS_RXFCG_BIT_MASK | \
+	 DW3000_SYS_STATUS_RXPRD_BIT_MASK |                                   \
+	 DW3000_SYS_STATUS_RXSFDD_BIT_MASK |                                  \
+	 DW3000_SYS_STATUS_RXPHD_BIT_MASK |                                   \
+	 DW3000_SYS_STATUS_CIA_DONE_BIT_MASK)
+
+/* All TX events mask */
+#define DW3000_SYS_STATUS_ALL_TX                                               \
+	(DW3000_SYS_STATUS_AAT_BIT_MASK | DW3000_SYS_STATUS_TXFRB_BIT_MASK |   \
+	 DW3000_SYS_STATUS_TXPRS_BIT_MASK | DW3000_SYS_STATUS_TXPHS_BIT_MASK | \
+	 DW3000_SYS_STATUS_TXFRS_BIT_MASK)
 
 void dw3000_init_config(struct dw3000 *dw);
 
@@ -231,13 +285,25 @@ void dw3000_transfers_free(struct dw3000 *dw);
 void dw3000_spitests(struct dw3000 *dw);
 bool dw3000_spitests_enabled(struct dw3000 *dw);
 
+int dw3000_wait_idle_state(struct dw3000 *dw);
+int dw3000_poweron(struct dw3000 *dw);
+int dw3000_poweroff(struct dw3000 *dw);
 int dw3000_hardreset(struct dw3000 *dw);
+
 int dw3000_softreset(struct dw3000 *dw);
 int dw3000_check_devid(struct dw3000 *dw);
 
 void dw3000_setup_regulators(struct dw3000 *dw);
 int dw3000_setup_reset_gpio(struct dw3000 *dw);
 int dw3000_setup_irq(struct dw3000 *dw);
+int dw3000_setup_wifi_coex(struct dw3000 *dw);
+int dw3000_setup_thread_cpu(struct dw3000 *dw, int *dw3000_thread_cpu);
+int dw3000_setup_qos_latency(struct dw3000 *dw);
+int dw3000_setup_regulator_delay(struct dw3000 *dw);
+
+void dw3000_spi_queue_start(struct dw3000 *dw);
+int dw3000_spi_queue_flush(struct dw3000 *dw);
+int dw3000_spi_queue_reset(struct dw3000 *dw, int rc);
 
 int dw3000_reg_read_fast(struct dw3000 *dw, u32 reg_fileid, u16 reg_offset,
 			 u16 length, void *buffer);
@@ -291,6 +357,10 @@ int dw3000_disable(struct dw3000 *dw);
 
 int dw3000_configure_chan(struct dw3000 *dw);
 int dw3000_configure_pcode(struct dw3000 *dw);
+int dw3000_configure_sfd_type(struct dw3000 *dw);
+int dw3000_configure_phr_rate(struct dw3000 *dw);
+int dw3000_configure_preamble_length_and_datarate(struct dw3000 *dw,
+						  bool update_sfd_toc_pac);
 
 int dw3000_set_eui64(struct dw3000 *dw, __le64 val);
 int dw3000_set_panid(struct dw3000 *dw, __le16 val);
@@ -302,6 +372,7 @@ int dw3000_set_sts_length(struct dw3000 *dw, enum dw3000_sts_lengths len);
 int dw3000_configure_sts_key(struct dw3000 *dw, const u8 *key);
 int dw3000_configure_sts_iv(struct dw3000 *dw, const u8 *iv);
 int dw3000_load_sts_iv(struct dw3000 *dw);
+int dw3000_configure_sys_cfg(struct dw3000 *dw, struct dw3000_config *config);
 int dw3000_configure_hw_addr_filt(struct dw3000 *dw, unsigned long changed);
 
 int dw3000_clear_sys_status(struct dw3000 *dw, u32 clear_bits);
@@ -314,9 +385,6 @@ int dw3000_read_sys_time(struct dw3000 *dw, u32 *sys_time);
 
 u32 dw3000_get_dtu_time(struct dw3000 *dw);
 
-int dw3000_poweron(struct dw3000 *dw);
-int dw3000_poweroff(struct dw3000 *dw);
-
 int dw3000_forcetrxoff(struct dw3000 *dw);
 
 int dw3000_do_rx_enable(struct dw3000 *dw,
@@ -324,6 +392,7 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 int dw3000_rx_enable(struct dw3000 *dw, bool rx_delayed, u32 date_dtu,
 		     u32 timeout_pac);
 int dw3000_rx_disable(struct dw3000 *dw);
+bool dw3000_rx_busy(struct dw3000 *dw, bool busy);
 
 int dw3000_rx_stats_enable(struct dw3000 *dw, bool on);
 void dw3000_rx_stats_clear(struct dw3000 *dw);
@@ -339,14 +408,16 @@ int dw3000_do_tx_frame(struct dw3000 *dw,
 int dw3000_tx_setcwtone(struct dw3000 *dw, bool on);
 
 int dw3000_config_antenna_gpios(struct dw3000 *dw);
-int dw3000_set_tx_antenna(struct dw3000 *dw, int antidx);
-int dw3000_set_rx_antennas(struct dw3000 *dw, int antpairidx,
+int dw3000_set_tx_antenna(struct dw3000 *dw, int ant_set_id);
+int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id,
 			   bool pdoa_enabled);
 
 s16 dw3000_read_pdoa(struct dw3000 *dw);
 s16 dw3000_pdoa_to_aoa_lut(struct dw3000 *dw, s16 pdoa_rad_q11);
 int dw3000_read_sts_timestamp(struct dw3000 *dw, u64 *sts_ts);
 int dw3000_read_sts_quality(struct dw3000 *dw, s16 *acc_qual);
+int dw3000_read_clockoffset(struct dw3000 *dw, s16 *cfo);
+int dw3000_prog_xtrim(struct dw3000 *dw);
 
 int dw3000_set_gpio_mode(struct dw3000 *dw, u32 mask, u32 mode);
 int dw3000_set_gpio_dir(struct dw3000 *dw, u16 mask, u16 dir);
@@ -354,12 +425,19 @@ int dw3000_set_gpio_out(struct dw3000 *dw, u16 reset, u16 set);
 
 int dw3000_otp_read32(struct dw3000 *dw, u16 addr, u32 *val);
 int dw3000_otp_write32(struct dw3000 *dw, u16 addr, u32 data);
+int dw3000_read_otp(struct dw3000 *dw, int mode);
+
+int dw3000_read_frame_cir_data(struct dw3000 *dw,
+			       struct mcps802154_rx_frame_info *info,
+			       u64 utime);
+int dw3000_cir_data_alloc_count(struct dw3000 *dw, u16 nrecord);
 
 void dw3000_sysfs_init(struct dw3000 *dw);
 void dw3000_sysfs_remove(struct dw3000 *dw);
 
 void dw3000_isr(struct dw3000 *dw);
 enum hrtimer_restart dw3000_idle_timeout(struct hrtimer *timer);
+int dw3000_idle_cancel_timer(struct dw3000 *dw);
 void dw3000_wakeup_timer_start(struct dw3000 *dw, int delay_us);
 void dw3000_wakeup_and_wait(struct dw3000 *dw);
 int dw3000_deep_sleep_and_wakeup(struct dw3000 *dw, int delay_us);
@@ -389,14 +467,8 @@ struct dw3000_plen_info {
 };
 extern const struct dw3000_plen_info _plen_info[];
 
-/* Bitrate related information. */
-struct dw3000_bitrate_info {
-	/* Chips per symbol for PHR. */
-	int phr_chip_per_symb;
-	/* Chips per symbol for data part. */
-	int data_chip_per_symb;
-};
-extern const struct dw3000_bitrate_info _bitrate_info[];
+/* Chip per symbol information. */
+extern const int _chip_per_symbol_info[];
 
 /* PRF related information. */
 struct dw3000_prf_info {
@@ -463,8 +535,8 @@ static inline int dw3000_frame_duration_dtu(struct dw3000 *dw,
 	const struct dw3000_prf_info *prf_info =
 		&_prf_info[dw->config.txCode >= 9 ? DW3000_PRF_64M :
 						    DW3000_PRF_16M];
-	const struct dw3000_bitrate_info *bitrate_info =
-		&_bitrate_info[dw->config.dataRate];
+	int chip_per_symbol_phr = _chip_per_symbol_info[dw->config.phrRate];
+	int chip_per_symbol_data = _chip_per_symbol_info[dw->config.dataRate];
 	/* STS part */
 	const u8 sts_mode = dw->config.stsMode & DW3000_STS_BASIC_MODES_MASK;
 	const int sts_symb =
@@ -473,7 +545,7 @@ static inline int dw3000_frame_duration_dtu(struct dw3000 *dw,
 	/* PHR part. */
 	const int phr_tail_bits = sts_mode == DW3000_STS_MODE_ND ? 0 : 19 + 2;
 	const int phr_chips = phr_tail_bits /* 1 bit/symbol */
-			      * bitrate_info->phr_chip_per_symb;
+			      * chip_per_symbol_phr;
 	/* Data part, 48 Reed-Solomon bits per 330 bits. */
 	const int data_bits = sts_mode == DW3000_STS_MODE_ND ?
 				      0 :
@@ -481,7 +553,7 @@ static inline int dw3000_frame_duration_dtu(struct dw3000 *dw,
 
 	const int data_rs_bits = data_bits + (data_bits + 329) / 330 * 48;
 	const int data_chips = data_rs_bits /* 1 bit/symbol */
-			       * bitrate_info->data_chip_per_symb;
+			       * chip_per_symbol_data;
 	/* Done, convert to dtu. */
 	return ((sts_chips + phr_chips + data_chips) / DW3000_CHIP_PER_DTU) +
 	       (with_shr ? dw->llhw->shr_dtu : 0);

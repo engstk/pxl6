@@ -31,6 +31,24 @@ struct fira_session;
 struct fira_slot;
 struct sk_buff;
 struct mcps802154_ie_get_context;
+struct fira_session_params;
+
+/**
+ * fira_frame_check_n_controlees() - Check the number of wanted
+ * controlees.
+ * @session: Current session.
+ * @n_controlees: Wanted number of controlees.
+ * @active: Is the session (supposed to be) active?
+ *
+ * Return: true if number of controlees fits.
+ *
+ * For an inactive session, the number of controlees is limited by the list
+ * size, aka FIRA_CONTROLEES_MAX.
+ * For an active session, it depends on the space left in messages, which is
+ * determined by the session parameters.
+ */
+bool fira_frame_check_n_controlees(struct fira_session *session,
+				   size_t n_controlees, bool active);
 
 /**
  * fira_frame_header_put() - Fill FiRa frame header.

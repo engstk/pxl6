@@ -43,11 +43,12 @@ static struct mcps802154_region *fira_open(struct mcps802154_llhw *llhw)
 {
 	struct fira_local *local;
 
-	local = kmalloc(sizeof(*local), GFP_KERNEL);
+	local = kzalloc(sizeof(*local), GFP_KERNEL);
 	if (!local)
 		return NULL;
 	local->llhw = llhw;
 	local->region.ops = &fira_region_ops;
+	local->current_session = NULL;
 	INIT_LIST_HEAD(&local->inactive_sessions);
 	INIT_LIST_HEAD(&local->active_sessions);
 	local->block_duration_rx_margin_ppm = UWB_BLOCK_DURATION_MARGIN_PPM;
@@ -80,19 +81,8 @@ static int fira_call(struct mcps802154_region *region, u32 call_id,
 	switch (call_id) {
 	case FIRA_CALL_GET_CAPABILITIES:
 		return fira_get_capabilities(local, info);
-	case FIRA_CALL_SESSION_INIT:
-	case FIRA_CALL_SESSION_START:
-	case FIRA_CALL_SESSION_STOP:
-	case FIRA_CALL_SESSION_DEINIT:
-	case FIRA_CALL_SESSION_SET_PARAMS:
-	case FIRA_CALL_SESSION_GET_STATE:
-	case FIRA_CALL_SESSION_GET_COUNT:
-	case FIRA_CALL_NEW_CONTROLEE:
-	case FIRA_CALL_DEL_CONTROLEE:
-	case FIRA_CALL_SESSION_GET_PARAMS:
-		return fira_session_control(local, call_id, attrs, info);
 	default:
-		return -EINVAL;
+		return fira_session_control(local, call_id, attrs, info);
 	}
 }
 
@@ -108,18 +98,18 @@ static int fira_get_demand(struct mcps802154_region *region,
 
 	if (session) {
 		fira_session_get_demand(local, session, demand);
-		demand->duration_dtu = session->last_access_duration_dtu;
+		demand->max_duration_dtu = session->last_access_duration_dtu;
 		local->current_session = session;
 		return 1;
 	}
 	return 0;
 }
 
-static int fira_report_local_aoa(struct fira_local *local, struct sk_buff *msg,
+static int fira_report_local_aoa(struct sk_buff *msg,
 				 const struct fira_local_aoa_info *info)
 {
 #define A(x) FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_##x
-	if (nla_put_u8(msg, A(RX_ANTENNA_PAIR), info->rx_ant_pair))
+	if (nla_put_u8(msg, A(RX_ANTENNA_SET), info->rx_ant_set))
 		goto nla_put_failure;
 	if (nla_put_s16(msg, A(AOA_2PI), info->aoa_2pi))
 		goto nla_put_failure;
@@ -164,15 +154,16 @@ static int fira_report_measurement(struct fira_local *local,
 		aoa = nla_nest_start(msg, A(LOCAL_AOA));
 		if (!aoa)
 			goto nla_put_failure;
-		if (fira_report_local_aoa(local, msg, &ranging_info->local_aoa))
+		if (fira_report_local_aoa(msg, &ranging_info->local_aoa))
 			goto nla_put_failure;
 		nla_nest_end(msg, aoa);
 	}
+
 	if (ranging_info->local_aoa_azimuth.present) {
 		aoa = nla_nest_start(msg, A(LOCAL_AOA_AZIMUTH));
 		if (!aoa)
 			goto nla_put_failure;
-		if (fira_report_local_aoa(local, msg,
+		if (fira_report_local_aoa(msg,
 					  &ranging_info->local_aoa_azimuth))
 			goto nla_put_failure;
 		nla_nest_end(msg, aoa);
@@ -181,7 +172,7 @@ static int fira_report_measurement(struct fira_local *local,
 		aoa = nla_nest_start(msg, A(LOCAL_AOA_ELEVATION));
 		if (!aoa)
 			goto nla_put_failure;
-		if (fira_report_local_aoa(local, msg,
+		if (fira_report_local_aoa(msg,
 					  &ranging_info->local_aoa_elevation))
 			goto nla_put_failure;
 		nla_nest_end(msg, aoa);
@@ -271,7 +262,8 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 			ranging_interval_ms))
 		goto nla_put_failure;
 
-	stop_completed = session->stop_request &&
+	stop_completed = (session->max_number_of_measurements_reached ||
+			  session->stop_request) &&
 			 !(session->controlee_management_flags &
 			   FIRA_SESSION_CONTROLEE_MANAGEMENT_FLAG_STOP);
 	if (stop_completed || session->stop_inband ||
@@ -318,35 +310,6 @@ void fira_report(struct fira_local *local, struct fira_session *session,
 	nla_nest_end(msg, data);
 
 	r = mcps802154_region_event(local->llhw, msg);
-	if (r == -ECONNREFUSED)
-		/* TODO stop. */
-		;
-	return;
-nla_put_failure:
-	kfree_skb(msg);
-}
-
-void fira_session_notify_state_change(struct fira_local *local, u32 session_id, uint8_t state)
-{
-	int r;
-	static struct sk_buff *msg;
-
-	/* TODO: reenable when state notification supported by the HAL */
-	return;
-
-	msg = mcps802154_region_call_alloc_reply_skb(
-			local->llhw, &local->region, FIRA_CALL_SESSION_STATE_NOTIFICATION,
-			NLMSG_DEFAULT_SIZE);
-	if (!msg)
-		return;
-
-	if (nla_put_u32(msg, FIRA_CALL_ATTR_SESSION_ID, session_id))
-		goto nla_put_failure;
-
-	if (nla_put_u8(msg, FIRA_CALL_ATTR_SESSION_STATE, state))
-		goto nla_put_failure;
-
-	r = mcps802154_region_call_reply(local->llhw, msg);
 	if (r == -ECONNREFUSED)
 		/* TODO stop. */
 		;

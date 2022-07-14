@@ -83,6 +83,15 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 int lwis_buffer_disenroll(struct lwis_client *lwis_client, struct lwis_enrolled_buffer *buffer);
 
 /*
+ * lwis_buffer_cpu_access: Invalidate/flush the cache for CPU access to the dma buffers
+ *
+ * Assumes: lwisclient->lock is locked
+ * Alloc: Yes
+ * Returns: 0 on success
+ */
+int lwis_buffer_cpu_access(struct lwis_client *lwis_client, struct lwis_buffer_cpu_access_op *op);
+
+/*
  * lwis_client_enrolled_buffer_find: Finds the enrolled buffer based on
  * dma_vaddr passed, and returns it
  *

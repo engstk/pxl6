@@ -35,7 +35,7 @@ static void mcps802154_fproc_tx_tx_done(struct mcps802154_local *local)
 			       MCPS802154_ACCESS_TX_RETURN_REASON_CONSUMED);
 	local->fproc.tx_skb = NULL;
 
-	mcps802154_fproc_access_done(local, 0);
+	mcps802154_fproc_access_done(local, false);
 
 	/* Next access. */
 	mcps802154_fproc_access_now(local);
@@ -81,7 +81,7 @@ static void mcps802154_fproc_tx_wack_rx_frame(struct mcps802154_local *local)
 		}
 		dev_kfree_skb_any(skb);
 		local->fproc.tx_skb = NULL;
-		mcps802154_fproc_access_done(local, 0);
+		mcps802154_fproc_access_done(local, false);
 		mcps802154_fproc_access_now(local);
 	} else {
 		mcps802154_fproc_broken_handle(local);
@@ -97,7 +97,7 @@ static void mcps802154_fproc_tx_wack_rx_timeout(struct mcps802154_local *local)
 			       MCPS802154_ACCESS_TX_RETURN_REASON_FAILURE);
 	local->fproc.tx_skb = NULL;
 
-	mcps802154_fproc_access_done(local, 0);
+	mcps802154_fproc_access_done(local, false);
 
 	/* Next access. */
 	mcps802154_fproc_access_now(local);

@@ -27,4 +27,7 @@
 int mcps802154_endless_scheduler_init(void);
 void mcps802154_endless_scheduler_exit(void);
 
+int mcps802154_default_scheduler_init(void);
+void mcps802154_default_scheduler_exit(void);
+
 #endif /* NET_MCPS802154_ENDLESS_SCHEDULER_H */

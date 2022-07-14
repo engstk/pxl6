@@ -308,10 +308,10 @@ void edgetpu_mailbox_remove_vii(struct edgetpu_vii *vii);
 
 
 /*
- * Reset VII mailboxes CSRs to valid values, needed after the device is power
+ * Reset all mailboxes CSRs to valid values, needed after the device is power
  * gated.
  */
-void edgetpu_mailbox_reset_vii(struct edgetpu_mailbox_manager *mgr);
+void edgetpu_mailbox_reset_mailboxes(struct edgetpu_mailbox_manager *mgr);
 
 
 /* For VII and P2P mailboxes to allocate/free queue memory */
@@ -333,10 +333,10 @@ void edgetpu_mailbox_free_queue(struct edgetpu_dev *etdev,
 void edgetpu_mailbox_reinit_vii(struct edgetpu_device_group *group);
 
 /*
- * Re-configure VII mailbox queues which have an active client, re-using
+ * Re-configure VII and external mailbox queues which have an active client, re-using
  * existing buffers
  */
-void edgetpu_mailbox_restore_active_vii_queues(struct edgetpu_dev *etdev);
+void edgetpu_mailbox_restore_active_mailbox_queues(struct edgetpu_dev *etdev);
 
 /* utility functions for P2P */
 
@@ -357,6 +357,15 @@ int edgetpu_mailbox_enable_ext(struct edgetpu_client *client, int mailbox_id,
 int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id);
 
 /*
+ * Activates all mailboxes included in @mailbox_map, OPEN_DEVICE KCI will be sent.
+ *
+ * Returns what edgetpu_kci_open_device() returned.
+ * Caller ensures device is powered on.
+ */
+int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s16 vcid,
+				  bool first_open);
+
+/*
  * Activates @mailbox_id, OPEN_DEVICE KCI will be sent.
  *
  * If @mailbox_id is known to be activated, KCI is not sent and this function
@@ -366,18 +375,55 @@ int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id);
  * Caller ensures device is powered on.
  */
 int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, s16 vcid, bool first_open);
+
+/*
+ * Similar to edgetpu_mailbox_activate_bulk() but sends CLOSE_DEVICE KCI with the @mailbox_map
+ * instead.
+ */
+void edgetpu_mailbox_deactivate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map);
+
 /*
  * Similar to edgetpu_mailbox_activate() but sends CLOSE_DEVICE KCI instead.
  */
 void edgetpu_mailbox_deactivate(struct edgetpu_dev *etdev, u32 mailbox_id);
+
 /* Sets @eh->fw_state to 0. */
 void edgetpu_handshake_clear_fw_state(struct edgetpu_handshake *eh);
 /*
  * Disables and frees any external mailboxes allocated for @group.
  *
- * Caller must hold @group->lock.
+ * Caller must hold @group->lock and ensure if device is accessible.
  */
 void edgetpu_mailbox_external_disable_free_locked(struct edgetpu_device_group *group);
+
+/*
+ * Re-programs the CSRs of queue addresses, context, priority etc. to @group's
+ * external mailbox.
+ *
+ * Caller holds @group->lock and ensures @group has mailbox attached.
+ */
+void edgetpu_mailbox_reinit_external_mailbox(struct edgetpu_device_group *group);
+
+/*
+ * Activates external mailboxes in @group's ext_mailbox.
+ *
+ * Caller ensures device is powered and must hold @group->lock.
+ */
+int edgetpu_mailbox_activate_external_mailbox(struct edgetpu_device_group *group);
+
+/*
+ * Deactivates external mailboxes in @group's ext_mailbox.
+ *
+ * Caller ensures device is powered and must hold @group->lock.
+ */
+void edgetpu_mailbox_deactivate_external_mailbox(struct edgetpu_device_group *group);
+
+/*
+ * Disables external mailboxes in @group's ext_mailbox.
+ *
+ * Caller ensures device is powered and must hold @group->lock.
+ */
+void edgetpu_mailbox_disable_external_mailbox(struct edgetpu_device_group *group);
 
 /* Utilities of circular queue operations */
 

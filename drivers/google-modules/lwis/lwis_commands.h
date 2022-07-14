@@ -25,6 +25,9 @@
 extern "C" {
 #endif /* __cplusplus */
 
+#pragma pack(push)
+#pragma pack(4)
+
 /*
  *  IOCTL Types and Data Structures.
  */
@@ -60,6 +63,8 @@ extern "C" {
 #define LWIS_MAX_NAME_STRING_LEN 32
 /* Maximum clock number defined in device tree. */
 #define LWIS_MAX_CLOCK_NUM 20
+/* Maximum reg number defined in device tree. */
+#define LWIS_MAX_REG_NUM 20
 
 struct lwis_clk_setting {
 	// clock name defined in device tree.
@@ -70,12 +75,27 @@ struct lwis_clk_setting {
 	uint32_t frequency;
 };
 
+struct lwis_reg_block {
+	// reg block name defined in device tree.
+	char name[LWIS_MAX_NAME_STRING_LEN];
+	// reg index stored in reg_list.block
+	int32_t reg_index;
+	// reg start address defined in device tree.
+	uint32_t start;
+	// reg block size defined in device tree.
+	uint32_t size;
+};
+
 struct lwis_device_info {
-	int id;
+	int32_t id;
 	int32_t type;
 	char name[LWIS_MAX_NAME_STRING_LEN];
 	struct lwis_clk_setting clks[LWIS_MAX_CLOCK_NUM];
 	int32_t num_clks;
+	struct lwis_reg_block regs[LWIS_MAX_REG_NUM];
+	int32_t num_regs;
+	int32_t transaction_worker_thread_pid;
+	int32_t periodic_io_thread_pid;
 };
 
 enum lwis_dma_alloc_flags {
@@ -97,13 +117,13 @@ struct lwis_alloc_buffer_info {
 	size_t size;
 	uint32_t flags; // lwis_dma_alloc_flags
 	// IOCTL output for BUFFER_ALLOC
-	int dma_fd;
-	int partition_id;
+	int32_t dma_fd;
+	int32_t partition_id;
 };
 
 struct lwis_buffer_info {
 	// IOCTL input for BUFFER_ENROLL
-	int fd;
+	int32_t fd;
 	bool dma_read;
 	bool dma_write;
 	// IOCTL output for BUFFER_ENROLL
@@ -111,8 +131,17 @@ struct lwis_buffer_info {
 };
 
 struct lwis_enrolled_buffer_info {
-	int fd;
+	int32_t fd;
 	uint64_t dma_vaddr;
+};
+
+struct lwis_buffer_cpu_access_op {
+	int32_t fd;
+	bool start;
+	bool read;
+	bool write;
+	uint32_t offset;
+	size_t len;
 };
 
 enum lwis_io_entry_types {
@@ -127,21 +156,22 @@ enum lwis_io_entry_types {
 
 // For io_entry read and write types.
 struct lwis_io_entry_rw {
-	int bid;
+	int32_t bid;
 	uint64_t offset;
 	uint64_t val;
 };
 
 struct lwis_io_entry_rw_batch {
-	int bid;
+	int32_t bid;
 	uint64_t offset;
 	size_t size_in_bytes;
 	uint8_t *buf;
+	bool is_offset_fixed;
 };
 
 // For io_entry modify types.
 struct lwis_io_entry_modify {
-	int bid;
+	int32_t bid;
 	uint64_t offset;
 	uint64_t val;
 	uint64_t val_mask;
@@ -149,7 +179,7 @@ struct lwis_io_entry_modify {
 
 // For io_entry read assert type.
 struct lwis_io_entry_read_assert {
-	int bid;
+	int32_t bid;
 	uint64_t offset;
 	uint64_t val;
 	uint64_t mask;
@@ -157,7 +187,7 @@ struct lwis_io_entry_read_assert {
 };
 
 struct lwis_io_entry {
-	int type;
+	int32_t type;
 	union {
 		struct lwis_io_entry_rw rw;
 		struct lwis_io_entry_rw_batch rw_batch;
@@ -208,6 +238,8 @@ struct lwis_echo {
 // Event flags used for transaction events.
 #define LWIS_TRANSACTION_EVENT_FLAG (1ULL << 63)
 #define LWIS_TRANSACTION_FAILURE_EVENT_FLAG (1ULL << 62)
+#define LWIS_HW_IRQ_EVENT_FLAG (1ULL << 61)
+#define LWIS_PERIODIC_IO_EVENT_FLAG (1ULL << 60)
 
 struct lwis_event_info {
 	// IOCTL Inputs
@@ -222,6 +254,7 @@ struct lwis_event_info {
 
 #define LWIS_EVENT_CONTROL_FLAG_IRQ_ENABLE (1ULL << 0)
 #define LWIS_EVENT_CONTROL_FLAG_QUEUE_ENABLE (1ULL << 1)
+#define LWIS_EVENT_CONTROL_FLAG_IRQ_ENABLE_ONCE (1ULL << 2)
 
 struct lwis_event_control {
 	// IOCTL Inputs
@@ -261,14 +294,14 @@ struct lwis_transaction_info {
 // Actual size of this struct depends on num_entries
 struct lwis_transaction_response_header {
 	int64_t id;
-	int error_code;
-	int completion_index;
+	int32_t error_code;
+	int32_t completion_index;
 	size_t num_entries;
 	size_t results_size_bytes;
 };
 
 struct lwis_io_result {
-	int bid;
+	int32_t bid;
 	uint64_t offset;
 	size_t num_value_bytes;
 	uint8_t values[];
@@ -276,7 +309,7 @@ struct lwis_io_result {
 
 struct lwis_periodic_io_info {
 	// Input
-	int batch_size;
+	int32_t batch_size;
 	int64_t period_ns;
 	size_t num_io_entries;
 	struct lwis_io_entry *io_entries;
@@ -290,8 +323,8 @@ struct lwis_periodic_io_info {
 // Actual size of this struct depends on batch_size and num_entries_per_period
 struct lwis_periodic_io_response_header {
 	int64_t id;
-	int error_code;
-	int batch_size;
+	int32_t error_code;
+	int32_t batch_size;
 	size_t num_entries_per_period;
 	size_t results_size_bytes;
 };
@@ -339,10 +372,11 @@ struct lwis_dpm_qos_requirements {
 #define LWIS_GET_DEVICE_INFO _IOWR(LWIS_IOC_TYPE, 1, struct lwis_device_info)
 #define LWIS_BUFFER_ENROLL _IOWR(LWIS_IOC_TYPE, 2, struct lwis_buffer_info)
 #define LWIS_BUFFER_DISENROLL _IOWR(LWIS_IOC_TYPE, 3, struct lwis_enrolled_buffer_info)
+#define LWIS_BUFFER_CPU_ACCESS _IOWR(LWIS_IOC_TYPE, 4, struct lwis_buffer_cpu_access_op)
 #define LWIS_DEVICE_ENABLE _IO(LWIS_IOC_TYPE, 6)
 #define LWIS_DEVICE_DISABLE _IO(LWIS_IOC_TYPE, 7)
 #define LWIS_BUFFER_ALLOC _IOWR(LWIS_IOC_TYPE, 8, struct lwis_alloc_buffer_info)
-#define LWIS_BUFFER_FREE _IOWR(LWIS_IOC_TYPE, 9, int)
+#define LWIS_BUFFER_FREE _IOWR(LWIS_IOC_TYPE, 9, int32_t)
 #define LWIS_TIME_QUERY _IOWR(LWIS_IOC_TYPE, 10, int64_t)
 #define LWIS_REG_IO _IOWR(LWIS_IOC_TYPE, 11, struct lwis_io_entries)
 #define LWIS_ECHO _IOWR(LWIS_IOC_TYPE, 12, struct lwis_echo)
@@ -372,6 +406,8 @@ struct lwis_mem_page_fault_event_payload {
 	uint64_t fault_address;
 	uint64_t fault_flags;
 };
+
+#pragma pack(pop)
 
 #ifdef __cplusplus
 } /* extern "C" */

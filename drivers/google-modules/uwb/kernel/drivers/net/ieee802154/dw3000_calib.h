@@ -34,7 +34,7 @@
  * @DW3000_CALIBRATION_CHANNEL_9: index in array for channel 9
  * @DW3000_CALIBRATION_CHANNEL_MAX: channel array size
  */
-enum dw3000_calibration_channel {
+enum dw3000_calibration_channels {
 	DW3000_CALIBRATION_CHANNEL_5,
 	DW3000_CALIBRATION_CHANNEL_9,
 
@@ -47,7 +47,7 @@ enum dw3000_calibration_channel {
  * @DW3000_CALIBRATION_PRF_64MHZ: index in array for prf 64
  * @DW3000_CALIBRATION_PRF_MAX: prf array size
  */
-enum dw3000_calibration_prf {
+enum dw3000_calibration_prfs {
 	DW3000_CALIBRATION_PRF_16MHZ,
 	DW3000_CALIBRATION_PRF_64MHZ,
 
@@ -59,10 +59,16 @@ enum dw3000_calibration_prf {
  */
 #define DW3000_CALIBRATION_PDOA_LUT_MAX 31
 
+/* Intermediate types to fix following error:
+ * [kernel-doc ERROR] : can't parse typedef!
+ */
+typedef s16 pdoa_lut_entry_t[2];
+typedef pdoa_lut_entry_t pdoa_lut_table_t[DW3000_CALIBRATION_PDOA_LUT_MAX];
+
 /**
  * typedef dw3000_pdoa_lut_t - PDoA LUT array type
  */
-typedef s16 dw3000_pdoa_lut_t[DW3000_CALIBRATION_PDOA_LUT_MAX][2];
+typedef pdoa_lut_table_t dw3000_pdoa_lut_t;
 
 /* Default LUTs, theorical values for Monalisa antenna (20.8mm) */
 extern const dw3000_pdoa_lut_t dw3000_default_lut_ch5;
@@ -72,15 +78,6 @@ extern const dw3000_pdoa_lut_t dw3000_default_lut_ch9;
  * DW3000_DEFAULT_ANT_DELAY - antenna delay default value
  */
 #define DW3000_DEFAULT_ANT_DELAY 16450
-
-/**
- * DW3000_DEFAULT_ANT_PAIR_SPACING - antpair spacing default value
- *
- * Value is for Monalisa antennas pair where antennas are spaced
- * 20.8mm.
- * So default spacing_mm_q11 = 20.8 * 1<<11 = 42598.4
- */
-#define DW3000_DEFAULT_ANTPAIR_SPACING 42598
 
 /**
  * struct dw3000_channel_calib - per-channel dependent calibration parameters
@@ -107,8 +104,8 @@ struct dw3000_antenna_calib_prf {
 
 /**
  * struct dw3000_antenna_calib - per-antenna dependent calibration parameters
- * @ch: table of channels and PRF dependent calibration values
- * @ant: antenna pair specific calibration values
+ * @ch: table of channels dependent calibration values
+ * @ch.prf: table of PRF dependent calibration values
  * @port: port value this antenna belong to (0 for RF1, 1 for RF2)
  * @selector_gpio: GPIO number to select this antenna
  * @selector_gpio_value: GPIO value to select this antenna
@@ -136,12 +133,10 @@ struct dw3000_antenna_pair_calib_chan {
 /**
  * struct dw3000_antenna_pair_calib - antenna pair dependent calibration values
  * @ch: table of channels dependent calibration values
- * @spacing_mm_q11: Distance between antennas in mm in fixed-point
  */
 struct dw3000_antenna_pair_calib {
 	/* antX.antW.chY.* */
 	struct dw3000_antenna_pair_calib_chan ch[DW3000_CALIBRATION_CHANNEL_MAX];
-	int spacing_mm_q11;
 };
 
 /* Just to ease reading of the following formulas. */
@@ -170,19 +165,26 @@ struct dw3000_antenna_pair_calib {
 #define ANTPAIR_IDX(x, w) (ANTPAIR_OFFSET(x) + ((w) - (x)-1))
 
 /**
- * dw3000_calib_antpair_to_ant - convert antenna pair to corresponding antennas
- * @ant_pair: antenna pair
- * @antidx1: first antenna
- * @antidx2: second antenna
+ * ANTSET_ID_MAX - calculated antenna set id table size
  */
-static inline void dw3000_calib_antpair_to_ant(int ant_pair, u8 *antidx1,
-					       u8 *antidx2)
+#define ANTSET_ID_MAX (ANTPAIR_MAX + ANTMAX)
+
+/**
+ * dw3000_calib_ant_set_id_to_ant - convert antenna set id pair to corresponding antennas
+ * @ant_set_id: antenna set id
+ * @ant_idx1: first antenna
+ * @ant_idx2: second antenna
+ */
+static inline void dw3000_calib_ant_set_id_to_ant(int ant_set_id, s8 *ant_idx1,
+						  s8 *ant_idx2)
 {
-	static const u8 pair_to_ant[ANTPAIR_MAX][2] = { { 0, 1 }, { 0, 2 },
-							{ 0, 3 }, { 1, 2 },
-							{ 1, 3 }, { 2, 3 } };
-	*antidx1 = pair_to_ant[ant_pair][0];
-	*antidx2 = pair_to_ant[ant_pair][1];
+	static const s8 set_id_to_ant[ANTSET_ID_MAX][2] = {
+		{ 0, 1 }, { 0, 2 },  { 0, 3 },	{ 1, 2 },  { 1, 3 },
+		{ 2, 3 }, { 0, -1 }, { 1, -1 }, { 2, -1 }, { 3, -1 }
+	};
+
+	*ant_idx1 = set_id_to_ant[ant_set_id][0];
+	*ant_idx2 = set_id_to_ant[ant_set_id][1];
 }
 
 /**

@@ -27,10 +27,10 @@
 #include <net/mac802154.h>
 #include <crypto/aes.h>
 
-/* Antenna index to use for transmission by default. */
-#define TX_ANT_ID_DEFAULT 0
-/* Antenna pair index to use for reception by default. */
-#define RX_ANT_PAIR_ID_DEFAULT 0
+/* Antennas set id to use for transmission by default. */
+#define TX_ANT_SET_ID_DEFAULT 0
+/* Antennas set id to use for reception by default. */
+#define RX_ANT_SET_ID_DEFAULT 0
 
 /** Maximum number of STS segments. */
 #define MCPS802154_STS_N_SEGS_MAX 4
@@ -181,6 +181,9 @@ struct mcps802154_llhw {
  *	SFD, no PHR, no payload, ERDEV only).
  * @MCPS802154_TX_FRAME_STS_MODE_MASK:
  *      Mask covering all the STS mode configuration values.
+ * @MCPS802154_TX_FRAME_RANGING_ROUND:
+ *	Inform low-level driver the transmitted frame is the start of a ranging
+ *	round (RDEV only).
  *
  * If no timestamp flag is given, transmit as soon as possible.
  */
@@ -194,6 +197,7 @@ enum mcps802154_tx_frame_info_flags {
 	MCPS802154_TX_FRAME_SP2 = BIT(6),
 	MCPS802154_TX_FRAME_SP3 = BIT(5) | BIT(6),
 	MCPS802154_TX_FRAME_STS_MODE_MASK = BIT(5) | BIT(6),
+	MCPS802154_TX_FRAME_RANGING_ROUND = BIT(7),
 };
 
 /**
@@ -221,9 +225,9 @@ struct mcps802154_tx_frame_info {
 	 */
 	u8 flags;
 	/**
-	 * @ant_id: antenna index to use for transmit.
+	 * @ant_set_id : antenna set index to use for transmit.
 	 */
-	int ant_id;
+	int ant_set_id;
 };
 
 /**
@@ -250,6 +254,9 @@ struct mcps802154_tx_frame_info {
  *	payload, ERDEV only).
  * @MCPS802154_RX_INFO_STS_MODE_MASK:
  *      Mask covering all the STS mode configuration values.
+ * @MCPS802154_RX_INFO_RANGING_ROUND:
+ *	Inform low-level driver the expected received frame is the start of a
+ *	ranging round (RDEV only).
  *
  * If no timestamp flag is given, enable receiver as soon as possible.
  */
@@ -263,6 +270,7 @@ enum mcps802154_rx_info_flags {
 	MCPS802154_RX_INFO_SP2 = BIT(6),
 	MCPS802154_RX_INFO_SP3 = BIT(5) | BIT(6),
 	MCPS802154_RX_INFO_STS_MODE_MASK = BIT(5) | BIT(6),
+	MCPS802154_RX_INFO_RANGING_ROUND = BIT(7),
 };
 
 /**
@@ -283,9 +291,9 @@ struct mcps802154_rx_info {
 	 */
 	u8 flags;
 	/**
-	 * @ant_pair_id: Antenna pair index to use for reception.
+	 * @ant_set_id: Antenna set index to use for reception.
 	 */
-	u8 ant_pair_id;
+	int ant_set_id;
 };
 
 /**
@@ -374,11 +382,6 @@ struct mcps802154_rx_frame_info {
 	 * multiplied by 2048 (RDEV only).
 	 */
 	int ranging_pdoa_rad_q11;
-	/**
-	 * @ranging_pdoa_spacing_mm_q11: Spacing between antennas, unit is mm
-	 * multiplied by 2048 (RDEV only).
-	 */
-	int ranging_pdoa_spacing_mm_q11;
 	/**
 	 * @ranging_aoa_rad_q11: AoA interpolated by the driver from its
 	 * calibration LUT. unit is rad multiplied by 2048 (RDEV only).
@@ -580,7 +583,7 @@ struct mcps802154_ops {
 	 */
 	u64 (*tx_timestamp_dtu_to_rmarker_rctu)(struct mcps802154_llhw *llhw,
 						u32 tx_timestamp_dtu,
-						int ant_id);
+						int ant_set_id);
 	/**
 	 * @difference_timestamp_rctu: Compute the difference between two
 	 * timestamp values.
@@ -736,6 +739,8 @@ struct mcps802154_ops {
  *	A preamble has been detected but no SFD.
  * @MCPS802154_RX_ERROR_OTHER:
  *	Other error, frame reception is aborted.
+ * @MCPS802154_RX_ERROR_HPDWARN:
+ *   Too late to program RX operation.
  */
 enum mcps802154_rx_error_type {
 	MCPS802154_RX_ERROR_NONE = 0,
@@ -745,6 +750,7 @@ enum mcps802154_rx_error_type {
 	MCPS802154_RX_ERROR_FILTERED = 4,
 	MCPS802154_RX_ERROR_SFD_TIMEOUT = 5,
 	MCPS802154_RX_ERROR_OTHER = 6,
+	MCPS802154_RX_ERROR_HPDWARN = 7,
 };
 
 /**
@@ -795,6 +801,12 @@ void mcps802154_rx_frame(struct mcps802154_llhw *llhw);
 void mcps802154_rx_timeout(struct mcps802154_llhw *llhw);
 
 /**
+ * mcps802154_rx_too_late() - Signal a problem programing a RX.
+ * @llhw: Low-level device pointer.
+ */
+void mcps802154_rx_too_late(struct mcps802154_llhw *llhw);
+
+/**
  * mcps802154_rx_error() - Signal a reception error.
  * @llhw: Low-level device pointer.
  * @error: Type of detected error.
@@ -812,6 +824,12 @@ void mcps802154_rx_error(struct mcps802154_llhw *llhw,
 void mcps802154_tx_done(struct mcps802154_llhw *llhw);
 
 /**
+ * mcps802154_tx_too_late() - Signal a problem programing a TX.
+ * @llhw: Low-level device pointer.
+ */
+void mcps802154_tx_too_late(struct mcps802154_llhw *llhw);
+
+/**
  * mcps802154_broken() - Signal an unrecoverable error, device needs to be
  * reset.
  * @llhw: Low-level device pointer.
@@ -825,6 +843,18 @@ void mcps802154_broken(struct mcps802154_llhw *llhw);
  * To be called before the timestamp given to &mcps802154_ops.idle() callback.
  */
 void mcps802154_timer_expired(struct mcps802154_llhw *llhw);
+
+/**
+ * is_before_dtu() - Check if timestamp A is before timestamp B.
+ * @a_dtu: A timestamp in device time unit.
+ * @b_dtu: B timestamp in device time unit.
+ *
+ * Return: true if A timestamp is before B timestamp.
+ */
+static inline bool is_before_dtu(u32 a_dtu, u32 b_dtu)
+{
+	return (s32)(a_dtu - b_dtu) < 0;
+}
 
 #ifdef CONFIG_MCPS802154_TESTMODE
 /**

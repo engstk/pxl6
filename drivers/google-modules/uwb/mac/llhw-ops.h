@@ -143,10 +143,10 @@ static inline int llhw_get_current_timestamp_dtu(struct mcps802154_local *local,
 
 static inline u64
 llhw_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_local *local,
-				      u32 tx_timestamp_dtu, int ant_id)
+				      u32 tx_timestamp_dtu, int ant_set_id)
 {
 	return local->ops->tx_timestamp_dtu_to_rmarker_rctu(
-		&local->llhw, tx_timestamp_dtu, ant_id);
+		&local->llhw, tx_timestamp_dtu, ant_set_id);
 }
 
 static inline s64 llhw_difference_timestamp_rctu(struct mcps802154_local *local,
@@ -223,17 +223,6 @@ static inline int llhw_set_txpower(struct mcps802154_local *local, s32 mbm)
 
 	trace_llhw_set_txpower(local, mbm);
 	r = local->ops->set_txpower(&local->llhw, mbm);
-	trace_llhw_return_int(local, r);
-	return r;
-}
-
-static inline int llhw_set_cca_mode(struct mcps802154_local *local,
-				    const struct wpan_phy_cca *cca)
-{
-	int r;
-
-	trace_llhw_set_cca_mode(local, cca);
-	r = local->ops->set_cca_mode(&local->llhw, cca);
 	trace_llhw_return_int(local, r);
 	return r;
 }

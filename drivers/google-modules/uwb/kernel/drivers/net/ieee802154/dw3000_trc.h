@@ -27,6 +27,7 @@
 #define __DW3000_TRACE
 
 #include <linux/tracepoint.h>
+#include <linux/version.h>
 
 #include "dw3000.h"
 #include "dw3000_nfcc_coex.h"
@@ -128,16 +129,37 @@ TRACE_DEFINE_ENUM(DW3000_PWR_RX);
 TRACE_DEFINE_ENUM(DW3000_PWR_TX);
 #define DW_PWR_PR_ARG __print_symbolic(__entry->state, DW_PWR_SYMBOLS)
 
+#define dw3000_sys_status_hi_name(name)                                    \
+	{                                                                  \
+		(u64)(DW3000_SYS_STATUS_HI_##name##_BIT_MASK) << 32, #name \
+	}
 #define dw3000_sys_status_name(name)                       \
 	{                                                  \
 		DW3000_SYS_STATUS_##name##_BIT_MASK, #name \
 	}
 
-#define DW3000_SYS_STATUS_FLAGS_ENTRY __field(u64, status)
-#define DW3000_SYS_STATUS_FLAGS_ASSIGN __entry->status = status
-#define DW3000_SYS_STATUS_FLAGS_PR_FMT "status: %s"
+#define DW_SYS_STATUS_FLAGS_ENTRY __field(u64, status)
+#define DW_SYS_STATUS_FLAGS_ASSIGN __entry->status = status
+#if (KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE)
+#define DW_SYS_STATUS_FLAGS_PR_FMT "status: %s"
 /* clang-format off */
-#define DW3000_SYS_STATUS_FLAGS                                                \
+#define DW_SYS_STATUS_FLAGS                                                    \
+	dw3000_sys_status_hi_name(RXSTS),                                      \
+	dw3000_sys_status_hi_name(TXSTS),                                      \
+	dw3000_sys_status_hi_name(SEMA_ERR),                                   \
+	dw3000_sys_status_hi_name(COEX_CLR),                                   \
+	dw3000_sys_status_hi_name(COEX_ERR),                                   \
+	dw3000_sys_status_hi_name(CCA_FAIL),                                   \
+	dw3000_sys_status_hi_name(SPIERR),                                     \
+	dw3000_sys_status_hi_name(SPI_UNF),                                    \
+	dw3000_sys_status_hi_name(SPI_OVF),                                    \
+	dw3000_sys_status_hi_name(CMD_ERR),                                    \
+	dw3000_sys_status_hi_name(AES_ERR),                                    \
+	dw3000_sys_status_hi_name(AES_DONE),                                   \
+	dw3000_sys_status_hi_name(GPIO_IRQ),                                   \
+	dw3000_sys_status_hi_name(VT_DET),                                     \
+	dw3000_sys_status_hi_name(PGFCAL_ERR),                                 \
+	dw3000_sys_status_hi_name(RXPREJ),                                     \
 	dw3000_sys_status_name(TIMER1),                                        \
 	dw3000_sys_status_name(TIMER0),                                        \
 	dw3000_sys_status_name(ARFE),                                          \
@@ -171,8 +193,13 @@ TRACE_DEFINE_ENUM(DW3000_PWR_TX);
 	dw3000_sys_status_name(CLK_PLL_LOCK),                                  \
 	dw3000_sys_status_name(IRQS)
 /* clang-format on */
-#define DW3000_SYS_STATUS_FLAGS_PR_ARG \
-	__print_flags(__entry->status, "|", DW3000_SYS_STATUS_FLAGS)
+#define DW_SYS_STATUS_FLAGS_PR_ARG \
+	__print_flags_u64(__entry->status, "|", DW_SYS_STATUS_FLAGS)
+#else
+/* __print_flags_u64 is not supported. */
+#define DW_SYS_STATUS_FLAGS_PR_FMT "status: 0x%0llx"
+#define DW_SYS_STATUS_FLAGS_PR_ARG __entry->status
+#endif
 
 #define RX_INFO_FLAGS_ENTRY __field(u8, flags)
 #define RX_INFO_FLAGS_ASSIGN entry->flags = flags
@@ -510,7 +537,7 @@ TRACE_EVENT(dw3000_idle,
 		__entry->timeout_dtu = timeout_dtu;
 		__entry->next_operational_state = next_operational_state;
 	),
-	TP_printk(DW_PR_FMT ", timeout: %s, timeout_dtu: %#x, "
+	TP_printk(DW_PR_FMT ", timeout: %s, timeout_dtu: 0x%0x, "
 		 "next_operational_state: %s" , DW_PR_ARG,
 		__entry->timeout ? "true" : "false", __entry->timeout_dtu,
 		__print_symbolic(__entry->next_operational_state,
@@ -558,7 +585,7 @@ TRACE_EVENT(dw3000_mcps_set_hw_addr_filt,
 		DW_ASSIGN;
 		__entry->changed = changed;
 	),
-	TP_printk(DW_PR_FMT ", changed: %#x", DW_PR_ARG,
+	TP_printk(DW_PR_FMT ", changed: 0x%x", DW_PR_ARG,
 		  __entry->changed)
 );
 
@@ -591,7 +618,7 @@ TRACE_EVENT(dw3000_rctu_convert_align,
 		DW_ASSIGN;
 		__entry->rmarker_dtu = rmarker_dtu;
 	),
-	TP_printk(DW_PR_FMT ", rmarker_dtu: %#x", DW_PR_ARG,
+	TP_printk(DW_PR_FMT ", rmarker_dtu: 0x%x", DW_PR_ARG,
 		  __entry->rmarker_dtu)
 );
 
@@ -606,7 +633,7 @@ TRACE_EVENT(dw3000_rctu_convert_synced,
 		DW_ASSIGN;
 		__entry->rmarker_rctu = rmarker_rctu;
 	),
-	TP_printk(DW_PR_FMT ", rmarker_rctu: %#llx", DW_PR_ARG,
+	TP_printk(DW_PR_FMT ", rmarker_rctu: 0x%llx", DW_PR_ARG,
 		  __entry->rmarker_rctu)
 );
 
@@ -625,8 +652,8 @@ TRACE_EVENT(dw3000_rctu_convert_rx,
 		__entry->ts_rctu = ts_rctu;
 		__entry->rmarker_rctu = rmarker_rctu;
 	),
-	TP_printk(DW_PR_FMT ", rmarker_dtu: %#x, ts_rctu: %#llx, "
-		  "rmarker_rctu: %#llx",
+	TP_printk(DW_PR_FMT ", rmarker_dtu: 0x%x, ts_rctu: 0x%llx, "
+		  "rmarker_rctu: 0x%llx",
 		  DW_PR_ARG, __entry->rmarker_dtu, __entry->ts_rctu,
 		  __entry->rmarker_rctu)
 );
@@ -646,7 +673,7 @@ TRACE_EVENT(dw3000_rctu_convert_tx,
 		__entry->ant_offset = ant_offset;
 		__entry->rmarker_rctu = rmarker_rctu;
 	),
-	TP_printk(DW_PR_FMT ", ts_dtu: %#x, ant_offset: %#x, rmarker_rctu: %#llx",
+	TP_printk(DW_PR_FMT ", ts_dtu: 0x%x, ant_offset: 0x%x, rmarker_rctu: 0x%llx",
 		  DW_PR_ARG, __entry->ts_dtu, __entry->ant_offset,
 		  __entry->rmarker_rctu)
 );
@@ -659,14 +686,14 @@ TRACE_EVENT(dw3000_isr,
 	TP_ARGS(dw, status),
 	TP_STRUCT__entry(
 		DW_ENTRY
-		DW3000_SYS_STATUS_FLAGS_ENTRY
+		DW_SYS_STATUS_FLAGS_ENTRY
 	),
 	TP_fast_assign(
 		DW_ASSIGN;
-		DW3000_SYS_STATUS_FLAGS_ASSIGN;
+		DW_SYS_STATUS_FLAGS_ASSIGN;
 	),
-	TP_printk(DW_PR_FMT ", " DW3000_SYS_STATUS_FLAGS_PR_FMT,
-		  DW_PR_ARG, DW3000_SYS_STATUS_FLAGS_PR_ARG)
+	TP_printk(DW_PR_FMT ", " DW_SYS_STATUS_FLAGS_PR_FMT,
+		  DW_PR_ARG, DW_SYS_STATUS_FLAGS_PR_ARG)
 );
 
 TRACE_EVENT(dw3000_check_idlerc,
@@ -775,7 +802,7 @@ TRACE_EVENT(dw3000_resync_dtu_sys_time,
 		__entry->sys_time_sync = sys_time_sync;
 		__entry->dtu_sync = dtu_sync;
 	),
-	TP_printk(DW_PR_FMT ", sys_time_sync: %#08x, dtu_sync: %#08x",
+	TP_printk(DW_PR_FMT ", sys_time_sync: 0x%08x, dtu_sync: 0x%08x",
 		  DW_PR_ARG, __entry->sys_time_sync, __entry->dtu_sync)
 );
 
@@ -845,8 +872,8 @@ TRACE_EVENT(dw3000_wakeup_done,
 		__entry->dtu_next_op  = dtu_next_op;
 		__entry->next_op = next_op;
 	),
-	TP_printk(DW_PR_FMT ", sleep_us: %lld, sleep_enter_dtu: %#x, "
-		  "next_op_date: %#x, next_op: %s", DW_PR_ARG,
+	TP_printk(DW_PR_FMT ", sleep_us: %lld, sleep_enter_dtu: 0x%x, "
+		  "next_op_date: 0x%x, next_op: %s", DW_PR_ARG,
 		  __entry->sleep_time_us, __entry->sleep_enter_dtu,
 		  __entry->dtu_next_op,
 		  __print_symbolic(__entry->next_op, DW3000_OP_STATE_SYMBOLS))
@@ -872,6 +899,25 @@ TRACE_EVENT(dw3000_power_stats,
 		  (unsigned)__entry->len_or_date)
 );
 
+TRACE_EVENT(dw3000_prog_xtrim,
+	TP_PROTO(struct dw3000 *dw, int res, int value, int bias),
+	TP_ARGS(dw, res, value, bias),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		__field(int, res)
+		__field(int, value)
+		__field(int, bias)
+	),
+	TP_fast_assign(
+		DW_ASSIGN;
+		__entry->res = res;
+		__entry->value = value;
+		__entry->bias = bias;
+	),
+	TP_printk(DW_PR_FMT ", res: %d, xtrim: %d, bias: %d",
+		DW_PR_ARG, __entry->res, __entry->value, __entry->bias)
+);
+
 TRACE_EVENT(dw3000_set_antenna_gpio,
 	TP_PROTO(struct dw3000 *dw, int res, u8 gpio, u8 value),
 	TP_ARGS(dw, res, gpio, value),
@@ -889,6 +935,58 @@ TRACE_EVENT(dw3000_set_antenna_gpio,
 	),
 	TP_printk(DW_PR_FMT ", res: %d, gpio: %u, value: %u",
 		DW_PR_ARG, __entry->res, __entry->gpio, __entry->value)
+);
+
+TRACE_EVENT(dw3000_read_frame_cir_data,
+	TP_PROTO(struct dw3000 *dw, u8 prf, u8 stsMode, u64 utime),
+	TP_ARGS(dw, prf, stsMode, utime),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		__field(u8, prf)
+		__field(u8, stsMode)
+		__field(u64, utime)
+	),
+	TP_fast_assign(
+		DW_ASSIGN;
+		__entry->prf = prf;
+		__entry->stsMode = stsMode;
+		__entry->utime = utime;
+	),
+	TP_printk(DW_PR_FMT ", utime: %llu, prf: %u, sts: %u",
+		DW_PR_ARG, __entry->utime, __entry->prf, __entry->stsMode)
+);
+
+TRACE_EVENT(dw3000_read_frame_cir_data_return,
+	TP_PROTO(struct dw3000 *dw, u64 ts, u32 f1, u32 f2, u32 f3,
+		u16 acc, u16 fpidx, s32 off, u32 filter),
+	TP_ARGS(dw, ts, f1, f2, f3, acc, fpidx, off, filter),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		__field(u64, ts)
+		__field(u32, f1)
+		__field(u32, f2)
+		__field(u32, f3)
+		__field(u16, acc)
+		__field(u16, fpidx)
+		__field(s32, off)
+		__field(u32, filter)
+	),
+	TP_fast_assign(
+		DW_ASSIGN;
+		__entry->ts = ts;
+		__entry->f1 = f1;
+		__entry->f2 = f2;
+		__entry->f3 = f3;
+		__entry->acc = acc;
+		__entry->fpidx = fpidx;
+		__entry->off = off;
+		__entry->filter = filter;
+	),
+	TP_printk(DW_PR_FMT ", ts: %llu, f1: %u, f2: %u, f3: %u, "
+		"acc: %hu, fpidx: %hu, offset: %d, filter: 0x%x",
+		DW_PR_ARG, __entry->ts, __entry->f1, __entry->f2,
+			__entry->f3, __entry->acc, __entry->fpidx, __entry->off,
+			__entry->filter)
 );
 
 TRACE_EVENT(dw3000_coex_gpio,
@@ -1011,7 +1109,7 @@ TRACE_EVENT(dw3000_rx_rssi,
 		__entry->dgc_dec)
 	);
 
-TRACE_EVENT(dw3000_nfcc_coex_isr,
+TRACE_EVENT(dw3000_isr_dss_stat,
 	TP_PROTO(struct dw3000 *dw, u8 dss_stat),
 	TP_ARGS(dw, dss_stat),
 	TP_STRUCT__entry(
@@ -1201,7 +1299,17 @@ DEFINE_EVENT(dw_only_evt, dw3000_nfcc_coex_configure,
 	TP_ARGS(dw)
 );
 
-DEFINE_EVENT(dw_only_evt, dw3000_nfcc_coex_watchdog,
+DEFINE_EVENT(dw_only_evt, dw3000_nfcc_coex_watchdog_timeout,
+	TP_PROTO(struct dw3000 *dw),
+	TP_ARGS(dw)
+);
+
+DEFINE_EVENT(dw_only_evt, dw3000_nfcc_coex_cancel_watchdog,
+	TP_PROTO(struct dw3000 *dw),
+	TP_ARGS(dw)
+);
+
+DEFINE_EVENT(dw_only_evt, dw3000_nfcc_coex_spi1_avail,
 	TP_PROTO(struct dw3000 *dw),
 	TP_ARGS(dw)
 );
@@ -1249,8 +1357,6 @@ TRACE_EVENT(dw3000_tm_cmd,
 	TP_printk(DW_PR_FMT ", " DW_TM_CMD_PR_FMT, DW_PR_ARG, DW_TM_CMD_PR_ARG)
 );
 #endif
-
-
 
 TRACE_EVENT(dw3000_set_pdoa,
 	TP_PROTO(struct dw3000 *dw, u32 mode),
@@ -1329,69 +1435,6 @@ TRACE_EVENT(dw3000_read_clockoffset,
 	TP_printk(DW_PR_FMT ", clockoffset: %d", DW_PR_ARG,
 		  __entry->cfo)
 	);
-
-TRACE_EVENT(dw3000_get_counters_first_part,
-		TP_PROTO(struct dw3000 *dw, u16 rxphe, u16 rxfsl, u16 rxcfg, u16 rxovrr, u16 rxsto, u16 rxpto, u16 fwto, u16 txfrs, u16 hpwarn, u16 spicrc),
-		TP_ARGS(dw, rxphe, rxfsl, rxcfg, rxovrr, rxsto, rxpto, fwto, txfrs, hpwarn, spicrc),
-		TP_STRUCT__entry(
-			DW_ENTRY
-			__field(u16, rxphe)
-			__field(u16, rxfsl)
-			__field(u16, rxcfg)
-			__field(u16, rxovrr)
-			__field(u16, rxsto)
-			__field(u16, rxpto)
-			__field(u16, fwto)
-			__field(u16, txfrs)
-			__field(u16, hpwarn)
-			__field(u16, spicrc)
-			),
-		TP_fast_assign(
-			DW_ASSIGN;
-			__entry->rxphe = rxphe;
-			__entry->rxfsl = rxfsl;
-			__entry->rxcfg = rxcfg;
-			__entry->rxovrr = rxovrr;
-			__entry->rxsto = rxsto;
-			__entry->rxpto = rxpto;
-			__entry->fwto = fwto;
-			__entry->txfrs = txfrs;
-			__entry->hpwarn = hpwarn;
-			__entry->spicrc = spicrc;
-			),
-		TP_printk(DW_PR_FMT " rxphe=%d rxfsl=%d rxcfg=%d, rxovrr=%d, rxsto=%d, rxpto=%d, fwto,=%d txfrs=%d, hpwarn=%d, spicrc=%d", DW_PR_ARG,
-			__entry->rxphe,
-			__entry->rxfsl,
-			__entry->rxcfg,
-			__entry->rxovrr,
-			__entry->rxsto,
-			__entry->rxpto,
-			__entry->fwto,
-			__entry->txfrs,
-			__entry->hpwarn,
-			__entry->spicrc)
-	   );
-
-TRACE_EVENT(dw3000_get_counters_second_part,
-		TP_PROTO(struct dw3000 *dw, u16 rxprej, u16 cperr, u16 vwarn ),
-		TP_ARGS(dw, rxprej, cperr, vwarn),
-		TP_STRUCT__entry(
-			DW_ENTRY
-			__field(u16, rxprej)
-			__field(u16, cperr)
-			__field(u16, vwarn)
-			),
-		TP_fast_assign(
-			DW_ASSIGN;
-			__entry->rxprej = rxprej;
-			__entry->cperr = cperr;
-			__entry->vwarn = vwarn;
-			),
-		TP_printk(DW_PR_FMT " rxfce=%d, sts_qual_err=%d, vwarn=%d", DW_PR_ARG,
-			__entry->rxprej,
-			__entry->cperr,
-			__entry->vwarn)
-	   );
 
 /* clang-format on */
 #endif /* !__DW3000_TRACE || TRACE_HEADER_MULTI_READ */

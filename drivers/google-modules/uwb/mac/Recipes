@@ -6,7 +6,7 @@ all:
 	ninja -C utest/build
 
 test: all
-	./utest/build/test_mac
+	./utest/build/test_mac $(TESTFLAGS)
 
 cov:
 	ninja -C utest/build-cov test_mac_coverage
@@ -25,7 +25,7 @@ check_format:
 	../tools/check-format . ../kernel/net ../kernel/include
 
 check_doc:
-	../deps/linux/linux/scripts/kernel-doc -none *.h *.c include/net/*.h ../kernel/include/net/*.h
+	../deps/linux/linux-uwb/scripts/kernel-doc -Werror -none *.h *.c include/net/*.h ../kernel/include/net/*.h
 
 help:
 	@echo "cmake - run cmake to create the build tree, must be done once"

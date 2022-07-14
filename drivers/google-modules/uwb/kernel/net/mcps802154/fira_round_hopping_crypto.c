@@ -62,7 +62,11 @@ int fira_round_hopping_crypto_init(
 
 	tfm = crypto_alloc_sync_skcipher("ecb(aes)", 0, 0);
 	if (IS_ERR(tfm)) {
-		r = PTR_ERR(round_hopping_sequence->tfm);
+		r = PTR_ERR(tfm);
+		if (r == -ENOENT) {
+			pr_err("The crypto transform ecb(aes) seems to be missing."
+			       " Please check your kernel configuration.\n");
+		}
 		goto err_free_data;
 	}
 

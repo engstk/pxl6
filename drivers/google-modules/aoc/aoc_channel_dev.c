@@ -36,7 +36,8 @@ module_param(received_msg_count, long, S_IRUGO);
 module_param(sent_msg_count, long, S_IRUGO);
 
 struct chan_prvdata {
-	struct wakeup_source *wakelock;
+	struct wakeup_source *queue_wakelock;
+	struct wakeup_source *user_wakelock;
 };
 
 struct aocc_device_entry {
@@ -238,9 +239,16 @@ static int aocc_demux_kthread(void *data)
 		}
 		mutex_unlock(&s_open_files_lock);
 
-		/* Take a wakelock to allow the queue to drain. */
+		/*
+		 * If the message is "waking", take a longer wakelock to allow userspace to
+		 * dequeue the message.  If non-waking, take a short wakelock until the queue
+		 * has been drained to make sure non-waking messages are not preventing us from
+		 * reading a waking message at the end.
+		 */
 		if (take_wake_lock) {
-			pm_wakeup_ws_event(service_prvdata->wakelock, 200, true);
+			pm_wakeup_ws_event(service_prvdata->user_wakelock, 200, true);
+		} else if (aoc_service_can_read(service)) {
+			pm_wakeup_ws_event(service_prvdata->queue_wakelock, 10, true);
 		}
 
 		if (!handler_found) {
@@ -766,7 +774,8 @@ static int aocc_probe(struct aoc_service_dev *dev)
 		return -ENOMEM;
 
 	if (strcmp(dev_name(&dev->dev), "usf_sh_mem_doorbell") != 0) {
-		prvdata->wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
+		prvdata->user_wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
+		prvdata->queue_wakelock = wakeup_source_register(&dev->dev, "usf_queue");
 		dev->prvdata = prvdata;
 
 		ret = create_character_device(dev);
@@ -801,9 +810,14 @@ static int aocc_remove(struct aoc_service_dev *dev)
 		sh_mem_doorbell_service_dev = NULL;
 	} else {
 		prvdata = dev->prvdata;
-		if (prvdata->wakelock) {
-			wakeup_source_unregister(prvdata->wakelock);
-			prvdata->wakelock = NULL;
+		if (prvdata->queue_wakelock) {
+			wakeup_source_unregister(prvdata->queue_wakelock);
+			prvdata->queue_wakelock = NULL;
+		}
+
+		if (prvdata->user_wakelock) {
+			wakeup_source_unregister(prvdata->user_wakelock);
+			prvdata->user_wakelock = NULL;
 		}
 	}
 

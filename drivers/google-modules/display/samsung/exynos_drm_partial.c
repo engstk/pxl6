@@ -294,7 +294,7 @@ static void exynos_partial_set_size(struct exynos_partial *partial,
 			partial_w, partial_h);
 
 	if (decon->dqe) {
-		dqe_reg_set_size(partial_w, partial_h);
+		dqe_reg_set_size(decon->id, partial_w, partial_h);
 		decon_reg_update_req_dqe(decon->id);
 	}
 

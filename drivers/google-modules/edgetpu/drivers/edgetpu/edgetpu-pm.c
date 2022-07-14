@@ -55,7 +55,7 @@ static int edgetpu_pm_get_locked(struct edgetpu_pm *etpm)
 	if (!power_up_count) {
 		ret = etpm->p->handlers->power_up(etpm);
 		if (!ret)
-			edgetpu_mailbox_restore_active_vii_queues(etpm->etdev);
+			edgetpu_mailbox_restore_active_mailbox_queues(etpm->etdev);
 	}
 	if (ret)
 		etpm->p->power_up_count--;
@@ -378,7 +378,8 @@ int edgetpu_pm_suspend(struct edgetpu_dev *etdev)
 		if (NO_WAKELOCK(lc->client->wakelock) ||
 		    !lc->client->wakelock->req_count)
 			continue;
-		etdev_warn_ratelimited(etdev, "pid %d tgid %d count %d\n",
+		etdev_warn_ratelimited(etdev,
+				       "client pid %d tgid %d count %d\n",
 				       lc->client->pid,
 				       lc->client->tgid,
 				       lc->client->wakelock->req_count);

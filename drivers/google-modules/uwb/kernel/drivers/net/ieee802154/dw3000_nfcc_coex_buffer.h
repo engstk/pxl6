@@ -26,9 +26,7 @@
 
 #include <linux/module.h>
 #include "dw3000_nfcc_coex.h"
-
-/* Forward declaration. */
-struct dw3000;
+#include "dw3000.h"
 
 int dw3000_nfcc_coex_write_buffer(struct dw3000 *dw,
 				  const struct dw3000_nfcc_coex_buffer *buffer,

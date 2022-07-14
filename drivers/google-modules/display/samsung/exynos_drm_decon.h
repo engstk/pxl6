@@ -87,6 +87,7 @@ struct dpu_bts_win_config {
 	u32 dst_h;
 	bool is_rot;
 	bool is_comp;
+	bool is_secure;
 	int dpp_ch;
 	u32 format;
 	u64 comp_src;
@@ -114,9 +115,15 @@ struct bts_dpp_info {
 struct bts_decon_info {
 	struct bts_dpp_info rdma[MAX_WIN_PER_DECON];
 	struct bts_dpp_info odma;
+	struct bts_dpp_info rcddma;
 	u32 vclk; /* Khz */
 	u32 lcd_w;
 	u32 lcd_h;
+};
+
+struct decon_win_config {
+	struct dpu_bts_win_config win;
+	dma_addr_t dma_addr;
 };
 
 struct dpu_bts {
@@ -143,12 +150,16 @@ struct dpu_bts {
 	u32 rot_util_pct;
 	u32 afbc_rgb_util_pct;
 	u32 afbc_yuv_util_pct;
+	u32 afbc_rgb_rt_util_pct;
+	u32 afbc_yuv_rt_util_pct;
 	u32 dfs_lv_cnt;
 	u32 dfs_lv_khz[BTS_DFS_MAX];
 	u32 vbp;
 	u32 vfp;
 	u32 vsa;
 	u32 fps;
+	u32 pending_vblank_usec;
+	u32 vblank_usec;
 	/* includes writeback dpp */
 	struct dpu_bts_bw rt_bw[MAX_DPP_CNT];
 
@@ -164,6 +175,7 @@ struct dpu_bts {
 
 	struct dpu_bts_win_config win_config[MAX_WIN_PER_DECON];
 	struct dpu_bts_win_config wb_config;
+	struct decon_win_config rcd_win_config;
 	atomic_t delayed_update;
 };
 
@@ -250,15 +262,17 @@ enum dpu_event_type {
 	DPU_EVT_DIMMING_START,
 	DPU_EVT_DIMMING_END,
 
+	DPU_EVT_CGC_FRAMEDONE,
+
 	DPU_EVT_MAX, /* End of EVENT */
 };
 
 enum dpu_event_condition {
-	DPU_EVT_CONDITION_ALL = 0,
-	DPU_EVT_CONDITION_UNDERRUN,
-	DPU_EVT_CONDITION_FAIL_UPDATE_BW,
-	DPU_EVT_CONDITION_FIFO_TIMEOUT,
-	DPU_EVT_CONDITION_IDMA_ERROR,
+	DPU_EVT_CONDITION_DEFAULT		= 1U << 0,
+	DPU_EVT_CONDITION_UNDERRUN		= 1U << 1,
+	DPU_EVT_CONDITION_FAIL_UPDATE_BW	= 1U << 2,
+	DPU_EVT_CONDITION_FIFO_TIMEOUT		= 1U << 3,
+	DPU_EVT_CONDITION_IDMA_ERROR		= 1U << 4,
 };
 
 #define DPU_CALLSTACK_MAX 10
@@ -286,13 +300,9 @@ struct dpu_log_rsc_occupancy {
 	u32 rsc_win;
 };
 
-struct decon_win_config {
-	struct dpu_bts_win_config win;
-	dma_addr_t dma_addr;
-};
-
 struct dpu_log_atomic {
 	struct decon_win_config win_config[MAX_WIN_PER_DECON];
+	struct decon_win_config rcd_win_config;
 };
 
 /* Event log structure for DPU power domain status */
@@ -418,6 +428,7 @@ struct decon_device {
 	struct exynos_drm_crtc		*crtc;
 	/* dpp information saved in dpp channel number order */
 	struct dpp_device		*dpp[MAX_WIN_PER_DECON];
+	struct dpp_device		*rcd;
 	u32				dpp_cnt;
 	u32				win_cnt;
 	enum exynos_drm_output_type	con_type;
@@ -433,6 +444,7 @@ struct decon_device {
 	struct kthread_work		early_wakeup_work;
 	struct kthread_work		buf_dump_work;
 	struct exynos_recovery		recovery;
+	struct exynos_dma		*cgc_dma;
 
 	u32				irq_fs;	/* frame start irq number*/
 	u32				irq_fd;	/* frame done irq number*/
@@ -441,6 +453,7 @@ struct decon_device {
 	int				irq_ds;	/* dimming start irq number */
 	int				irq_de;	/* dimming end irq number */
 	atomic_t			te_ref;
+	struct completion te_rising; /* signaled when irq_te is triggered */
 
 	spinlock_t			slock;
 
@@ -449,6 +462,7 @@ struct decon_device {
 	bool itmon_notified;
 #endif
 
+	atomic_t frames_pending;
 	wait_queue_head_t framedone_wait;
 
 	bool keep_unmask;
@@ -480,10 +494,12 @@ void decon_force_vblank_event(struct decon_device *decon);
 
 #if IS_ENABLED(CONFIG_EXYNOS_BTS)
 void decon_mode_bts_pre_update(struct decon_device *decon,
-				const struct drm_crtc_state *crtc_state);
+				const struct drm_crtc_state *crtc_state,
+				const struct drm_atomic_state *state);
 #else
 void decon_mode_bts_pre_update(struct decon_device *decon,
-				const struct drm_crtc_state *crtc_state) { }
+				const struct drm_crtc_state *crtc_state,
+				const struct drm_atomic_state *state) { }
 #endif
 
 #if IS_ENABLED(CONFIG_EXYNOS_ITMON)
