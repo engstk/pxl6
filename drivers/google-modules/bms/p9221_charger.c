@@ -595,13 +595,71 @@ static int p9221_set_switch_reg(struct p9221_charger_data *charger, bool enable)
 }
 
 #define EPP_MODE_REQ_PWR		15
+#define EPP_MODE_REQ_VOUT		12000
+static int p9xxx_set_bypass_mode(struct p9221_charger_data *charger)
+{
+	const int req_pwr = EPP_MODE_REQ_PWR;
+	int i, count, ret;
+	u8 cdmode, currpwr;
+	u32 vout_mv;
+
+	/* Check it's in Cap Div mode */
+	ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
+	if (ret || (cdmode & CDMODE_BYPASS_MODE))
+		return ret;
+	dev_info(&charger->client->dev, "cdmode_reg=%02x\n", cdmode);
+
+	for (count = 0; count < 3; count++) {
+		/* Change the Requested Power to 15W */
+		ret = charger->reg_write_8(charger, P9412_PROP_REQ_PWR_REG, req_pwr * 2);
+		if (ret == 0)
+			ret = charger->chip_set_cmd(charger, PROP_REQ_PWR_CMD);
+		if (ret)
+			dev_err(&charger->client->dev,
+				"Fail to request Tx power(%d)\n", ret);
+
+		/* total 5 seconds wait and early exit when WLC offline */
+		for (i = 0; i < 50; i += 1) {
+			usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+			if (!charger->online)
+				return 0;
+		}
+
+		/* Check PropCurrPwr and P9412 Vout */
+		vout_mv = 0;
+		currpwr = 0;
+		ret = charger->chip_get_vout(charger, &vout_mv);
+		ret |= charger->reg_read_8(charger, P9412_PROP_CURR_PWR_REG, &currpwr);
+		dev_info(&charger->client->dev, "count=%d, currpwr=%02x, vout_mv=%u\n",
+			 count, currpwr, vout_mv);
+		if (ret == 0 && currpwr == (req_pwr * 2) && vout_mv < EPP_MODE_REQ_VOUT)
+			break;
+	}
+
+	if (count == 3)
+                return -ETIMEDOUT;
+
+	/* Request Bypass mode */
+	ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
+	if (ret) {
+		u8 mode_sts = 0, err_sts = 0;
+		int rc;
+
+		rc = charger->reg_read_8(charger, P9412_PROP_MODE_STATUS_REG, &mode_sts);
+		rc |= charger->reg_read_8(charger, P9412_PROP_MODE_ERR_STS_REG, &err_sts);
+		dev_err(&charger->client->dev,
+			"Fail to change to bypass mode(%d), rc=%d sts=%02x, err=%02x\n",
+			ret, rc, mode_sts, err_sts);
+	}
+
+	return ret;
+}
+
 static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 {
 	const int dc_sw_gpio = charger->pdata->dc_switch_gpio;
 	const int extben_gpio = charger->pdata->ext_ben_gpio;
-	const int req_pwr = EPP_MODE_REQ_PWR;
-	int ret, i;
-	u8 cdmode;
+	int ret;
 
 	if (!charger->wlc_dc_enabled)
 		return 0;
@@ -620,46 +678,23 @@ static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 
 	gvotable_cast_int_vote(charger->dc_icl_votable, P9221_HPP_VOTER, 0, false);
 
-	/* Check it's in Cap Div mode */
-	ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
-	if (ret == 0)
-		dev_info(&charger->client->dev,
-			 "p9221_reset_wlc_dc: cdmode_reg=%02x\n", cdmode);
-	if (cdmode & CDMODE_BYPASS_MODE)
-		return 0;
-
-	/* Change the Requested Power to 15W */
-	ret = charger->reg_write_8(charger, P9412_PROP_REQ_PWR_REG, req_pwr * 2);
-	if (ret == 0) {
-		ret = charger->chip_set_cmd(charger, PROP_REQ_PWR_CMD);
-		if (ret)
-			dev_err(&charger->client->dev,
-				"p9221_reset_wlc_dc: Fail to request Tx power(%d)\n", ret);
-	}
-
-	/* total 3 seconds wait and early exit when WLC offline */
-	for (i = 0; i < 30; i += 1) {
-		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
-		if (!charger->online)
-			return 0;
-	}
-
-	/* Request Bypass mode */
-	ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
+	ret = p9xxx_set_bypass_mode(charger);
 	if (ret) {
-		dev_err(&charger->client->dev,
-			"p9221_reset_wlc_dc: Fail to change to bypass mode(%d)\n", ret);
+		/*
+		 * going to go offline and reset the state when fail to change
+		 * to bypass mode
+		 */
+		gvotable_cast_bool_vote(charger->wlc_disable_votable,
+					P9221_HPP_VOTER, true);
+		usleep_range(200 * USEC_PER_MSEC, 220 * USEC_PER_MSEC);
+		gvotable_cast_bool_vote(charger->wlc_disable_votable,
+					P9221_HPP_VOTER, false);
 	} else {
-		ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
-		if (ret == 0) {
-			dev_info(&charger->client->dev,
-				 "p9221_reset_wlc_dc: cdmode_reg=%02x\n", cdmode);
-			charger->prop_mode_en = false;
-			p9221_write_fod(charger);
-		}
+		charger->prop_mode_en = false;
+		p9221_write_fod(charger);
 	}
 
-	return 0;
+	return ret;
 }
 
 #define CHARGE_15W_VOUT_UV	12000000
