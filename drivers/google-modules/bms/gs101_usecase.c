@@ -556,6 +556,8 @@ int gs101_to_standby(struct max77759_usecase_data *uc_data, int use_case)
 
 	/* from WLC-DC to STBY */
 	if (from_uc == GSU_MODE_WLC_DC) {
+		if (uc_data->dc_sw_gpio > 0)
+			gpio_set_value_cansleep(uc_data->dc_sw_gpio, 0);
 		ret = gs101_ext_mode(uc_data, EXT_MODE_OFF);
 		if (ret < 0) {
 			pr_debug("%s: cannot change extmode ret:%d\n",

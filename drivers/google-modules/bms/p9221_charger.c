@@ -615,14 +615,16 @@ static int p9xxx_set_bypass_mode(struct p9221_charger_data *charger)
 		if (ret == 0)
 			ret = charger->chip_set_cmd(charger, PROP_REQ_PWR_CMD);
 		if (ret)
-			dev_err(&charger->client->dev,
-				"Fail to request Tx power(%d)\n", ret);
+			dev_warn(&charger->client->dev,
+				 "Fail to request Tx power(%d)\n", ret);
 
 		/* total 5 seconds wait and early exit when WLC offline */
 		for (i = 0; i < 50; i += 1) {
 			usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
-			if (!charger->online)
-				return 0;
+			if (!charger->online) {
+				dev_err(&charger->client->dev, "%s: WLC offline\n", __func__);
+				return -ENODEV;
+			}
 		}
 
 		/* Check PropCurrPwr and P9412 Vout */
@@ -636,8 +638,10 @@ static int p9xxx_set_bypass_mode(struct p9221_charger_data *charger)
 			break;
 	}
 
-	if (count == 3)
-                return -ETIMEDOUT;
+	if (count == 3) {
+		dev_err(&charger->client->dev, "%s: timeout for change to bypass mode\n", __func__);
+		return -ETIMEDOUT;
+	}
 
 	/* Request Bypass mode */
 	ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
@@ -661,14 +665,10 @@ static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 	const int extben_gpio = charger->pdata->ext_ben_gpio;
 	int ret;
 
-	if (!charger->wlc_dc_enabled)
-		return 0;
-
 	charger->wlc_dc_enabled = false;
-	if (dc_sw_gpio >= 0)
-		gpio_set_value_cansleep(dc_sw_gpio, 0);
-	if (extben_gpio)
-		gpio_set_value_cansleep(extben_gpio, 0);
+
+	p9xxx_gpio_set_value(charger, dc_sw_gpio, 0);
+	p9xxx_gpio_set_value(charger, extben_gpio, 0);
 
 	p9221_set_switch_reg(charger, false);
 
@@ -681,8 +681,10 @@ static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 	ret = p9xxx_set_bypass_mode(charger);
 	if (ret) {
 		/*
-		 * going to go offline and reset the state when fail to change
-		 * to bypass mode
+		 * going to go offline and reset the state when
+		 * 1. fail to change to bypass mode
+		 * 2. WLC offline(normal)
+		 * 3. MW wcin is 0 but WLC chip Vout > 0
 		 */
 		gvotable_cast_bool_vote(charger->wlc_disable_votable,
 					P9221_HPP_VOTER, true);
@@ -877,7 +879,8 @@ static void p9221_set_offline(struct p9221_charger_data *charger)
 	charger->sw_ramp_done = false;
 	charger->force_bpp = false;
 	charger->chg_on_rtx = false;
-	p9221_reset_wlc_dc(charger);
+	if (!charger->wait_for_online)
+		p9221_reset_wlc_dc(charger);
 	charger->prop_mode_en = false;
 	charger->hpp_hv = false;
 	charger->fod_mode = -1;
@@ -2249,7 +2252,7 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 
 		charger->wlc_dc_enabled = true;
 		if (extben_gpio)
-			gpio_set_value_cansleep(extben_gpio, 1);
+			p9xxx_gpio_set_value(charger, extben_gpio, 1);
 
 		p9221_set_switch_reg(charger, true);
 
@@ -2499,6 +2502,7 @@ static int p9221_set_property(struct power_supply *psy,
 		if (!charger->wlc_dc_enabled) {
 			dev_dbg(&charger->client->dev,
 				"Not WLC-DC, not allow to set dc current\n");
+			ret = -EINVAL;
 			break;
 		}
 		/* uA */
@@ -2509,6 +2513,7 @@ static int p9221_set_property(struct power_supply *psy,
 		if (!charger->wlc_dc_enabled) {
 			dev_dbg(&charger->client->dev,
 				"Not WLC-DC, not allow to set Vout\n");
+			ret = -EINVAL;
 			break;
 		}
 		/* uV */

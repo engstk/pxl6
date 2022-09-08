@@ -1842,6 +1842,17 @@ int p9221_chip_init_funcs(struct p9221_charger_data *chgr, u16 chip_id)
 }
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
+int p9xxx_gpio_set_value(struct p9221_charger_data *chgr, unsigned gpio, int value)
+{
+	if (gpio <= 0)
+		return -EINVAL;
+
+	logbuffer_log(chgr->log, "%s: set gpio %d to %d\n", __func__, gpio, value);
+	gpio_set_value_cansleep(gpio, value);
+
+	return 0;
+}
+
 static int p9xxx_gpio_get_direction(struct gpio_chip *chip,
 				    unsigned int offset)
 {
@@ -1903,9 +1914,8 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 		gpio_direction_output(charger->pdata->wlc_en, value);
 		break;
 	case P9XXX_GPIO_DC_SW_EN:
-		if (charger->pdata->dc_switch_gpio < 0)
-			break;
-		gpio_set_value_cansleep(charger->pdata->dc_switch_gpio, value);
+		ret = p9xxx_gpio_set_value(charger, charger->pdata->dc_switch_gpio, value);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
