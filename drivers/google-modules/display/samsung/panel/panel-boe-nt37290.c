@@ -1001,7 +1001,7 @@ static const struct brightness_settings evt1_br_settings = {
  * Return a new value after calculation. Return negative if the inputs are invalid.
  */
 
-static inline u16 linear_interpolation(x1, x2, y1, y2, x)
+static inline u16 linear_interpolation(u16 x1, u16 x2, u16 y1, u16 y2, u16 x)
 {
 	if (x == x1)
 		return y1;
