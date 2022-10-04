@@ -469,7 +469,7 @@ static void exynos_cgc_dma_update(struct exynos_dqe *dqe,
 		decon_reg_update_req_cgc(id);
 }
 
-static void __exynos_dqe_update(struct exynos_dqe *dqe,
+static void __nocfi __exynos_dqe_update(struct exynos_dqe *dqe,
 		struct exynos_dqe_state *state, u32 width, u32 height)
 {
 	const struct decon_device *decon = dqe->decon;
@@ -509,7 +509,7 @@ static const struct exynos_dqe_funcs dqe_funcs = {
 	.update = __exynos_dqe_update,
 };
 
-void exynos_dqe_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state,
+void __nocfi exynos_dqe_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state,
 		u32 width, u32 height)
 {
 	dqe->funcs->update(dqe, state, width, height);
