@@ -29,6 +29,7 @@
 
 #include <linux/tracepoint.h>
 #include "mcps802154_i.h"
+#include "idle_region.h"
 
 /* clang-format off */
 
@@ -37,72 +38,78 @@
 #define LOCAL_PR_FMT "hw%d"
 #define LOCAL_PR_ARG __entry->hw_idx
 
-#define mcps802154_tx_frame_name(name)                     \
+#define mcps802154_tx_frame_config_name(name)                     \
 	{                                                  \
-		MCPS802154_TX_FRAME_##name, #name          \
+		MCPS802154_TX_FRAME_CONFIG_##name, #name          \
 	}
-#define MCPS802154_TX_FRAME_NAMES                          \
-	mcps802154_tx_frame_name(TIMESTAMP_DTU),           \
-	mcps802154_tx_frame_name(CCA),                     \
-	mcps802154_tx_frame_name(RANGING),                 \
-	mcps802154_tx_frame_name(KEEP_RANGING_CLOCK),      \
-	mcps802154_tx_frame_name(RANGING_PDOA),            \
-	mcps802154_tx_frame_name(SP1),                     \
-	mcps802154_tx_frame_name(SP2),                     \
-	mcps802154_tx_frame_name(SP3),                     \
-	mcps802154_tx_frame_name(STS_MODE_MASK),           \
-	mcps802154_tx_frame_name(RANGING_ROUND)
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_TIMESTAMP_DTU);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CCA);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_RANGING);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_RANGING_PDOA);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_SP1);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_SP2);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_SP3);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_STS_MODE_MASK);
-TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_RANGING_ROUND);
+#define MCPS802154_TX_FRAME_CONFIG_NAMES                          \
+	mcps802154_tx_frame_config_name(TIMESTAMP_DTU),           \
+	mcps802154_tx_frame_config_name(CCA),                     \
+	mcps802154_tx_frame_config_name(RANGING),                 \
+	mcps802154_tx_frame_config_name(KEEP_RANGING_CLOCK),      \
+	mcps802154_tx_frame_config_name(RANGING_PDOA),            \
+	mcps802154_tx_frame_config_name(SP1),                     \
+	mcps802154_tx_frame_config_name(SP2),                     \
+	mcps802154_tx_frame_config_name(SP3),                     \
+	mcps802154_tx_frame_config_name(STS_MODE_MASK),           \
+	mcps802154_tx_frame_config_name(RANGING_ROUND)
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_TIMESTAMP_DTU);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_CCA);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_RANGING);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_KEEP_RANGING_CLOCK);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_RANGING_PDOA);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_SP1);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_SP2);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_SP3);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_STS_MODE_MASK);
+TRACE_DEFINE_ENUM(MCPS802154_TX_FRAME_CONFIG_RANGING_ROUND);
 
-#define mcps802154_rx_info_name(name)                      \
+#define mcps802154_rx_frame_config_name(name)                      \
 	{                                                  \
-		MCPS802154_RX_INFO_##name, #name           \
+		MCPS802154_RX_FRAME_CONFIG_##name, #name   \
 	}
-#define MCPS802154_RX_INFO_NAMES                           \
-	mcps802154_rx_info_name(TIMESTAMP_DTU),            \
-	mcps802154_rx_info_name(AACK),                     \
-	mcps802154_rx_info_name(RANGING),                  \
-	mcps802154_rx_info_name(KEEP_RANGING_CLOCK),       \
-	mcps802154_rx_info_name(RANGING_PDOA),             \
-	mcps802154_rx_info_name(SP1),                      \
-	mcps802154_rx_info_name(SP2),                      \
-	mcps802154_rx_info_name(SP3),                      \
-	mcps802154_rx_info_name(STS_MODE_MASK),            \
-	mcps802154_rx_info_name(RANGING_ROUND)
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_TIMESTAMP_DTU);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_AACK);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_RANGING);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_KEEP_RANGING_CLOCK);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_RANGING_PDOA);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_SP1);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_SP2);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_SP3);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_STS_MODE_MASK);
-TRACE_DEFINE_ENUM(MCPS802154_RX_INFO_RANGING_ROUND);
+#define MCPS802154_RX_FRAME_CONFIG_NAMES                   \
+	mcps802154_rx_frame_config_name(TIMESTAMP_DTU),            \
+	mcps802154_rx_frame_config_name(AACK),                     \
+	mcps802154_rx_frame_config_name(RANGING),                  \
+	mcps802154_rx_frame_config_name(KEEP_RANGING_CLOCK),       \
+	mcps802154_rx_frame_config_name(RANGING_PDOA),             \
+	mcps802154_rx_frame_config_name(SP1),                      \
+	mcps802154_rx_frame_config_name(SP2),                      \
+	mcps802154_rx_frame_config_name(SP3),                      \
+	mcps802154_rx_frame_config_name(STS_MODE_MASK),            \
+	mcps802154_rx_frame_config_name(RANGING_ROUND)
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_TIMESTAMP_DTU);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_AACK);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_RANGING);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_KEEP_RANGING_CLOCK);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_RANGING_PDOA);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_SP1);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_SP2);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_SP3);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_STS_MODE_MASK);
+TRACE_DEFINE_ENUM(MCPS802154_RX_FRAME_CONFIG_RANGING_ROUND);
 
 #define mcps802154_rx_error_name(name)                     \
 	{                                                  \
 		MCPS802154_RX_ERROR_##name, #name          \
 	}
 #define MCPS802154_RX_ERROR_NAMES                          \
-	mcps802154_rx_error_name(BAD_CKSUM),               \
-	mcps802154_rx_error_name(UNCORRECTABLE),           \
-	mcps802154_rx_error_name(FILTERED),                \
-	mcps802154_rx_error_name(SFD_TIMEOUT),             \
+	mcps802154_rx_error_name(NONE),            \
+	mcps802154_rx_error_name(TIMEOUT),         \
+	mcps802154_rx_error_name(BAD_CKSUM),       \
+	mcps802154_rx_error_name(UNCORRECTABLE),   \
+	mcps802154_rx_error_name(FILTERED),        \
+	mcps802154_rx_error_name(SFD_TIMEOUT),     \
+	mcps802154_rx_error_name(PHR_DECODE),      \
 	mcps802154_rx_error_name(OTHER)
+TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_NONE);
+TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_TIMEOUT);
 TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_BAD_CKSUM);
 TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_UNCORRECTABLE);
 TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_FILTERED);
 TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_SFD_TIMEOUT);
+TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_PHR_DECODE);
 TRACE_DEFINE_ENUM(MCPS802154_RX_ERROR_OTHER);
 
 #define ieee802154_afilt_name(name)                        \
@@ -277,9 +284,9 @@ DEFINE_EVENT(local_only_evt, llhw_stop,
 
 TRACE_EVENT(llhw_tx_frame,
 	TP_PROTO(const struct mcps802154_local *local,
-		 const struct mcps802154_tx_frame_info *info,
+		 const struct mcps802154_tx_frame_config *config,
 		 int frame_idx, int next_delay_dtu),
-	TP_ARGS(local, info, frame_idx, next_delay_dtu),
+	TP_ARGS(local, config, frame_idx, next_delay_dtu),
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
 		__field(u32, timestamp_dtu)
@@ -292,11 +299,11 @@ TRACE_EVENT(llhw_tx_frame,
 		),
 	TP_fast_assign(
 		LOCAL_ASSIGN;
-		__entry->timestamp_dtu = info->timestamp_dtu;
-		__entry->rx_enable_after_tx_dtu = info->rx_enable_after_tx_dtu;
-		__entry->rx_enable_after_tx_timeout_dtu = info->rx_enable_after_tx_timeout_dtu;
-		__entry->ant_set_id = info->ant_set_id;
-		__entry->flags = info->flags;
+		__entry->timestamp_dtu = config->timestamp_dtu;
+		__entry->rx_enable_after_tx_dtu = config->rx_enable_after_tx_dtu;
+		__entry->rx_enable_after_tx_timeout_dtu = config->rx_enable_after_tx_timeout_dtu;
+		__entry->ant_set_id = config->ant_set_id;
+		__entry->flags = config->flags;
 		__entry->frame_idx = frame_idx;
 		__entry->next_delay_dtu = next_delay_dtu;
 		),
@@ -306,7 +313,7 @@ TRACE_EVENT(llhw_tx_frame,
 		  LOCAL_PR_ARG,
 		  __entry->timestamp_dtu, __entry->rx_enable_after_tx_dtu,
 		  __entry->rx_enable_after_tx_timeout_dtu, __entry->ant_set_id,
-		  __print_flags(__entry->flags, "|", MCPS802154_TX_FRAME_NAMES),
+		  __print_flags(__entry->flags, "|", MCPS802154_TX_FRAME_CONFIG_NAMES),
 		  __entry->frame_idx,
 		  __entry->next_delay_dtu
 		  )
@@ -314,13 +321,14 @@ TRACE_EVENT(llhw_tx_frame,
 
 TRACE_EVENT(llhw_rx_enable,
 	TP_PROTO(const struct mcps802154_local *local,
-		 const struct mcps802154_rx_info *info,
+		 const struct mcps802154_rx_frame_config *config,
 		 int frame_idx, int next_delay_dtu),
-	TP_ARGS(local, info, frame_idx, next_delay_dtu),
+	TP_ARGS(local, config, frame_idx, next_delay_dtu),
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
 		__field(u32, timestamp_dtu)
 		__field(int, timeout_dtu)
+		__field(int, frame_timeout_dtu)
 		__field(u8, flags)
 		__field(int, ant_set_id)
 		__field(int, frame_idx)
@@ -328,19 +336,21 @@ TRACE_EVENT(llhw_rx_enable,
 		),
 	TP_fast_assign(
 		LOCAL_ASSIGN;
-		__entry->timestamp_dtu = info->timestamp_dtu;
-		__entry->timeout_dtu = info->timeout_dtu;
-		__entry->flags = info->flags;
-		__entry->ant_set_id = info->ant_set_id;
+		__entry->timestamp_dtu = config->timestamp_dtu;
+		__entry->timeout_dtu = config->timeout_dtu;
+		__entry->frame_timeout_dtu = config->frame_timeout_dtu;
+		__entry->flags = config->flags;
+		__entry->ant_set_id = config->ant_set_id;
 		__entry->frame_idx = frame_idx;
 		__entry->next_delay_dtu = next_delay_dtu;
 		),
 	TP_printk(LOCAL_PR_FMT " timestamp_dtu=0x%08x timeout_dtu=%d"
-		  " ant_set_id=%d flags=%s frame_idx=%d next_delay_dtu=%d",
+		  " frame_timeout_dtu=%d ant_set_id=%d flags=%s frame_idx=%d"
+		  " next_delay_dtu=%d",
 		  LOCAL_PR_ARG,
 		  __entry->timestamp_dtu, __entry->timeout_dtu,
-		  __entry->ant_set_id,
-		  __print_flags(__entry->flags, "|", MCPS802154_RX_INFO_NAMES),
+		  __entry->frame_timeout_dtu, __entry->ant_set_id,
+		  __print_flags(__entry->flags, "|", MCPS802154_RX_FRAME_CONFIG_NAMES),
 		  __entry->frame_idx,
 		  __entry->next_delay_dtu
 		  )
@@ -434,28 +444,53 @@ TRACE_EVENT(llhw_set_channel,
 	);
 
 TRACE_EVENT(llhw_set_hrp_uwb_params,
-	TP_PROTO(const struct mcps802154_local *local, int prf, int psr,
-		 int sfd_selector, int phr_rate, int data_rate),
-	TP_ARGS(local, prf, psr, sfd_selector, phr_rate, data_rate),
+	TP_PROTO(const struct mcps802154_local *local,
+		 const struct mcps802154_hrp_uwb_params *params),
+	TP_ARGS(local, params),
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
 		__field(int, prf)
 		__field(int, psr)
 		__field(int, sfd_selector)
-		__field(int, phr_rate)
+		__field(int, phr_hi_rate)
 		__field(int, data_rate)
 		),
 	TP_fast_assign(
 		LOCAL_ASSIGN;
-		__entry->prf = prf;
-		__entry->psr = psr;
-		__entry->sfd_selector = sfd_selector;
-		__entry->phr_rate = phr_rate;
-		__entry->data_rate = data_rate;
+		__entry->prf = params->prf;
+		__entry->psr = params->psr;
+		__entry->sfd_selector = params->sfd_selector;
+		__entry->phr_hi_rate = params->phr_hi_rate;
+		__entry->data_rate = params->data_rate;
 		),
-	TP_printk(LOCAL_PR_FMT " prf=%d psr=%d sfd_selector=%d phr_rate=%d data_rate=%d",
+	TP_printk(LOCAL_PR_FMT " prf=%d psr=%d sfd_selector=%d phr_hi_rate=%d data_rate=%d",
 		  LOCAL_PR_ARG, __entry->prf, __entry->psr,
-		  __entry->sfd_selector, __entry->phr_rate, __entry->data_rate)
+		  __entry->sfd_selector, __entry->phr_hi_rate, __entry->data_rate)
+	);
+
+TRACE_EVENT(llhw_check_hrp_uwb_params,
+	TP_PROTO(const struct mcps802154_local *local,
+		 const struct mcps802154_hrp_uwb_params *params),
+	TP_ARGS(local, params),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		__field(int, prf)
+		__field(int, psr)
+		__field(int, sfd_selector)
+		__field(int, phr_hi_rate)
+		__field(int, data_rate)
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		__entry->prf = params->prf;
+		__entry->psr = params->psr;
+		__entry->sfd_selector = params->sfd_selector;
+		__entry->phr_hi_rate = params->phr_hi_rate;
+		__entry->data_rate = params->data_rate;
+		),
+	TP_printk(LOCAL_PR_FMT " prf=%d psr=%d sfd_selector=%d phr_hi_rate=%d data_rate=%d",
+		  LOCAL_PR_ARG, __entry->prf, __entry->psr,
+		  __entry->sfd_selector, __entry->phr_hi_rate, __entry->data_rate)
 	);
 
 TRACE_EVENT(llhw_set_sts_params,
@@ -468,6 +503,8 @@ TRACE_EVENT(llhw_set_sts_params,
 		__field(int, seg_len)
 		__field(int, sp2_tx_gap_4chips)
 		__array(int, sp2_rx_gap_4chips, MCPS802154_STS_N_SEGS_MAX)
+		__array(u8, key, AES_BLOCK_SIZE)
+		__array(u8, v, AES_BLOCK_SIZE)
 		),
 	TP_fast_assign(
 		LOCAL_ASSIGN;
@@ -476,13 +513,67 @@ TRACE_EVENT(llhw_set_sts_params,
 		__entry->sp2_tx_gap_4chips = params->sp2_tx_gap_4chips;
 		memcpy(__entry->sp2_rx_gap_4chips, params->sp2_rx_gap_4chips,
 		       sizeof(params->sp2_rx_gap_4chips));
+		memcpy(__entry->key, params->key, sizeof(params->key));
+		memcpy(__entry->v, params->v, sizeof(params->v));
 		),
 	TP_printk(LOCAL_PR_FMT " n_segs=%d seg_len=%d sp2_tx_gap_4chips=%d"
-		  " sp2_rx_gap_4chips=%d,%d,%d,%d",
+		  " sp2_rx_gap_4chips=%d,%d,%d,%d"
+		  " sts_key=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x"
+		  " sts_v=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
 		  LOCAL_PR_ARG, __entry->n_segs, __entry->seg_len,
 		  __entry->sp2_tx_gap_4chips, __entry->sp2_rx_gap_4chips[0],
 		  __entry->sp2_rx_gap_4chips[1], __entry->sp2_rx_gap_4chips[2],
-		  __entry->sp2_rx_gap_4chips[3])
+		  __entry->sp2_rx_gap_4chips[3], __entry->key[0], __entry->key[1],
+		  __entry->key[2], __entry->key[3], __entry->key[4], __entry->key[5],
+		  __entry->key[6], __entry->key[7], __entry->key[8], __entry->key[9],
+		  __entry->key[10], __entry->key[11], __entry->key[12], __entry->key[13],
+		  __entry->key[14], __entry->key[15], __entry->v[0], __entry->v[1],
+		  __entry->v[2], __entry->v[3], __entry->v[4], __entry->v[5],
+		  __entry->v[6], __entry->v[7], __entry->v[8], __entry->v[9],
+		  __entry->v[10], __entry->v[11], __entry->v[12], __entry->v[13],
+		  __entry->v[14], __entry->v[15])
+	);
+
+TRACE_EVENT(llhw_rx_get_measurement,
+	TP_PROTO(const struct mcps802154_local *local, const void *rx_ctx),
+	TP_ARGS(local, rx_ctx),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		__field(const void *, rx_ctx)
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		__entry->rx_ctx = rx_ctx;
+		),
+	TP_printk(LOCAL_PR_FMT " rx_ctx=%p",
+		  LOCAL_PR_ARG,
+		  __entry->rx_ctx)
+	);
+
+TRACE_EVENT(llhw_return_measurement,
+	TP_PROTO(const struct mcps802154_local *local, int r,
+		 const struct mcps802154_rx_measurement_info *info),
+	TP_ARGS(local, r, info),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		__field(int, r)
+		__field(int, n_rssis)
+		__field(int, n_aoas)
+		__field(int, n_cirs)
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		__entry->r = r;
+		__entry->n_rssis = info->n_rssis;
+		__entry->n_aoas = info->n_aoas;
+		__entry->n_cirs = info->n_cirs;
+		),
+	TP_printk(LOCAL_PR_FMT " r=%d n_rssis=%d n_aoas=%d n_cirs=%d",
+		  LOCAL_PR_ARG,
+		  __entry->r,
+		  __entry->n_rssis,
+		  __entry->n_aoas,
+		  __entry->n_cirs)
 	);
 
 TRACE_EVENT(llhw_set_hw_addr_filt,
@@ -810,6 +901,18 @@ TRACE_EVENT(ca_return_int,
 	TP_printk(LOCAL_PR_FMT " r=%d", LOCAL_PR_ARG, __entry->r)
 	);
 
+TRACE_EVENT(fproc_broken_enter,
+	TP_PROTO(const struct mcps802154_local *local),
+	TP_ARGS(local),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		),
+	TP_printk(LOCAL_PR_FMT, LOCAL_PR_ARG)
+	);
+
 TRACE_EVENT(schedule_update,
 	TP_PROTO(const struct mcps802154_local *local, u32 next_timestamp_dtu),
 	TP_ARGS(local, next_timestamp_dtu),
@@ -822,6 +925,38 @@ TRACE_EVENT(schedule_update,
 		__entry->next_timestamp_dtu = next_timestamp_dtu;
 		),
 	TP_printk(LOCAL_PR_FMT " next_timestamp_dtu=0x%08x", LOCAL_PR_ARG,
+		  __entry->next_timestamp_dtu)
+	);
+
+TRACE_EVENT(update_schedule_error,
+	TP_PROTO(const struct mcps802154_local *local,
+		 const struct mcps802154_schedule_update *su,
+		 u32 next_timestamp_dtu),
+	TP_ARGS(local, su, next_timestamp_dtu),
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		__field(u32, expected_start_timestamp_dtu)
+		__field(u32, start_timestamp_dtu)
+		__field(int, duration_dtu)
+		__field(size_t, n_regions)
+		__field(u32, next_timestamp_dtu)
+		),
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		__entry->expected_start_timestamp_dtu = su->expected_start_timestamp_dtu;
+		__entry->start_timestamp_dtu = su->start_timestamp_dtu;
+		__entry->duration_dtu = su->duration_dtu;
+		__entry->n_regions = su->n_regions;
+		__entry->next_timestamp_dtu = next_timestamp_dtu;
+		),
+	TP_printk(LOCAL_PR_FMT " expected_start_timestamp_dtu=0x%08x "
+		  "start_timestamp_dtu=0x%08x duration_dtu=%d "
+		  "n_regions=%lu next_timestamp_dtu=0x%08x",
+		  LOCAL_PR_ARG,
+		  __entry->expected_start_timestamp_dtu,
+		  __entry->start_timestamp_dtu,
+		  __entry->duration_dtu,
+		  __entry->n_regions,
 		  __entry->next_timestamp_dtu)
 	);
 
@@ -844,6 +979,63 @@ TRACE_EVENT(schedule_update_done,
 	TP_printk(LOCAL_PR_FMT " start_timestamp_dtu=0x%08x duration_dtu=%d n_regions=%lu",
 		  LOCAL_PR_ARG, __entry->start_timestamp_dtu,
 		  __entry->duration_dtu, __entry->n_regions)
+	);
+
+TRACE_EVENT(
+	region_notify_stop,
+	TP_PROTO(const struct mcps802154_region *region),
+	TP_ARGS(region),
+	TP_STRUCT__entry(
+		__string(region_name, region->ops->name)
+		),
+	TP_fast_assign(
+		__assign_str(region_name, region->ops->name);
+		),
+	TP_printk("region=%s",
+		  __get_str(region_name)
+		)
+	);
+
+TRACE_EVENT(
+	region_get_demand,
+	TP_PROTO(const struct mcps802154_region *region,
+		 u32 next_timestamp_dtu),
+	TP_ARGS(region, next_timestamp_dtu),
+	TP_STRUCT__entry(
+		__string(region_name, region->ops->name)
+		__field(u32, next_timestamp_dtu)
+		),
+	TP_fast_assign(
+		__assign_str(region_name, region->ops->name);
+		__entry->next_timestamp_dtu = next_timestamp_dtu;
+		),
+	TP_printk("region=%s next_timestamp_dtu=%#x",
+		  __get_str(region_name),
+		  __entry->next_timestamp_dtu
+		)
+	);
+
+TRACE_EVENT(
+	region_get_demand_return,
+	TP_PROTO(const struct mcps802154_region *region,
+		 const struct mcps802154_region_demand *demand,
+		 int r),
+	TP_ARGS(region, demand, r),
+	TP_STRUCT__entry(
+		__field(int, r)
+		__field(u32, timestamp_dtu)
+		__field(u32, max_duration_dtu)
+		),
+	TP_fast_assign(
+		__entry->r = r;
+		__entry->timestamp_dtu = demand->timestamp_dtu;
+		__entry->max_duration_dtu = demand->max_duration_dtu;
+		),
+	TP_printk("r=%d timestamp_dtu=%#x max_duration_dtu=%d",
+		  __entry->r,
+		  __entry->timestamp_dtu,
+		  __entry->max_duration_dtu
+		)
 	);
 
 TRACE_EVENT(region_get_access,
@@ -872,6 +1064,40 @@ TRACE_EVENT(region_get_access,
 		  __get_str(region_name), __entry->next_timestamp_dtu,
 		  __entry->next_in_region_dtu, __entry->region_duration_dtu)
 	);
+
+TRACE_EVENT(
+	region_idle_params,
+	TP_PROTO(const struct idle_params *params),
+	TP_ARGS(params),
+	TP_STRUCT__entry(
+		__field(s32, min_duration_dtu)
+		__field(s32, max_duration_dtu)
+		),
+	TP_fast_assign(
+		__entry->min_duration_dtu = params->min_duration_dtu;
+		__entry->max_duration_dtu = params->max_duration_dtu;
+		),
+	TP_printk("min_duration_dtu=%d max_duration_dtu=%d",
+		  __entry->min_duration_dtu,
+		  __entry->max_duration_dtu)
+);
+
+TRACE_EVENT(
+	region_idle_get_access,
+	TP_PROTO(u32 timestamp_dtu, int duration_dtu),
+	TP_ARGS(timestamp_dtu, duration_dtu),
+	TP_STRUCT__entry(
+		__field(u32, timestamp_dtu)
+		__field(int, duration_dtu)
+		),
+	TP_fast_assign(
+		__entry->timestamp_dtu = timestamp_dtu;
+		__entry->duration_dtu = duration_dtu;
+		),
+	TP_printk("timestamp_dtu=%#x duration_dtu=%d",
+		  __entry->timestamp_dtu,
+		  __entry->duration_dtu)
+);
 
 #endif /* !TRACE_H || TRACE_HEADER_MULTI_READ */
 

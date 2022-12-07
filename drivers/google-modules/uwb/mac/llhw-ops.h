@@ -48,20 +48,20 @@ static inline void llhw_stop(struct mcps802154_local *local)
 
 static inline int llhw_tx_frame(struct mcps802154_local *local,
 				struct sk_buff *skb,
-				const struct mcps802154_tx_frame_info *info,
+				const struct mcps802154_tx_frame_config *config,
 				int frame_idx, int next_delay_dtu)
 {
 	int r;
 
-	trace_llhw_tx_frame(local, info, frame_idx, next_delay_dtu);
-	r = local->ops->tx_frame(&local->llhw, skb, info, frame_idx,
+	trace_llhw_tx_frame(local, config, frame_idx, next_delay_dtu);
+	r = local->ops->tx_frame(&local->llhw, skb, config, frame_idx,
 				 next_delay_dtu);
 	trace_llhw_return_int(local, r);
 	return r;
 }
 
 static inline int llhw_rx_enable(struct mcps802154_local *local,
-				 const struct mcps802154_rx_info *info,
+				 const struct mcps802154_rx_frame_config *info,
 				 int frame_idx, int next_delay_dtu)
 {
 	int r;
@@ -141,12 +141,14 @@ static inline int llhw_get_current_timestamp_dtu(struct mcps802154_local *local,
 	return r;
 }
 
-static inline u64
-llhw_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_local *local,
-				      u32 tx_timestamp_dtu, int ant_set_id)
+static inline u64 llhw_tx_timestamp_dtu_to_rmarker_rctu(
+	struct mcps802154_local *local, u32 tx_timestamp_dtu,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+	const struct mcps802154_channel *channel_params, int ant_set_id)
 {
 	return local->ops->tx_timestamp_dtu_to_rmarker_rctu(
-		&local->llhw, tx_timestamp_dtu, ant_set_id);
+		&local->llhw, tx_timestamp_dtu, hrp_uwb_params, channel_params,
+		ant_set_id);
 }
 
 static inline s64 llhw_difference_timestamp_rctu(struct mcps802154_local *local,
@@ -176,16 +178,14 @@ static inline int llhw_set_channel(struct mcps802154_local *local, u8 page,
 	return r;
 }
 
-static inline int llhw_set_hrp_uwb_params(struct mcps802154_local *local,
-					  int prf, int psr, int sfd_selector,
-					  int phr_rate, int data_rate)
+static inline int __nocfi
+llhw_set_hrp_uwb_params(struct mcps802154_local *local,
+			const struct mcps802154_hrp_uwb_params *params)
 {
 	int r;
 
-	trace_llhw_set_hrp_uwb_params(local, prf, psr, sfd_selector, phr_rate,
-				      data_rate);
-	r = local->ops->set_hrp_uwb_params(&local->llhw, prf, psr, sfd_selector,
-					   phr_rate, data_rate);
+	trace_llhw_set_hrp_uwb_params(local, params);
+	r = local->ops->set_hrp_uwb_params(&local->llhw, params);
 	trace_llhw_return_int(local, r);
 	return r;
 }
@@ -289,7 +289,11 @@ llhw_list_calibration(struct mcps802154_local *local)
 	const char *const *r;
 
 	trace_llhw_list_calibration(local);
-	r = local->ops->list_calibration(&local->llhw);
+	if (local->ops->list_calibration) {
+		r = local->ops->list_calibration(&local->llhw);
+	} else {
+		r = NULL;
+	}
 	trace_llhw_return_void(local);
 	return r;
 }
@@ -306,6 +310,36 @@ static inline int llhw_vendor_cmd(struct mcps802154_local *local, u32 vendor_id,
 	else
 		r = -EOPNOTSUPP;
 	trace_llhw_return_int(local, r);
+	return r;
+}
+
+static inline int llhw_check_hrp_uwb_params(
+	struct mcps802154_local *local,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params)
+{
+	int r;
+
+	trace_llhw_check_hrp_uwb_params(local, hrp_uwb_params);
+	if (local->ops->check_hrp_uwb_params)
+		r = local->ops->check_hrp_uwb_params(&local->llhw,
+						     hrp_uwb_params);
+	else
+		r = -EOPNOTSUPP;
+	trace_llhw_return_int(local, r);
+	return r;
+}
+
+static inline int
+llhw_rx_get_measurement(struct mcps802154_local *local, void *rx_ctx,
+			struct mcps802154_rx_measurement_info *info)
+{
+	int r;
+	trace_llhw_rx_get_measurement(local, rx_ctx);
+	if (local->ops->rx_get_measurement)
+		r = local->ops->rx_get_measurement(&local->llhw, rx_ctx, info);
+	else
+		r = -EOPNOTSUPP;
+	trace_llhw_return_measurement(local, r, info);
 	return r;
 }
 

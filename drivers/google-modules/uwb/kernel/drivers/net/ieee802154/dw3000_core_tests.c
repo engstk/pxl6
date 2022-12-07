@@ -5,6 +5,7 @@ static u64 kunit_get_boottime_ns(void);
 
 /* Replace ktime_get_boottime_ns calls to kunit_get_boottime_ns calls. */
 #define ktime_get_boottime_ns kunit_get_boottime_ns
+#define dw3000_get_dtu_time kunit_dw3000_get_dtu_time
 #define trace_dw3000_power_stats(dw, state, boot_time_ns, len_or_date) \
 	do {                                                           \
 	} while (0)
@@ -118,6 +119,7 @@ const struct dw3000_prf_info _prf_info[] = {
 
 /* Static variable declarations */
 static u64 kunit_boot_time_ns;
+static u32 kunit_dtu_time;
 
 /**
  * kunit_get_boottime_ns() - ktime_get_boottime_ns replacement for tests
@@ -128,6 +130,17 @@ static u64 kunit_get_boottime_ns(void)
 {
 	kunit_boot_time_ns += 1000000;
 	return kunit_boot_time_ns;
+}
+
+/**
+ * kunit_dw3000_get_dtu_time() - dw3000_get_dtu_time kunit wrapper
+ * @dw: the DW device
+ *
+ * Return: The current simulated DTU time.
+ */
+u32 kunit_dw3000_get_dtu_time(struct dw3000 *dw)
+{
+	return kunit_dtu_time;
 }
 
 /* Define the test cases. */
@@ -211,6 +224,52 @@ static void dw3000_sys_time_to_dtu_test_basic(struct kunit *test)
 	dw->sys_time_sync = 0x293a6u;
 	KUNIT_EXPECT_EQ(test, 0x853bf6au,
 			dw3000_sys_time_to_dtu(dw, 0x13ea64u, dtu_near));
+}
+
+static void dw3000_sys_time_rctu_to_dtu_test_basic(struct kunit *test)
+{
+	struct dw3000 *dw = kunit_kzalloc(test, sizeof(*dw), GFP_KERNEL);
+
+	/* Ensure allocation succeeded. */
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dw);
+
+	/* Tests with dtu_sync == 0, sys_time_sync == 0 and dtu_near == 0.
+	 * Set kunit_dtu_time to DW3000_DTU_FREQ to get dtu_near == 0 in
+	 * dw3000_sys_time_rctu_to_dtu(). */
+	kunit_dtu_time = DW3000_DTU_FREQ;
+	KUNIT_EXPECT_EQ(test, 0u, dw3000_sys_time_rctu_to_dtu(dw, 0));
+	KUNIT_EXPECT_EQ(test, 1u,
+			dw3000_sys_time_rctu_to_dtu(dw, DW3000_RCTU_PER_DTU));
+
+	/* Tests with dtu_near == 10000.
+	 * Set kunit_dtu_time to DW3000_DTU_FREQ + 10000 to get dtu_near == 10000
+	 * in dw3000_sys_time_rctu_to_dtu(). */
+	kunit_dtu_time = DW3000_DTU_FREQ + 10000;
+	KUNIT_EXPECT_EQ(
+		test, 1005u,
+		dw3000_sys_time_rctu_to_dtu(dw, 1005 * DW3000_RCTU_PER_DTU));
+
+	/* Tests with dtu_sync == 1000000/16 & sys_time_sync == 1000000 */
+	dw->sys_time_sync = 1000000;
+	dw->dtu_sync = 1000000 >> 4;
+	KUNIT_EXPECT_EQ(
+		test, 10000u,
+		dw3000_sys_time_rctu_to_dtu(dw, 10000 * DW3000_RCTU_PER_DTU));
+
+	/* Tests with real values from traces:
+	 * timestamp_rctu: 63852263355
+	 * dtu_sync: 13025
+	 * sys_time_sync: 5414
+	 * dtu_near: 4349
+	 * dw3000_sys_time_rctu_to_dtu() return: 15601618
+	 *
+	 * Set kunit_dtu_time to DW3000_DTU_FREQ + 4349 to get dtu_near == 4349
+	 * in dw3000_sys_time_rctu_to_dtu(). */
+	kunit_dtu_time = DW3000_DTU_FREQ + 4349;
+	dw->dtu_sync = 13025;
+	dw->sys_time_sync = 5414;
+	KUNIT_EXPECT_EQ(test, 15601618u,
+			dw3000_sys_time_rctu_to_dtu(dw, 63852263355));
 }
 
 static void power_stats_test_setup(struct dw3000 *dw)
@@ -441,6 +500,7 @@ static struct kunit_case dw3000_core_test_cases[] = {
 	KUNIT_CASE(dw3000_dtu_to_ktime_test_basic),
 	KUNIT_CASE(dw3000_dtu_to_sys_time_test_basic),
 	KUNIT_CASE(dw3000_sys_time_to_dtu_test_basic),
+	KUNIT_CASE(dw3000_sys_time_rctu_to_dtu_test_basic),
 	KUNIT_CASE(dw3000_power_stats_test_basic),
 	KUNIT_CASE(dw3000_power_stats_test_tx),
 	KUNIT_CASE(dw3000_power_stats_test_rx),

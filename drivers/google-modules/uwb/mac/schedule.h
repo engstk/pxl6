@@ -45,6 +45,10 @@ struct mcps802154_schedule_region {
 	 * @duration_dtu: Region duration or 0 for endless region.
 	 */
 	int duration_dtu;
+	/**
+	 * @once: Schedule the region once, ignoring the remaining region duration.
+	 */
+	bool once;
 };
 
 /**

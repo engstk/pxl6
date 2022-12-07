@@ -64,16 +64,8 @@ static void nfcc_coex_close(struct mcps802154_region *region)
 static void nfcc_coex_notify_stop(struct mcps802154_region *region)
 {
 	struct nfcc_coex_local *local = region_to_local(region);
-	struct nfcc_coex_session *session = &local->session;
 
 	trace_region_nfcc_coex_notify_stop(local);
-	nfcc_coex_session_control(local, NFCC_COEX_CALL_CCC_SESSION_STOP, NULL,
-				  NULL);
-	if (session->started) {
-		pr_err("device stopped while nfcc coex not stopped state=%d",
-		       local->session.state);
-		session->started = false;
-	}
 }
 
 static int nfcc_coex_call(struct mcps802154_region *region, u32 call_id,
@@ -100,44 +92,30 @@ static int nfcc_coex_get_demand(struct mcps802154_region *region,
 	const struct nfcc_coex_session *session = &local->session;
 	const struct mcps802154_region_demand *rd = &session->region_demand;
 
-	trace_region_nfcc_coex_get_demand(local, next_timestamp_dtu, rd);
-	if (!session->started)
+	demand->max_duration_dtu = 0;
+
+	switch (session->state) {
+	case NFCC_COEX_STATE_STARTED:
+		if (is_before_dtu(rd->timestamp_dtu, next_timestamp_dtu))
+			demand->timestamp_dtu = next_timestamp_dtu;
+		else
+			demand->timestamp_dtu = rd->timestamp_dtu;
+		return 1;
+
+	case NFCC_COEX_STATE_STOPPING:
+		if (session->first_access) {
+			if (is_before_dtu(rd->timestamp_dtu,
+					  next_timestamp_dtu))
+				demand->timestamp_dtu = next_timestamp_dtu;
+			else
+				demand->timestamp_dtu = rd->timestamp_dtu;
+		} else
+			demand->timestamp_dtu = next_timestamp_dtu;
+		return 1;
+
+	default:
 		return 0;
-
-	if (is_before_dtu(rd->timestamp_dtu, next_timestamp_dtu)) {
-		/* Date is late. */
-		int shift_dtu = next_timestamp_dtu - rd->timestamp_dtu;
-		int new_duration_dtu = rd->max_duration_dtu - shift_dtu;
-
-		new_duration_dtu =
-			new_duration_dtu <= 0 ? 1 : new_duration_dtu;
-		/* Keep 'rd' unchanged, because the update will be done
-		 * during the get_access.
-		 * See nfcc_coex_session_update function. */
-		demand->timestamp_dtu = next_timestamp_dtu;
-		demand->max_duration_dtu = new_duration_dtu;
-	} else if (!rd->max_duration_dtu) {
-		/* Infinite duration will lock the region
-		 * interleaving.
-		 * Duration value can be 0 when the region is started
-		 * when an another region have been started.
-		 * In other words, the get_demand will be call
-		 * before the get_access/access_done.
-		 *
-		 * Remarks:
-		 * - The duration_dtu must stay at 0, which is
-		 *   forward to nfcc_coex_access_controller and
-		 *   nfcc_coex_handle functions.
-		 * - 12ms is an default value returned which sess_dbg done
-		 *   on nfcc initiator board (it's a workaround).
-		 **/
-		demand->timestamp_dtu = rd->timestamp_dtu;
-		demand->max_duration_dtu =
-			12 * (local->llhw->dtu_freq_hz / 1000);
-	} else {
-		memcpy(demand, rd, sizeof(*demand));
 	}
-	return 1;
 }
 
 void nfcc_coex_set_state(struct nfcc_coex_local *local,
@@ -152,8 +130,8 @@ void nfcc_coex_set_state(struct nfcc_coex_local *local,
 void nfcc_coex_report(struct nfcc_coex_local *local)
 {
 	struct nfcc_coex_session *session = &local->session;
-	const struct dw3000_vendor_cmd_nfcc_coex_get_access_info
-		*get_access_info = &session->get_access_info;
+	const struct llhw_vendor_cmd_nfcc_coex_get_access_info *get_access_info =
+		&session->get_access_info;
 	struct sk_buff *msg;
 	int r;
 

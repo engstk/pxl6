@@ -70,7 +70,6 @@ static int pctt_call(struct mcps802154_region *region, u32 call_id,
 	case PCTT_CALL_SESSION_GET_PARAMS:
 		return pctt_call_session_get_params(local);
 	case PCTT_CALL_SESSION_SET_PARAMS:
-	case PCTT_CALL_SET_PARAMS:
 	case PCTT_CALL_SESSION_CMD:
 		return pctt_call_session_control(local, call_id, attrs, info);
 	default:
@@ -117,6 +116,7 @@ static int pctt_report_per_rx(struct pctt_local *local, struct sk_buff *msg)
 	P(PSDU_BIT_ERROR, u32, per_rx->psdu_bit_error);
 	P(STS_FOUND, u32, per_rx->sts_found);
 	P(EOF, u32, per_rx->eof);
+	P(RSSI, u8, per_rx->rssi);
 #undef P
 	return 0;
 
@@ -144,11 +144,51 @@ static int pctt_report_rx(struct pctt_local *local, struct sk_buff *msg)
 	P(AOA_ELEVATION, s16, rx->aoa_elevation);
 	P(TOA_GAP, u8, rx->toa_gap);
 	P(PHR, u16, rx->phr);
+	P(RSSI, u8, rx->rssi);
 	P(PSDU_DATA_LEN, u16, rx->psdu_data_len);
 	if (rx->psdu_data_len > 0 &&
 	    nla_put(msg, PCTT_RESULT_DATA_ATTR_PSDU_DATA, rx->psdu_data_len,
 		    rx->psdu_data))
 		goto nla_put_failure;
+#undef P
+	return 0;
+
+nla_put_failure:
+	return -EMSGSIZE;
+}
+
+static int pctt_report_loopback(struct pctt_local *local, struct sk_buff *msg)
+{
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
+	trace_region_pctt_report_loopback(local->results.status);
+
+#define P(attr, type, value)                                          \
+	do {                                                          \
+		if (nla_put_##type(msg, PCTT_RESULT_DATA_ATTR_##attr, \
+				   value)) {                          \
+			goto nla_put_failure;                         \
+		}                                                     \
+	} while (0)
+
+	P(STATUS, u8, local->results.status);
+	P(RSSI, u8, local->results.tests.loopback.rssi);
+	P(RX_TS_INT, u32, local->results.tests.loopback.rx_ts_int);
+	P(RX_TS_FRAC, u16, local->results.tests.loopback.rx_ts_frac);
+	P(TX_TS_INT, u32, local->results.tests.loopback.tx_ts_int);
+	P(TX_TS_FRAC, u16, local->results.tests.loopback.tx_ts_frac);
+
+	/* If test succeeded, return data that was sent (and received) as
+	* PSDU payload. */
+	if (!local->results.status) {
+		P(PSDU_DATA_LEN, u16, p->data_payload_len);
+		if (nla_put(msg, PCTT_RESULT_DATA_ATTR_PSDU_DATA,
+			    p->data_payload_len, p->data_payload)) {
+			goto nla_put_failure;
+		}
+	} else {
+		P(PSDU_DATA_LEN, u16, 0);
+	}
 #undef P
 	return 0;
 
@@ -171,6 +211,11 @@ static int pctt_report_ss_twr(struct pctt_local *local, struct sk_buff *msg)
 	} while (0)
 	P(STATUS, u8, local->results.status);
 	P(MEASUREMENT, u32, ss_twr->measurement_rctu);
+	P(PDOA_AZIMUTH_DEG_Q7, s16, ss_twr->pdoa_azimuth_deg_q7);
+	P(PDOA_ELEVATION_DEG_Q7, s16, ss_twr->pdoa_elevation_deg_q7);
+	P(AOA_AZIMUTH_DEG_Q7, s16, ss_twr->aoa_azimuth_deg_q7);
+	P(AOA_ELEVATION_DEG_Q7, s16, ss_twr->aoa_elevation_deg_q7);
+	P(RSSI, u8, ss_twr->rssi);
 #undef P
 	return 0;
 
@@ -209,6 +254,10 @@ void pctt_report(struct pctt_local *local)
 		break;
 	case PCTT_ID_ATTR_RX:
 		if (pctt_report_rx(local, msg))
+			goto nla_put_failure;
+		break;
+	case PCTT_ID_ATTR_LOOPBACK:
+		if (pctt_report_loopback(local, msg))
 			goto nla_put_failure;
 		break;
 	case PCTT_ID_ATTR_SS_TWR:

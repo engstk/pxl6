@@ -315,6 +315,36 @@ static int aoc_usb_set_offload_state(struct aoc_usb_drvdata *drvdata, bool *enab
 	return 0;
 }
 
+static int aoc_usb_send_feedback_ep_info(struct aoc_usb_drvdata *drvdata, void *args)
+{
+	int ret = 0;
+	struct feedback_ep_info_args *fb_ep_info_args =
+		(struct feedback_ep_info_args *)args;
+	struct CMD_USB_CONTROL_SEND_FEEDBACK_EP_INFO *cmd;
+
+	cmd = kzalloc(sizeof(struct CMD_USB_CONTROL_SEND_FEEDBACK_EP_INFO), GFP_KERNEL);
+	if (!cmd)
+		return -ENOMEM;
+
+	AocCmdHdrSet(&cmd->parent,
+		     CMD_USB_CONTROL_SEND_FEEDBACK_EP_INFO_ID,
+		     sizeof(*cmd));
+
+	cmd->enabled = fb_ep_info_args->enabled;
+	cmd->bus_id = fb_ep_info_args->bus_id;
+	cmd->dev_num = fb_ep_info_args->dev_num;
+	cmd->slot_id = fb_ep_info_args->slot_id;
+	cmd->ep_num = fb_ep_info_args->ep_num;
+	cmd->max_packet = fb_ep_info_args->max_packet;
+	cmd->binterval = fb_ep_info_args->binterval;
+	cmd->brefresh = fb_ep_info_args->brefresh;
+	ret = aoc_usb_send_command(drvdata, cmd, sizeof(*cmd), cmd, sizeof(*cmd));
+
+	kfree(cmd);
+
+	return ret;
+}
+
 static int aoc_usb_notify(struct notifier_block *this,
 			  unsigned long code, void *data)
 {
@@ -350,6 +380,9 @@ static int aoc_usb_notify(struct notifier_block *this,
 		break;
 	case SET_OFFLOAD_STATE:
 		ret = aoc_usb_set_offload_state(drvdata, data);
+		break;
+	case SEND_FB_EP_INFO:
+		ret = aoc_usb_send_feedback_ep_info(drvdata, data);
 		break;
 	default:
 		dev_warn(&drvdata->adev->dev, "Code %lu is not supported\n", code);

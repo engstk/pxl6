@@ -219,7 +219,7 @@ ifneq ($(CONFIG_BCMDHD_PCIE),)
 # Enable FIS Dump
 #	DHDCFLAGS += -DDHD_FIS_DUMP
 # Enable System Debug Trace Controller, Embedded Trace Buffer
-	DHDCFLAGS += -DDHD_SDTC_ETB_DUMP
+#	DHDCFLAGS += -DDHD_SDTC_ETB_DUMP
 # Enable SMD/Minidump collection
 	DHDCFLAGS += -DD2H_MINIDUMP
 # ROT and Scan timeout debugging due to Kernel scheduling problem
@@ -724,6 +724,9 @@ ifneq ($(filter y, $(CONFIG_BCM4389)),)
   DHDCFLAGS += -DWL_5P9G
   # UNII-4 channel filter for non-sta roles
   DHDCFLAGS += -DWL_UNII4_CHAN
+  # Use xorcsum sync retry count one with DMA indices
+  # enabled to detect cache coherency issue in host
+  #DHDCFLAGS += -DPCIE_D2H_SYNC_RETRY_CNT_ONE
 endif
 
 # For 4389 and 43752

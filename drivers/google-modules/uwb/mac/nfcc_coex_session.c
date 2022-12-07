@@ -30,6 +30,9 @@ void nfcc_coex_session_init(struct nfcc_coex_local *local)
 	struct nfcc_coex_session_params *p = &local->session.params;
 
 	memset(p, 0, sizeof(*p));
+
+	/* Default protocol version is V2 */
+	p->version = 3;
 }
 
 void nfcc_coex_session_update(struct nfcc_coex_local *local,
@@ -40,13 +43,10 @@ void nfcc_coex_session_update(struct nfcc_coex_local *local,
 
 	if (is_before_dtu(rd->timestamp_dtu, next_timestamp_dtu)) {
 		int shift_dtu = next_timestamp_dtu - rd->timestamp_dtu;
-		int new_duration_dtu = rd->max_duration_dtu - shift_dtu;
 
 		/* Date is late. */
-		new_duration_dtu = new_duration_dtu < 0 ? 0 : new_duration_dtu;
-		trace_region_nfcc_coex_session_update_late(local, shift_dtu,
-							   new_duration_dtu);
+		trace_region_nfcc_coex_session_update_late(local, shift_dtu, 0);
 		rd->timestamp_dtu = next_timestamp_dtu;
-		rd->max_duration_dtu = new_duration_dtu;
+		rd->max_duration_dtu = 0;
 	}
 }

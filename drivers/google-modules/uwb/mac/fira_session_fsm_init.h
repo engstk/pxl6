@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -21,21 +21,11 @@
  * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
-#ifndef FIRA_AEAD_IMPL_H
-#define FIRA_AEAD_IMPL_H
+#ifndef NET_MCPS802154_FIRA_SESSION_FSM_INIT_H
+#define NET_MCPS802154_FIRA_SESSION_FSM_INIT_H
 
-#include "fira_aead.h"
+#include "fira_session_fsm.h"
 
-#include <crypto/aead.h>
+extern const struct fira_session_fsm_state fira_session_fsm_init;
 
-/**
- * struct fira_aead - Context for payload encryption/decryption.
- */
-struct fira_aead {
-	/**
-	 * @tfm: Transformation context for payload.
-	 */
-	struct crypto_aead *tfm;
-};
-
-#endif /* FIRA_AEAD_IMPL_H */
+#endif /* NET_MCPS802154_FIRA_SESSION_FSM_INIT_H */

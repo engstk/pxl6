@@ -33,6 +33,9 @@
 #include "google_psy.h"
 #include "google_bms.h"
 
+/* sync from google/logbuffer.c */
+#define LOG_BUFFER_ENTRY_SIZE   256
+
 #define GBMS_DEFAULT_FV_UV_RESOLUTION   25000
 #define GBMS_DEFAULT_FV_UV_MARGIN_DPCT  1020
 #define GBMS_DEFAULT_CV_DEBOUNCE_CNT    3
@@ -87,6 +90,16 @@ const char *gbms_chg_ev_adapter_s(int adapter)
 	return chg_ev_adapter_type_str[adapter];
 }
 EXPORT_SYMBOL_GPL(gbms_chg_ev_adapter_s);
+
+static const char *gbms_get_code(const int index)
+{
+	const static char *codes[] = {"n", "s", "d", "l", "v", "vo", "p", "f",
+					"t", "dl", "st", "tc", "r", "w", "rs",
+					"n", "ny", "h", "hp", "ha"};
+	const int len = ARRAY_SIZE(codes);
+
+	return (index >= 0 && index < len) ? codes[index] : "?";
+}
 
 /* convert C rates to current. Caller can account for tolerances reducing
  * battery_capacity. fv_uv_resolution is used to create discrete steps.
@@ -688,3 +701,195 @@ bool chg_state_is_disconnected(const union gbms_charger_state *chg_state)
 	       chg_state->f.chg_status == POWER_SUPPLY_STATUS_UNKNOWN);
 }
 EXPORT_SYMBOL_GPL(chg_state_is_disconnected);
+
+
+/* Tier stats common routines */
+void gbms_tier_stats_init(struct gbms_ce_tier_stats *stats, int8_t idx)
+{
+	stats->vtier_idx = idx;
+	stats->temp_idx = -1;
+	stats->soc_in = -1;
+}
+EXPORT_SYMBOL_GPL(gbms_tier_stats_init);
+
+/* call holding stats_lock */
+void gbms_chg_stats_tier(struct gbms_ce_tier_stats *tier,
+				int msc_state,
+				ktime_t elap)
+{
+	if (msc_state < 0 || msc_state >= MSC_STATES_COUNT)
+		return;
+
+	tier->msc_cnt[msc_state] += 1;
+	tier->msc_elap[msc_state] += elap;
+}
+EXPORT_SYMBOL_GPL(gbms_chg_stats_tier);
+
+ void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp,
+				ktime_t elap, int cc, union gbms_charger_state *chg_state,
+				enum gbms_msc_states_t msc_state, int soc_in,
+				struct gbms_ce_tier_stats *tier)
+{
+	const uint16_t icl_settled = chg_state->f.icl;
+
+	/*
+	 * book time to previous msc_state for this tier, there is an
+	 * interesting wrinkle here since some tiers (health, full, etc)
+	 * might be entered and exited multiple times.
+	 */
+	gbms_chg_stats_tier(tier, msc_state, elap);
+	tier->sample_count += 1;
+
+	if (tier->soc_in == -1) {
+		tier->temp_idx = temp_idx;
+
+		tier->temp_in = temp;
+		tier->temp_min = temp;
+		tier->temp_max = temp;
+
+		tier->ibatt_min = ibatt_ma;
+		tier->ibatt_max = ibatt_ma;
+
+		tier->icl_min = icl_settled;
+		tier->icl_max = icl_settled;
+
+		tier->soc_in = soc_in;
+		tier->cc_in = cc;
+		tier->cc_total = 0;
+		return;
+	}
+
+	/* crossed temperature tier */
+	if (temp_idx != tier->temp_idx)
+		tier->temp_idx = -1;
+
+	if (chg_state->f.chg_type == POWER_SUPPLY_CHARGE_TYPE_FAST) {
+		tier->time_fast += elap;
+	} else if (chg_state->f.chg_type == POWER_SUPPLY_CHARGE_TYPE_TAPER) {
+		tier->time_taper += elap;
+	} else {
+		tier->time_other += elap;
+	}
+
+	/*
+	 * averages: temp < 100. icl_settled < 3000, sum(ibatt)
+	 * is bound to battery capacity, elap in seconds, sums
+	 * are stored in an s64. For icl_settled I need a tier
+	 * to last for more than ~97M years.
+	 */
+	if (temp < tier->temp_min)
+		tier->temp_min = temp;
+	if (temp > tier->temp_max)
+		tier->temp_max = temp;
+	tier->temp_sum += temp * elap;
+
+	if (icl_settled < tier->icl_min)
+		tier->icl_min = icl_settled;
+	if (icl_settled > tier->icl_max)
+		tier->icl_max = icl_settled;
+	tier->icl_sum += icl_settled * elap;
+
+	if (ibatt_ma < tier->ibatt_min)
+		tier->ibatt_min = ibatt_ma;
+	if (ibatt_ma > tier->ibatt_max)
+		tier->ibatt_max = ibatt_ma;
+	tier->ibatt_sum += ibatt_ma * elap;
+
+	tier->cc_total = cc - tier->cc_in;
+}
+EXPORT_SYMBOL_GPL(gbms_stats_update_tier);
+
+/* Log only when elap != 0 */
+int gbms_tier_stats_cstr(char *buff, int size,
+				    const struct gbms_ce_tier_stats *tier_stat,
+				    bool verbose)
+{
+	const int soc_in = tier_stat->soc_in >> 8;
+	const long elap = tier_stat->time_fast + tier_stat->time_taper +
+			  tier_stat->time_other;
+
+	long temp_avg, ibatt_avg, icl_avg;
+	int j, len = 0;
+
+	if (elap) {
+		temp_avg = tier_stat->temp_sum / elap;
+		ibatt_avg = tier_stat->ibatt_sum / elap;
+		icl_avg = tier_stat->icl_sum / elap;
+	} else {
+		temp_avg = 0;
+		ibatt_avg = 0;
+		icl_avg = 0;
+	}
+
+	len += scnprintf(&buff[len], size - len, "\n%d%c ",
+		tier_stat->vtier_idx,
+		(verbose) ? ':' : ',');
+
+	len += scnprintf(&buff[len], size - len,
+		"%d.%d,%d,%d, %d,%d,%d, %d,%ld,%d, %d,%ld,%d, %d,%ld,%d",
+		soc_in,
+		tier_stat->soc_in & 0xff,
+		tier_stat->cc_in,
+		tier_stat->temp_in,
+		tier_stat->time_fast,
+		tier_stat->time_taper,
+		tier_stat->time_other,
+		tier_stat->temp_min,
+		temp_avg,
+		tier_stat->temp_max,
+		tier_stat->ibatt_min,
+		ibatt_avg,
+		tier_stat->ibatt_max,
+		tier_stat->icl_min,
+		icl_avg,
+		tier_stat->icl_max);
+
+	if (!verbose || !elap)
+		return len;
+
+	/* time spent in every multi step charging state */
+	len += scnprintf(&buff[len], size - len, "\n%d:",
+			tier_stat->vtier_idx);
+
+	for (j = 0; j < MSC_STATES_COUNT; j++)
+		len += scnprintf(&buff[len], size - len, " %s=%d",
+			gbms_get_code(j), tier_stat->msc_elap[j]);
+
+	/* count spent in each step charging state */
+	len += scnprintf(&buff[len], size - len, "\n%d:",
+			tier_stat->vtier_idx);
+
+	for (j = 0; j < MSC_STATES_COUNT; j++)
+		len += scnprintf(&buff[len], size - len, " %s=%d",
+			gbms_get_code(j), tier_stat->msc_cnt[j]);
+
+	return len;
+}
+EXPORT_SYMBOL_GPL(gbms_tier_stats_cstr);
+
+void gbms_log_cstr_handler(struct logbuffer *log, char *buf, int len)
+{
+	int i, j = 0;
+	char tmp[LOG_BUFFER_ENTRY_SIZE];
+
+	buf[len] = '\n';
+	for (i = 0; i <= len; i++) {
+		if (buf[i] == '\n') {
+			tmp[j] = '\0';
+			/* skip first blank line */
+			if (i != 0)
+				logbuffer_log(log, "%s", tmp);
+			j = 0;
+		} else if (j >= LOG_BUFFER_ENTRY_SIZE - 1) {
+			tmp[j] = '\0';
+			logbuffer_log(log, "%s", tmp);
+			i--;
+			j = 0;
+		} else {
+			tmp[j] = buf[i];
+			j++;
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(gbms_log_cstr_handler);
+

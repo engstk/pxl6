@@ -38,4 +38,11 @@
  * when a calibration from scratch is executed */
 #define DW3000_D0_PLL_CALIBRATION_FROM_SCRATCH_DELAY_US (400)
 
+/* RSSI constants */
+#define DW3000_RSSI_OFFSET_PRF64_STS 121
+#define DW3000_RSSI_OFFSET_PRF64_IPATOV 122
+#define DW3000_RSSI_OFFSET_PRF16 114
+#define DW3000_RSSI_CONSTANT \
+	51 /* 3 * log2(2^17) because log2 used instead of log10 */
+
 #endif /* __DW3000_CHIP_D0_H */

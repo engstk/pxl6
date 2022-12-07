@@ -117,6 +117,27 @@ static int exynos_reboot_handler(struct notifier_block *nb, unsigned long mode, 
 {
 	exynos_reboot_parse(cmd);
 
+	if (mode != SYS_POWER_OFF)
+		return NOTIFY_DONE;
+
+	while (1) {
+		/* wait for power button release */
+		if (!pmic_read_pwrkey_status()) {
+#if IS_ENABLED(CONFIG_GS_ACPM)
+			acpm_prepare_reboot();
+#endif
+			pr_info("ready to do power off.\n");
+			break;
+		} else {
+			/*
+			 * if power button is not released,
+			 * wait and check TA again
+			 */
+			pr_info("PWR Key is not released.\n");
+		}
+		mdelay(1000);
+	}
+
 	return NOTIFY_DONE;
 }
 
@@ -140,27 +161,6 @@ static struct notifier_block exynos_restart_nb = {
 	.notifier_call = exynos_restart_handler,
 	.priority = 130,
 };
-
-static void exynos_power_off(struct platform_device *pdev)
-{
-	while (1) {
-		/* wait for power button release */
-		if (!pmic_read_pwrkey_status()) {
-#if IS_ENABLED(CONFIG_GS_ACPM)
-			acpm_prepare_reboot();
-#endif
-			pr_info("ready to do power off.\n");
-			break;
-		} else {
-			/*
-			 * if power button is not released,
-			 * wait and check TA again
-			 */
-			pr_info("PWR Key is not released.\n");
-		}
-		mdelay(1000);
-	}
-}
 
 static int exynos_reboot_probe(struct platform_device *pdev)
 {
@@ -223,7 +223,6 @@ static const struct of_device_id exynos_reboot_of_match[] = {
 
 static struct platform_driver exynos_reboot_driver = {
 	.probe = exynos_reboot_probe,
-	.shutdown = exynos_power_off,
 	.driver = {
 		.name = "exynos-reboot",
 		.of_match_table = exynos_reboot_of_match,

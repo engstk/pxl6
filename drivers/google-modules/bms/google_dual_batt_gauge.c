@@ -189,6 +189,7 @@ static void gdbatt_select_cc_max(struct dual_fg_drv *dual_fg_drv)
 		gvotable_cast_int_vote(dual_fg_drv->fcc_votable,
 				       DUAL_BATT_TEMP_VOTER, cc_max, true);
 		dual_fg_drv->cc_max = cc_max;
+		power_supply_changed(dual_fg_drv->psy);
 	}
 
 check_done:

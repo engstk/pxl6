@@ -22,19 +22,6 @@
 #include "pixel_gpu_dvfs.h"
 
 /**
- * qos_set() - Set a QOS vote on an IP block
- *
- * @vote:  The &struct gpu_dvfs_qos_vote to set the vote on.
- * @value: The value to vote for.
- */
-static inline void qos_set(struct gpu_dvfs_qos_vote *vote, int value) {
-	if (unlikely(value)) {
-		exynos_pm_qos_update_request(&vote->req, value);
-		vote->enabled = true;
-	}
-}
-
-/**
  * qos_reset() - Resets a QOS vote on an IP block
  *
  * @vote:  The &struct gpu_dvfs_qos_vote to reset the vote on.
@@ -46,6 +33,22 @@ static inline void qos_reset(struct gpu_dvfs_qos_vote *vote) {
 	if (unlikely(vote->enabled)) {
 		exynos_pm_qos_update_request(&vote->req, EXYNOS_PM_QOS_DEFAULT_VALUE);
 		vote->enabled = false;
+	}
+}
+
+/**
+ * qos_set() - Set a QOS vote on an IP block
+ *
+ * @vote:  The &struct gpu_dvfs_qos_vote to set the vote on.
+ * @value: The value to vote for.
+ */
+static inline void qos_set(struct gpu_dvfs_qos_vote *vote, int value) {
+	if (unlikely(value)) {
+		exynos_pm_qos_update_request(&vote->req, value);
+		vote->enabled = true;
+	}
+	else {
+		qos_reset(vote);
 	}
 }
 
@@ -86,7 +89,8 @@ void gpu_dvfs_qos_set(struct kbase_device *kbdev, int level)
 			!pc->dvfs.qos.bts.enabled) {
 			bts_add_scenario(pc->dvfs.qos.bts.scenario);
 			pc->dvfs.qos.bts.enabled = true;
-		} else if (pc->dvfs.qos.bts.enabled) {
+		} else if (pc->dvfs.qos.bts.enabled &&
+				opp.clk[GPU_DVFS_CLK_SHADERS] < pc->dvfs.qos.bts.threshold) {
 			bts_del_scenario(pc->dvfs.qos.bts.scenario);
 			pc->dvfs.qos.bts.enabled = false;
 		}

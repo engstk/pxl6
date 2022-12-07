@@ -25,18 +25,18 @@
 #define FIRA_REGION_NL_H
 
 /**
- * enum fira_call - Fira calls identifiers.
+ * enum fira_call - FiRa calls identifiers.
  *
  * @FIRA_CALL_GET_CAPABILITIES:
- *	Request Fira capabilities.
+ *	Request FiRa capabilities.
  * @FIRA_CALL_SESSION_INIT:
- *	Initialize Fira session.
+ *	Initialize FiRa session.
  * @FIRA_CALL_SESSION_START:
- *	Start Fira session.
+ *	Start FiRa session.
  * @FIRA_CALL_SESSION_STOP:
- *	Stop Fira session.
+ *	Stop FiRa session.
  * @FIRA_CALL_SESSION_DEINIT:
- *	Deinit Fira session.
+ *	Deinit FiRa session.
  * @FIRA_CALL_SESSION_SET_PARAMS:
  *	Set session parameters.
  * @FIRA_CALL_NEW_CONTROLEE:
@@ -76,7 +76,7 @@ enum fira_call {
 };
 
 /**
- * enum fira_capability_attrs - Fira capabilities.
+ * enum fira_capability_attrs - FiRa capabilities.
  *
  * @FIRA_CAPABILITY_ATTR_FIRA_PHY_VERSION_RANGE:
  *	FiRa PHY version range supported, ex: 0x01010202 -> support from 1.1 to 2.2.
@@ -142,6 +142,10 @@ enum fira_call {
  *	1 segment for STS supported.
  * @FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_2:
  *	2 segments for STS supported.
+ * @FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_3:
+ *	3 segments for STS supported.
+ * @FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_4:
+ *	4 segments for STS supported.
  * @FIRA_CAPABILITY_ATTR_PSDU_DATA_RATE_6M81:
  *	6.81 Mbps support.
  * @FIRA_CAPABILITY_ATTR_PSDU_DATA_RATE_7M80:
@@ -162,12 +166,16 @@ enum fira_call {
  *	Number of antenna pairs for RX.
  * @FIRA_CAPABILITY_ATTR_TX_ANTENNAS:
  *	Number of antennas for TX.
- * @FIRA_CAPABILITY_ATTR_STS_CONFIG_STATIC:
+ * @FIRA_CAPABILITY_ATTR_STS_STATIC:
  *	Static STS supported.
- * @FIRA_CAPABILITY_ATTR_STS_CONFIG_DYNAMIC:
+ * @FIRA_CAPABILITY_ATTR_STS_DYNAMIC:
  *	Dynamic STS supported.
- * @FIRA_CAPABILITY_ATTR_STS_CONFIG_DYNAMIC_INDIVIDUAL:
+ * @FIRA_CAPABILITY_ATTR_STS_DYNAMIC_INDIVIDUAL_KEY:
  *	Dynamic STS for controlee individual keys supported.
+ * @FIRA_CAPABILITY_ATTR_STS_PROVISIONED:
+ *	Provisioned STS supported.
+ * @FIRA_CAPABILITY_ATTR_STS_PROVISIONED_INDIVIDUAL_KEY:
+ *	Provisioned STS for controlee individual keys supported.
  * @FIRA_CAPABILITY_ATTR_AOA_AZIMUTH:
  *	AoA in azimuth supported.
  * @FIRA_CAPABILITY_ATTR_AOA_AZIMUTH_FULL:
@@ -217,6 +225,8 @@ enum fira_capability_attrs {
 	FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_0,
 	FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_1,
 	FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_2,
+	FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_3,
+	FIRA_CAPABILITY_ATTR_NUMBER_OF_STS_SEGMENTS_4,
 	FIRA_CAPABILITY_ATTR_PSDU_DATA_RATE_6M81,
 	FIRA_CAPABILITY_ATTR_PSDU_DATA_RATE_7M80,
 	FIRA_CAPABILITY_ATTR_PSDU_DATA_RATE_27M2,
@@ -229,9 +239,11 @@ enum fira_capability_attrs {
 	FIRA_CAPABILITY_ATTR_RX_ANTENNA_PAIRS,
 	FIRA_CAPABILITY_ATTR_TX_ANTENNAS,
 	/* STS and crypto capabilities. */
-	FIRA_CAPABILITY_ATTR_STS_CONFIG_STATIC,
-	FIRA_CAPABILITY_ATTR_STS_CONFIG_DYNAMIC,
-	FIRA_CAPABILITY_ATTR_STS_CONFIG_DYNAMIC_INDIVIDUAL,
+	FIRA_CAPABILITY_ATTR_STS_STATIC,
+	FIRA_CAPABILITY_ATTR_STS_DYNAMIC,
+	FIRA_CAPABILITY_ATTR_STS_DYNAMIC_INDIVIDUAL_KEY,
+	FIRA_CAPABILITY_ATTR_STS_PROVISIONED,
+	FIRA_CAPABILITY_ATTR_STS_PROVISIONED_INDIVIDUAL_KEY,
 	/* Report. */
 	FIRA_CAPABILITY_ATTR_AOA_AZIMUTH,
 	FIRA_CAPABILITY_ATTR_AOA_AZIMUTH_FULL,
@@ -243,7 +255,7 @@ enum fira_capability_attrs {
 };
 
 /**
- * enum fira_call_attrs - Fira call attributes.
+ * enum fira_call_attrs - FiRa call attributes.
  *
  * @FIRA_CALL_ATTR_SESSION_ID:
  *	Session identifier.
@@ -259,6 +271,10 @@ enum fira_capability_attrs {
  *	Session state.
  * @FIRA_CALL_ATTR_SESSION_COUNT:
  *	Sessions count.
+ * @FIRA_CALL_ATTR_SEQUENCE_NUMBER:
+ *	Session notification counter.
+ * @FIRA_CALL_ATTR_RANGING_DIAGNOSTICS:
+ * 	Diagnostic information.
  *
  * @FIRA_CALL_ATTR_UNSPEC: Invalid command.
  * @__FIRA_CALL_ATTR_AFTER_LAST: Internal use.
@@ -273,13 +289,15 @@ enum fira_call_attrs {
 	FIRA_CALL_ATTR_CAPABILITIES,
 	FIRA_CALL_ATTR_SESSION_STATE,
 	FIRA_CALL_ATTR_SESSION_COUNT,
+	FIRA_CALL_ATTR_SEQUENCE_NUMBER,
+	FIRA_CALL_ATTR_RANGING_DIAGNOSTICS,
 
 	__FIRA_CALL_ATTR_AFTER_LAST,
 	FIRA_CALL_ATTR_MAX = __FIRA_CALL_ATTR_AFTER_LAST - 1
 };
 
 /**
- * enum fira_session_param_attrs - Fira session parameters attributes.
+ * enum fira_session_param_attrs - FiRa session parameters attributes.
  *
  * @FIRA_SESSION_PARAM_ATTR_DEVICE_TYPE:
  *	Controlee (0) or controller (1)
@@ -325,21 +343,19 @@ enum fira_call_attrs {
  * @FIRA_SESSION_PARAM_ATTR_CHANNEL_NUMBER:
  *	Override channel for this session: 5, 6, 8, 9, 10, 12, 13 or 14
  * @FIRA_SESSION_PARAM_ATTR_PREAMBLE_CODE_INDEX:
- *	Override preamble code for this session, BPRF (9-24),
- *	HPRF (25-32, not supported)
+ *	Override preamble code for this session, BPRF (9-24), HPRF (25-32)
  * @FIRA_SESSION_PARAM_ATTR_RFRAME_CONFIG:
  *	SP0 (0), SP1 (1), SP2 (2, unused, not in FiRa 1.1) or SP3 (3, default)
  * @FIRA_SESSION_PARAM_ATTR_PRF_MODE:
- *	BPRF (0, default) or HPRF (1, not supported)
+ *	BPRF (0, default), HPRF (1) or HPRF with high data rate (2)
  * @FIRA_SESSION_PARAM_ATTR_PREAMBLE_DURATION:
  *	64 (1, default) or 32 (0, only for HPRF)
  * @FIRA_SESSION_PARAM_ATTR_SFD_ID:
- *	BPRF (0 or 2), HPRF (1-4, not supported), default 2
+ *	BPRF (0 or 2), HPRF (1-4), default 2
  * @FIRA_SESSION_PARAM_ATTR_NUMBER_OF_STS_SEGMENTS:
  *	0-2, default to 0 for SP0, default to 1 for SP1 & SP3, 2 not supported
  * @FIRA_SESSION_PARAM_ATTR_PSDU_DATA_RATE:
- *	6.81 Mbps (0, default), 7.80 Mbps (1, not supported),
- *	27.2 Mbps (2, not supported), 31.2 Mbps (3, not supported)
+ *	6.81 Mbps (0, default), 7.80 Mbps (1), 27.2 Mbps (2), 31.2 Mbps (3)
  * @FIRA_SESSION_PARAM_ATTR_BPRF_PHR_DATA_RATE:
  *	850 kbps (0, default) or 6.81 Mbps (1)
  * @FIRA_SESSION_PARAM_ATTR_MAC_FCS_TYPE:
@@ -349,16 +365,17 @@ enum fira_call_attrs {
  * @FIRA_SESSION_PARAM_ATTR_MEASUREMENT_SEQUENCE:
  * 	Sequence of measurement steps. Configures antenna flexibility.
  * @FIRA_SESSION_PARAM_ATTR_STS_CONFIG:
- *	Static STS (0, default), dynamic STS (1) or dynamic STS for controlee
- *	individual keys (2)
+ *	Static STS (0, default), Dynamic STS (1), Dynamic STS for controlee
+ *	individual keys (2), Provisioned STS (3), Provisioned STS for controlee
+ *	individual keys (4). See &enum fira_sts_mode.
  * @FIRA_SESSION_PARAM_ATTR_SUB_SESSION_ID:
  *	For dynamic STS for controlee individual key, sub session ID [controlee only]
  * @FIRA_SESSION_PARAM_ATTR_VUPPER64:
  *	vUpper64 for static STS (UCI: STATIC_STS_IV | VENDOR_ID)
  * @FIRA_SESSION_PARAM_ATTR_SESSION_KEY:
- *	For dynamic STS, session key (not in UCI)
+ *	For provisioned sts only, session key.
  * @FIRA_SESSION_PARAM_ATTR_SUB_SESSION_KEY:
- *	For dynamic STS for controlee individual keys, sub session key [controlee only]
+ *	For dynamic or provisioned STS, sub session key [controlee only]
  * @FIRA_SESSION_PARAM_ATTR_KEY_ROTATION:
  *	Disable (0, default) or enabled (1)
  * @FIRA_SESSION_PARAM_ATTR_KEY_ROTATION_RATE:
@@ -373,10 +390,32 @@ enum fira_call_attrs {
  *	Report AoA elevation in result message, disabled (0, default) or enabled (1)
  * @FIRA_SESSION_PARAM_ATTR_REPORT_AOA_FOM:
  *	Report AoA FOM in result message, disabled (0, default) or enabled (1)
+ * @FIRA_SESSION_PARAM_ATTR_REPORT_RSSI:
+ *	Report average RSSI of the round in result message, disabled (0, default) or enabled (1)
  * @FIRA_SESSION_PARAM_ATTR_DATA_VENDOR_OUI:
- *	Set the vendor OUI for custom data exchanges
- * @FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD:
- *	Set the data payload to send in next ranging packet
+*	Set the vendor OUI for custom data exchanges
+* @FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD:
+*	Set the data payload to send in next ranging packet
+ * @FIRA_SESSION_PARAM_ATTR_DIAGNOSTICS:
+ *	Report diagnostic information on each round, disabled (0, default) or enabled (1)
+ * @FIRA_SESSION_PARAM_ATTR_DIAGNOSTICS_FRAME_REPORTS_FIELDS:
+ *	Bitfield activating various frame diagnostics in the report (0: no frame diagnostic report, default).
+ *	see &enum fira_ranging_diagnostics_frame_report_flags
+ * @FIRA_SESSION_PARAM_ATTR_STS_LENGTH:
+ *	Number of symbols in a STS segment. 32 (0x00), 64 (0x01, default) or 128
+ *	symbols (0x02)
+ * @FIRA_SESSION_PARAM_ATTR_CAP_SIZE_MAX:
+ *      Maximum for contention access period size
+ * @FIRA_SESSION_PARAM_ATTR_CAP_SIZE_MIN:
+ *      Minimum for contention access period size
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_CONFIG:
+ *      Configure range data notification
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR:
+ *       Lower bound in cm above which the ranging notifications
+ *       should be enabled when RANGE_DATA_NTF_CONFIG is set to "proximity"
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR:
+ *       Upper bound in cm above which the ranging notifications
+ *       should be disabled when RANGE_DATA_NTF_CONFIG is set to "proximity"
  *
  * @FIRA_SESSION_PARAM_ATTR_UNSPEC: Invalid command.
  * @__FIRA_SESSION_PARAM_ATTR_AFTER_LAST: Internal use.
@@ -434,16 +473,28 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_AZIMUTH,
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_ELEVATION,
 	FIRA_SESSION_PARAM_ATTR_REPORT_AOA_FOM,
+	FIRA_SESSION_PARAM_ATTR_REPORT_RSSI,
 	/* Custom Data */
 	FIRA_SESSION_PARAM_ATTR_DATA_VENDOR_OUI,
 	FIRA_SESSION_PARAM_ATTR_DATA_PAYLOAD,
-
+	/* Diagnostics */
+	FIRA_SESSION_PARAM_ATTR_DIAGNOSTICS,
+	FIRA_SESSION_PARAM_ATTR_DIAGNOSTICS_FRAME_REPORTS_FIELDS,
+	/* Misc */
+	FIRA_SESSION_PARAM_ATTR_STS_LENGTH,
+	/* Contention-based ranging */
+	FIRA_SESSION_PARAM_ATTR_CAP_SIZE_MAX,
+	FIRA_SESSION_PARAM_ATTR_CAP_SIZE_MIN,
+	/* Range data notification enable */
+	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_CONFIG,
+	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR,
+	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR,
 	__FIRA_SESSION_PARAM_ATTR_AFTER_LAST,
 	FIRA_SESSION_PARAM_ATTR_MAX = __FIRA_SESSION_PARAM_ATTR_AFTER_LAST - 1
 };
 
 /**
- * enum fira_call_controlee_attrs - Fira controlee parameters attributes.
+ * enum fira_call_controlee_attrs - FiRa controlee parameters attributes.
  *
  * @FIRA_CALL_CONTROLEE_ATTR_SHORT_ADDR:
  *	Controlee short address.
@@ -485,7 +536,7 @@ enum fira_ranging_data_attrs_stopped_values {
 };
 
 /**
- * enum fira_ranging_data_attrs - Fira ranging data attributes.
+ * enum fira_ranging_data_attrs - FiRa ranging data attributes.
  *
  * @FIRA_RANGING_DATA_ATTR_STOPPED:
  *	If present, session was stopped, see
@@ -517,7 +568,7 @@ enum fira_ranging_data_attrs {
 };
 
 /**
- * enum fira_ranging_data_measurements_attrs - Fira ranging data measurements
+ * enum fira_ranging_data_measurements_attrs - FiRa ranging data measurements
  * attributes.
  *
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_SHORT_ADDR:
@@ -553,6 +604,10 @@ enum fira_ranging_data_attrs {
  *	Estimation of azimuth reliability of the participing device.
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_FOM:
  *	Estimation of elevation reliability of the participing device.
+ * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_RSSI:
+ *	RSSI "summary" for received frames during the ranging round,
+ *	reported as Q7.1. Summary method depends on session params
+ *	(average, minimum, etc).
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_SEQ_SENT:
  *	Sequence number of last data sent
  * @FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_RECV:
@@ -578,6 +633,7 @@ enum fira_ranging_data_measurements_attrs {
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_PI,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_AZIMUTH_FOM,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_REMOTE_AOA_ELEVATION_FOM,
+	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_RSSI,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_SEQ_SENT,
 	FIRA_RANGING_DATA_MEASUREMENTS_ATTR_DATA_PAYLOAD_RECV,
 
@@ -587,7 +643,7 @@ enum fira_ranging_data_measurements_attrs {
 };
 
 /**
- * enum fira_ranging_data_measurements_aoa_attrs - Fira ranging AoA measurements
+ * enum fira_ranging_data_measurements_aoa_attrs - FiRa ranging AoA measurements
  * attributes.
  *
  * @FIRA_RANGING_DATA_MEASUREMENTS_AOA_ATTR_RX_ANTENNA_SET:
@@ -616,14 +672,14 @@ enum fira_ranging_data_measurements_aoa_attrs {
 };
 
 /**
- * enum fira_session_param_meas_seq_step_attrs - Fira measurement sequence
+ * enum fira_session_param_meas_seq_step_attrs - FiRa measurement sequence
  * step attributes.
  *
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_MEASUREMENT_TYPE:
  *	The type of measurement to perform during the step.
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_N_MEASUREMENTS:
  *	The number of times this type of measurement shall be performed
- * 	during the step.
+ *	during the step.
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SET_NONRANGING:
  *	The antenna set to use to receive the non-rfames during the step.
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_ATTR_RX_ANT_SETS_RANGING:
@@ -654,11 +710,11 @@ enum fira_session_param_meas_seq_step_attrs {
 
 /**
  * enum fira_session_params_meas_seq_step_sets_attrs - Attributes of the
- * Fira RX antenna sets to use during a step.
+ * FiRa RX antenna sets to use during a step.
  *
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_0:
  *	Antenna set used to receive all rframes for range, azimuth and elevation
- * 	steps or initial rframe for azimuth_elevation step.
+ *	steps or initial rframe for azimuth_elevation step.
  * @FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_1:
  *	Antenna set used to receive final rframes for azimuth_elevation step.
  *
@@ -677,6 +733,142 @@ enum fira_session_params_meas_seq_step_sets_attrs {
 	__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_AFTER_LAST,
 	FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_MAX =
 		__FIRA_SESSION_PARAM_MEAS_SEQ_STEP_RX_ANT_SETS_RANGING_ATTR_AFTER_LAST -
+		1
+};
+
+/**
+ * enum fira_ranging_diagnostics_attrs - FiRa ranging diagnostic attributes.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_ATTR_FRAME_REPORTS:
+ *	Diagnostics for individual frames of the round.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_ATTR_UNSPEC: Invalid command.
+ * @__FIRA_RANGING_DIAGNOSTICS_ATTR_AFTER_LAST : Internal use.
+ * @FIRA_RANGING_DIAGNOSTICS_ATTR_MAX : Internal use.
+ */
+enum fira_ranging_diagnostics_attrs {
+	FIRA_RANGING_DIAGNOSTICS_ATTR_UNSPEC,
+	FIRA_RANGING_DIAGNOSTICS_ATTR_FRAME_REPORTS,
+
+	__FIRA_RANGING_DIAGNOSTICS_ATTR_AFTER_LAST,
+	FIRA_RANGING_DIAGNOSTICS_ATTR_MAX =
+		__FIRA_RANGING_DIAGNOSTICS_ATTR_AFTER_LAST - 1
+};
+
+/**
+ * enum fira_ranging_diagnostics_frame_reports_attrs - FiRa ranging
+ * diagnostic info for individual frames.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_ANT_SET:
+ *	Antenna set ID, used for the frame transmission.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_ACTION:
+ *	Action type of the frame (0: TX or 1: RX).
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_MSG_ID:
+ *	FiRa message ID (0: RIM, 1: RRM, 2: RFM, 3: CM,
+ *	4: MRM, 5: RRRM, 6: CU).
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_RSSIS:
+ *	RSSI for the current (Rx) frame, reported as a Q7.1.
+ *	As many values as receivers.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_AOAS:
+ *	Nested attribute reporting different AoA related information.
+ *	As many as AoA types.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_CIRS:
+ *	Nested attribute reporting CIR sample window information.
+ *	As many array elements as receivers.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_UNSPEC: Invalid command.
+ * @__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_AFTER_LAST: Internal use.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_MAX: Internal use.
+ */
+enum fira_ranging_diagnostics_frame_reports_attrs {
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_UNSPEC,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_ANT_SET,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_ACTION,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_MSG_ID,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_RSSIS,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_AOAS,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_CIRS,
+
+	__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_AFTER_LAST,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_MAX =
+		__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_ATTR_AFTER_LAST - 1
+};
+
+/**
+ * enum fira_ranging_diagnostics_frame_reports_aoa_attrs - AoA diagnostic
+ * information per frame
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_TDOA:
+ *      TDoA in rctu, reported as s16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_PDOA:
+ *      PDoA in radians, reported as Q5.11.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_AOA:
+ *      AoA in radians, reported as Q5.11.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_FOM:
+ *      AoA FoM between 0 and 255 (0 being an invalid measure and 255 being
+ *      a 100% confidence measure), reported as u8.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_TYPE:
+ *      AoA Measurement type (azimuth, elevation...), reported as u8.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_UNSPEC: Invalid command.
+ * @__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_AFTER_LAST: Internal use.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_MAX: Internal use.
+ */
+enum fira_ranging_diagnostics_frame_reports_aoa_attrs {
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_UNSPEC,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_TDOA,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_PDOA,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_AOA,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_FOM,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_TYPE,
+
+	__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_AFTER_LAST,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_MAX =
+		__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_AOAS_ATTR_AFTER_LAST -
+		1
+};
+
+/**
+ * enum fira_ranging_diagnostics_frame_reports_cir_attrs - CIR diagnostic
+ * information per frame
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_IDX:
+ *      Absolute index of the sample considered as first path, reported as u16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SNR:
+ *      SNR of the sample considered as first path, reported as s16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_NS:
+ *      Timestamp of the sample considered as first path, reported as u16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_IDX:
+ *      Absolute index of the sample considered as peak path, reported as u16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_SNR:
+ *      SNR of the sample considered as peak path, reported as s16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_NS:
+ *      Timestamp of the sample considered as peak path, reported as u16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SAMPLE_OFFSET:
+ *      Offset of the first path in the sample window, reported as u16.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SAMPLE_WINDOW:
+ *      Sliding window containing CIR samples, each sample is considered as
+ *      a byte sequence depending on sample size.
+ *      As many samples as the window size.
+ *
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_UNSPEC: Invalid command.
+ * @__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_AFTER_LAST: Internal use.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_MAX: Internal use.
+ */
+enum fira_ranging_diagnostics_frame_reports_cir_attrs {
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_UNSPEC,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_IDX,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SNR,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_NS,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_IDX,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_SNR,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_PP_NS,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SAMPLE_OFFSET,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_FP_SAMPLE_WINDOW,
+
+	__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_AFTER_LAST,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_MAX =
+		__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORTS_CIRS_ATTR_AFTER_LAST -
 		1
 };
 
