@@ -40,6 +40,7 @@ struct exynos_dqe_state {
 	struct histogram_bins *bins;
 	struct exynos_drm_pending_histogram_event *event;
 	u32 histogram_threshold;
+	spinlock_t histogram_slock;
 	enum exynos_prog_pos histogram_pos;
 	bool rcd_enabled;
 	struct drm_gem_object *cgc_gem;

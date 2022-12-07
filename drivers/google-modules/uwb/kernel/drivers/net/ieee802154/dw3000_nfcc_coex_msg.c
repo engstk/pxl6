@@ -64,11 +64,11 @@ void dw3000_nfcc_coex_header_put(struct dw3000 *dw,
 {
 	struct dw3000_nfcc_coex_msg *msg = &buffer->msg;
 
-	trace_dw3000_nfcc_coex_header_put(dw, DW3000_NFCC_COEX_VER_ID,
+	trace_dw3000_nfcc_coex_header_put(dw, dw->nfcc_coex.version,
 					  dw->nfcc_coex.tx_seq_num);
 	memcpy(msg->signature, DW3000_NFCC_COEX_SIGNATURE_STR,
 	       DW3000_NFCC_COEX_SIGNATURE_LEN);
-	msg->ver_id = DW3000_NFCC_COEX_VER_ID;
+	msg->ver_id = dw->nfcc_coex.version;
 	msg->seqnum = dw->nfcc_coex.tx_seq_num;
 	msg->nb_tlv = 0;
 	buffer->tlvs_len = 0;
@@ -139,6 +139,24 @@ static void dw3000_nfcc_coex_clock_offset_payload_put(
 }
 
 /**
+ * dw3000_nfcc_coex_stop_session_payload_put() - Fill stop session payload.
+ * @dw: Driver context.
+ * @buffer: Buffer to set with help of handle_access.
+ * @session_id: Session id to stop.
+ */
+static void dw3000_nfcc_coex_stop_session_payload_put(
+	struct dw3000 *dw, struct dw3000_nfcc_coex_buffer *buffer,
+	u32 session_id)
+{
+	trace_dw3000_nfcc_coex_stop_session_payload_put(dw, session_id);
+
+	dw3000_nfcc_coex_header_put(dw, buffer);
+
+	dw3000_nfcc_coex_tlv_u32_put(
+		buffer, DW3000_NFCC_COEX_TLV_TYPE_STOP_SESSION, session_id);
+}
+
+/**
  * dw3000_nfcc_coex_message_send() - Write message for NFCC and release SPI1.
  * @dw: Driver context.
  *
@@ -150,17 +168,25 @@ int dw3000_nfcc_coex_message_send(struct dw3000 *dw)
 	/* Build the absolute sys time offset. */
 	u32 offset_sys_time =
 		(dw->dtu_sync << DW3000_DTU_PER_SYS_POWER) - dw->sys_time_sync;
+	u32 clock_offset_sys_time;
 
-	if (dw->nfcc_coex.sync_time_needed) {
-		dw->nfcc_coex.sync_time_needed = false;
+	switch (dw->nfcc_coex.send) {
+	case DW3000_NFCC_COEX_SEND_CLK_SYNC:
 		dw3000_nfcc_coex_clock_sync_payload_put(dw, &buffer);
-	} else {
+		break;
+	default:
+	case DW3000_NFCC_COEX_SEND_CLK_OFFSET:
 		/* Compute the clock correction to forward to NFCC. */
-		u32 clock_offset_sys_time =
+		clock_offset_sys_time =
 			offset_sys_time - dw->nfcc_coex.prev_offset_sys_time;
 		/* Build the message with the clock update to forward. */
 		dw3000_nfcc_coex_clock_offset_payload_put(
 			dw, &buffer, -clock_offset_sys_time);
+		break;
+	case DW3000_NFCC_COEX_SEND_STOP:
+		dw3000_nfcc_coex_stop_session_payload_put(
+			dw, &buffer, DW3000_NFCC_COEX_SESSION_ID_DEFAULT);
+		break;
 	}
 
 	dw->nfcc_coex.prev_offset_sys_time = offset_sys_time;
@@ -189,7 +215,7 @@ dw3000_nfcc_coex_header_check(struct dw3000 *dw,
 		return -EINVAL;
 	}
 	/* Check AP_NFCC Interface Version ID. */
-	if (msg->ver_id != DW3000_NFCC_COEX_VER_ID) {
+	if (msg->ver_id != dw->nfcc_coex.version) {
 		return -EINVAL;
 	}
 	/* Read number of TLVs. */

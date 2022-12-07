@@ -53,6 +53,8 @@ int mcps802154_schedule_update(struct mcps802154_local *local,
 		sched->start_timestamp_dtu = next_timestamp_dtu;
 		sched->duration_dtu = 0;
 		expected_start_timestamp_dtu = next_timestamp_dtu;
+	} else if (sched->duration_dtu == 0) {
+		expected_start_timestamp_dtu = next_timestamp_dtu;
 	} else {
 		expected_start_timestamp_dtu =
 			sched->start_timestamp_dtu + sched->duration_dtu;
@@ -68,6 +70,9 @@ int mcps802154_schedule_update(struct mcps802154_local *local,
 	scheduler = local->ca.scheduler;
 	r = scheduler->ops->update_schedule(scheduler, su, next_timestamp_dtu);
 	if (r) {
+		if (r != -ENOENT)
+			trace_update_schedule_error(local, su,
+						    next_timestamp_dtu);
 		mcps802154_schedule_clear(local);
 		return r;
 	}
@@ -146,7 +151,8 @@ EXPORT_SYMBOL(mcps802154_schedule_recycle);
 
 int mcps802154_schedule_add_region(
 	const struct mcps802154_schedule_update *schedule_update,
-	struct mcps802154_region *region, int start_dtu, int duration_dtu)
+	struct mcps802154_region *region, int start_dtu, int duration_dtu,
+	bool once)
 {
 	struct mcps802154_schedule_update_local *sulocal =
 		schedule_update_to_local(schedule_update);
@@ -184,6 +190,7 @@ int mcps802154_schedule_add_region(
 	sched_region->start_dtu = start_dtu;
 	sched_region->duration_dtu = duration_dtu;
 	sched_region->region = region;
+	sched_region->once = once;
 
 	sched->regions = new_sched_regions;
 	su->n_regions = sched->n_regions = sched->n_regions + 1;
@@ -227,3 +234,19 @@ int mcps802154_schedule_get_regions(struct mcps802154_llhw *llhw,
 	return local->ca.n_regions;
 }
 EXPORT_SYMBOL(mcps802154_schedule_get_regions);
+
+int mcps802154_schedule_get_next_demands(
+	struct mcps802154_llhw *llhw, const struct mcps802154_region *region,
+	u32 timestamp_dtu, int duration_dtu, int delta_dtu,
+	struct mcps802154_region_demand *demands)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+	struct mcps802154_scheduler *scheduler = local->ca.scheduler;
+
+	if (!scheduler->ops->get_next_demands)
+		return -EOPNOTSUPP;
+	return scheduler->ops->get_next_demands(scheduler, region,
+						timestamp_dtu, duration_dtu,
+						delta_dtu, demands);
+}
+EXPORT_SYMBOL(mcps802154_schedule_get_next_demands);

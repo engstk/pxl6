@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -44,18 +44,18 @@ void fira_round_hopping_sequence_destroy(struct fira_session *session)
 	fira_round_hopping_crypto_destroy(round_hopping_sequence);
 }
 
-int fira_round_hopping_sequence_get(struct fira_session *session,
+int fira_round_hopping_sequence_get(const struct fira_session *session,
 				    int block_index)
 {
-	struct fira_round_hopping_sequence *round_hopping_sequence =
+	const struct fira_session_params *params = &session->params;
+	const struct fira_round_hopping_sequence *round_hopping_sequence =
 		&session->round_hopping_sequence;
+	int block_duration_slots =
+		params->block_duration_dtu / params->slot_duration_dtu;
+	int n_rounds = block_duration_slots / params->round_duration_slots;
 	u8 block[AES_BLOCK_SIZE];
 	u8 out[AES_BLOCK_SIZE];
 	int r;
-	int block_duration_slots = session->params.block_duration_dtu /
-				   session->params.slot_duration_dtu;
-	int n_rounds =
-		block_duration_slots / session->params.round_duration_slots;
 
 	if (!block_index)
 		return 0;

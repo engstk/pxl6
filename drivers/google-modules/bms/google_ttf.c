@@ -178,7 +178,7 @@ static int ttf_pwr_equiv_icl(const struct gbms_charging_event *ce_data,
 	}
 
 	/* scale icl (at adapter voltage) to vtier */
-	equiv_icl = (act_icl * aratio * 100) / efficiency;
+	equiv_icl = (act_icl * aratio * efficiency) / 10000;
 	pr_debug("%s: act_icl=%d aratio=%d equiv_icl=%d\n",
 		 __func__, act_icl, aratio, equiv_icl);
 
@@ -733,7 +733,7 @@ static void ttf_tier_update(struct batt_ttf_stats *stats,
 		if (!force && i == 0 && (chg_ts->soc_in >> 8) > 1)
 			continue;
 		/* update last tier stats only at full */
-		if (!force && last_tier && ((chg_s->ssoc_out >> 8) != 100))
+		if (!force && last_tier && chg_s->ssoc_out != 100)
 			continue;
 
 		/*  */
@@ -920,6 +920,17 @@ static int ttf_as_default(struct ttf_adapter_stats *as, int i, int table_i)
 	return table_i;
 }
 
+void ttf_tier_reset(struct batt_ttf_stats *stats)
+{
+	int i;
+
+	for (i = 0; i < GBMS_STATS_TIER_COUNT; i++) {
+		stats->tier_stats[i].cc_in = 0;
+		stats->tier_stats[i].cc_total = 0;
+		stats->tier_stats[i].avg_time = 0;
+	}
+}
+
 static int ttf_init_tier_parse_dt(struct batt_ttf_stats *stats,
 				  struct device *device)
 {
@@ -942,6 +953,8 @@ static int ttf_init_tier_parse_dt(struct batt_ttf_stats *stats,
 
 	for (i = 0; i < GBMS_STATS_TIER_COUNT; i++)
 		stats->tier_stats[i].soc_in = tier_table[i] << 8;
+
+	ttf_tier_reset(stats);
 
 	return 0;
 }

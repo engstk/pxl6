@@ -82,10 +82,12 @@ extern const dw3000_pdoa_lut_t dw3000_default_lut_ch9;
 /**
  * struct dw3000_channel_calib - per-channel dependent calibration parameters
  * @pll_locking_code: PLL locking code
+ * @wifi_coex_enabled: WiFi coexistence activation
  */
 struct dw3000_channel_calib {
 	/* chY.pll_locking_code */
 	u32 pll_locking_code;
+	bool wifi_coex_enabled;
 };
 
 /**
@@ -109,6 +111,7 @@ struct dw3000_antenna_calib_prf {
  * @port: port value this antenna belong to (0 for RF1, 1 for RF2)
  * @selector_gpio: GPIO number to select this antenna
  * @selector_gpio_value: GPIO value to select this antenna
+ * @caps: antenna capabilities
  */
 struct dw3000_antenna_calib {
 	/* antX.chY.prfZ.* */
@@ -116,7 +119,7 @@ struct dw3000_antenna_calib {
 		struct dw3000_antenna_calib_prf prf[DW3000_CALIBRATION_PRF_MAX];
 	} ch[DW3000_CALIBRATION_CHANNEL_MAX];
 	/* antX.* */
-	u8 port, selector_gpio, selector_gpio_value;
+	u8 port, selector_gpio, selector_gpio_value, caps;
 };
 
 /**

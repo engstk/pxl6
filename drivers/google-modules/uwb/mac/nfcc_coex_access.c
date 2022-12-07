@@ -40,38 +40,60 @@ static void nfcc_coex_access_done(struct mcps802154_access *access, bool error)
 	struct nfcc_coex_local *local = access_to_local(access);
 	struct nfcc_coex_session *session = &local->session;
 
-	if (error) {
-		const struct dw3000_vendor_cmd_nfcc_coex_get_access_info stop = {
+	/* Stop on error because the next timestamps is unknown.
+	 * Stop in V2, because the vendor stop is not supported by NFC. */
+	if ((error || (session->state == NFCC_COEX_STATE_STOPPING &&
+		       session->params.version == 2)) &&
+	    !session->get_access_info.watchdog_timeout) {
+		const struct llhw_vendor_cmd_nfcc_coex_get_access_info stop = {
 			.stop = true,
 		};
 
 		local->session.get_access_info = stop;
 	}
 
-	if (session->state != NFCC_COEX_STATE_ACCESSING ||
-	    session->get_access_info.stop ||
+	if (session->get_access_info.stop ||
 	    session->get_access_info.watchdog_timeout)
-		session->started = false;
+		nfcc_coex_set_state(local, NFCC_COEX_STATE_IDLE);
+
 	nfcc_coex_report(local);
-	nfcc_coex_set_state(local, NFCC_COEX_STATE_IDLE);
 }
 
 static int nfcc_coex_handle(struct mcps802154_access *access)
 {
 	struct nfcc_coex_local *local = access_to_local(access);
 	struct nfcc_coex_session *session = &local->session;
-	struct dw3000_vendor_cmd_nfcc_coex_handle_access handle_access = {};
+	struct llhw_vendor_cmd_nfcc_coex_handle_access handle_access = {};
 
 	handle_access.start = session->first_access;
 	handle_access.timestamp_dtu = access->timestamp_dtu;
 	handle_access.duration_dtu = access->duration_dtu;
 	handle_access.chan = session->params.channel_number;
+	handle_access.version = session->params.version;
 
-	nfcc_coex_set_state(local, NFCC_COEX_STATE_ACCESSING);
-	session->first_access = false;
+	if (session->state == NFCC_COEX_STATE_STOPPING &&
+	    session->params.version == 3) {
+		/* Stop processing : stop the nfcc coex */
+		if (local->session.first_access) {
+			struct mcps802154_region_demand *rd =
+				&session->region_demand;
+			struct llhw_vendor_cmd_nfcc_coex_stop stop = {
+				.timestamp_dtu = rd->timestamp_dtu,
+				.duration_dtu = rd->max_duration_dtu,
+				.version = session->params.version,
+			};
+			return mcps802154_vendor_cmd(
+				local->llhw, VENDOR_QORVO_OUI,
+				LLHW_VENDOR_CMD_NFCC_COEX_STOP, &stop,
+				sizeof(stop));
+		} else
+			return mcps802154_vendor_cmd(
+				local->llhw, VENDOR_QORVO_OUI,
+				LLHW_VENDOR_CMD_NFCC_COEX_STOP, NULL, 0);
+	}
 
 	return mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
-				     DW3000_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS,
+				     LLHW_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS,
 				     &handle_access, sizeof(handle_access));
 }
 
@@ -79,14 +101,16 @@ static int nfcc_coex_tx_done(struct mcps802154_access *access)
 {
 	struct nfcc_coex_local *local = access_to_local(access);
 	struct nfcc_coex_session *session = &local->session;
-	struct dw3000_vendor_cmd_nfcc_coex_get_access_info *get_access_info =
+	struct llhw_vendor_cmd_nfcc_coex_get_access_info *get_access_info =
 		&session->get_access_info;
 	struct mcps802154_region_demand *rd = &session->region_demand;
 	int r;
 
+	session->first_access = false;
+
 	r = mcps802154_vendor_cmd(
 		local->llhw, VENDOR_QORVO_OUI,
-		DW3000_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION,
+		LLHW_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION,
 		get_access_info, sizeof(*get_access_info));
 	if (r)
 		return r;
@@ -98,12 +122,17 @@ static int nfcc_coex_tx_done(struct mcps802154_access *access)
 	return 1;
 }
 
-static int nfcc_coex_schedule_change(struct mcps802154_access *access)
+static int nfcc_coex_broken(struct mcps802154_access *access)
 {
 	struct nfcc_coex_local *local = access_to_local(access);
-	struct nfcc_coex_session *session = &local->session;
+	const struct llhw_vendor_cmd_nfcc_coex_get_access_info
+		watchdog_timeout = {
+			.watchdog_timeout = true,
+		};
 
-	return session->state == NFCC_COEX_STATE_STOPPING ? 1 : 0;
+	local->session.get_access_info = watchdog_timeout;
+	/* Request end of current access. */
+	return -ETIME;
 }
 
 struct mcps802154_access_vendor_ops nfcc_coex_ops = {
@@ -112,7 +141,7 @@ struct mcps802154_access_vendor_ops nfcc_coex_ops = {
 	},
 	.handle = nfcc_coex_handle,
 	.tx_done = nfcc_coex_tx_done,
-	.schedule_change = nfcc_coex_schedule_change,
+	.broken = nfcc_coex_broken,
 };
 
 static struct mcps802154_access *
@@ -140,7 +169,8 @@ struct mcps802154_access *nfcc_coex_get_access(struct mcps802154_region *region,
 	struct nfcc_coex_local *local = region_to_local(region);
 	struct nfcc_coex_session *session = &local->session;
 
-	if (session->started) {
+	if (session->state == NFCC_COEX_STATE_STARTED ||
+	    session->state == NFCC_COEX_STATE_STOPPING) {
 		nfcc_coex_session_update(local, session, next_timestamp_dtu,
 					 region_duration_dtu);
 		return nfcc_coex_access_controller(local, session);

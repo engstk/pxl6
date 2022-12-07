@@ -191,6 +191,7 @@ enum dw3000_ciagdiag_reg_select {
  * @tx_fctrl: Transmit frame control
  * @rx_timeout_pac: Preamble detection timeout period in units of PAC size
  *  symbols
+ * @rx_frame_timeout_dly: reception frame timeout period in units of dly.
  * @w4r_time: Wait-for-response time (RX after TX delay)
  * @sts_key: STS Key
  * @sts_iv: STS IV
@@ -208,6 +209,7 @@ struct dw3000_local_data {
 	u16 max_frames_len;
 	s16 ststhreshold;
 	u16 rx_timeout_pac;
+	u32 rx_frame_timeout_dly;
 	u32 tx_fctrl;
 	u32 w4r_time;
 	u8 sts_key[AES_KEYSIZE_128];
@@ -217,12 +219,18 @@ struct dw3000_local_data {
 /* Statistics items */
 enum dw3000_stats_items {
 	DW3000_STATS_RX_GOOD,
-	DW3000_STATS_RX_TO,
 	DW3000_STATS_RX_ERROR,
+	DW3000_STATS_RX_TO,
 	__DW3000_STATS_COUNT
 };
 
-/* DW3000 statistics */
+/**
+ * struct dw3000_stats - DW3000 statistics
+ * @count: Count per-items
+ * @rssi: Last RSSI data per type
+ * @enabled: Stats enabled flag
+ * @indexes: Free-running index per-items
+ */
 struct dw3000_stats {
 	/* Total stats */
 	u16 count[__DW3000_STATS_COUNT];
@@ -230,6 +238,7 @@ struct dw3000_stats {
 	struct dw3000_rssi rssi[DW3000_RSSI_REPORTS_MAX];
 	/* Stats on/off */
 	bool enabled;
+	u16 indexes[__DW3000_STATS_COUNT];
 };
 
 /* Maximum skb length
@@ -436,6 +445,7 @@ enum config_changed_flags {
  * @cur_state: current state defined by enum power_state
  * @tx_adjust: TX time adjustment based on frame length
  * @rx_start: RX start date in DTU for RX time adjustment
+ * @interrupts: Hardware interrupts count on the device.
  */
 struct dw3000_power {
 	struct sysfs_power_stats stats[DW3000_PWR_MAX];
@@ -443,6 +453,7 @@ struct dw3000_power {
 	int cur_state;
 	int tx_adjust;
 	u32 rx_start;
+	atomic64_t interrupts;
 };
 
 /**
@@ -451,8 +462,8 @@ struct dw3000_power {
  * @config_changed: bitfield of configuration changed during DEEP-SLEEP
  * @frame_idx: saved frame index to use for deferred TX/RX
  * @tx_skb: saved frame to transmit for deferred TX
- * @tx_info: saved info to use for deferred TX
- * @rx_info: saved parameter for deferred RX
+ * @tx_config: saved config to use for deferred TX
+ * @rx_config: saved parameter for deferred RX
  * @regbackup: registers backup to detect diff
  * @compare_work: deferred registers backup compare work
  */
@@ -462,8 +473,8 @@ struct dw3000_deep_sleep_state {
 	int frame_idx;
 	struct sk_buff *tx_skb;
 	union {
-		struct mcps802154_tx_frame_info tx_info;
-		struct mcps802154_rx_info rx_info;
+		struct mcps802154_tx_frame_config tx_config;
+		struct mcps802154_rx_frame_config rx_config;
 	};
 #ifdef CONFIG_DW3000_DEBUG
 	void *regbackup;
@@ -495,6 +506,23 @@ struct dw3000_cir_data;
 
 #define DW3000_MAX_QUEUED_SPI_XFER 32
 #define DW3000_QUEUED_SPI_BUFFER_SZ 2048
+
+/* Number of samples to average. */
+#define DW3000_NB_AVERAGE 1
+
+/**
+ * struct dw3000_rx_ctx - Custom rx context use with rx_init/rx_get_measurement.
+ * @pdoa_rad_q11: Array of PDoA measurements.
+ * @aoa_rad_q11: Array of AoA measurements.
+ * @index: Index for pdoa_rad_q11 and aoa_rad_q11 arrays.
+ * @sample_valid_nb: Number of valid measurements in array, used for average.
+ */
+struct dw3000_rx_ctx {
+	int pdoa_rad_q11[DW3000_NB_AVERAGE];
+	int aoa_rad_q11[DW3000_NB_AVERAGE];
+	int index;
+	int sample_valid_nb;
+};
 
 /**
  * struct dw3000 - main DW3000 device structure
@@ -543,6 +571,7 @@ struct dw3000_cir_data;
  * @coex_interval_us: Minimum interval between two operations in us
  *		      under which WiFi coexistence GPIO is kept active
  * @coex_gpio: WiFi coexistence GPIO, >= 0 if activated
+ * @coex_enabled: WiFi coexistence activation
  * @coex_status: WiFi coexistence GPIO status, 1 if activated
  * @lna_pa_mode: LNA/PA configuration to use
  * @autoack: auto-ack status, true if activated
@@ -557,6 +586,7 @@ struct dw3000_cir_data;
  * @restricted_channels: bit field of restricted channels
  * @tx_rf2: parameter to enable the tx on rf2 port
  * @cir_data_changed: true if buffer data have been reallocated
+ * @full_cia_read: CIA registers fully loaded into cir_data struct
  * @cir_data: allocated CIR exploitation data
  * @msg_queue: SPI message holding transfer queue
  * @msg_queue_xfer: next transfer available
@@ -647,6 +677,7 @@ struct dw3000 {
 	unsigned coex_margin_us;
 	unsigned coex_interval_us;
 	s8 coex_gpio;
+	bool coex_enabled;
 	int coex_status;
 	/* LNA/PA mode */
 	s8 lna_pa_mode;
@@ -674,6 +705,7 @@ struct dw3000 {
 	u8 tx_rf2;
 	/* Channel impulse response data */
 	bool cir_data_changed;
+	bool full_cia_read;
 	struct dw3000_cir_data *cir_data;
 	/* SPI message holding transfers queue */
 	struct spi_message *msg_queue;

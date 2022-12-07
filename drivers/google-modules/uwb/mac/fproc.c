@@ -25,6 +25,25 @@
 #include "mcps802154_i.h"
 #include "llhw-ops.h"
 
+bool mcps802154_fproc_is_non_recoverable_error(struct mcps802154_access *access)
+{
+	bool rc = false;
+	if (access->error < 0) {
+		switch (access->error) {
+			case -ETIME:
+			case -EIO:
+			case -EAGAIN:
+				rc = false;
+				break;
+			default:
+				pr_err("mcps: error %d is not recoverable", access->error);
+				rc = true;
+				break;
+		}
+	}
+	return rc;
+}
+
 void mcps802154_fproc_init(struct mcps802154_local *local)
 {
 	local->fproc.state = &mcps802154_fproc_stopped;
@@ -37,6 +56,7 @@ void mcps802154_fproc_uninit(struct mcps802154_local *local)
 	WARN_ON(local->fproc.access);
 	WARN_ON(local->fproc.tx_skb);
 	WARN_ON(local->started);
+	WARN_ON(local->fproc.deferred);
 }
 
 void mcps802154_fproc_change_state(
@@ -54,7 +74,6 @@ void mcps802154_fproc_access(struct mcps802154_local *local,
 			     u32 next_timestamp_dtu)
 {
 	struct mcps802154_access *access;
-	int r;
 
 	if (!local->start_stop_request) {
 		mcps802154_fproc_stopped_handle(local);
@@ -72,30 +91,35 @@ void mcps802154_fproc_access(struct mcps802154_local *local,
 
 	switch (access->method) {
 	case MCPS802154_ACCESS_METHOD_NOTHING:
-		r = mcps802154_fproc_nothing_handle(local, access);
+		access->error = mcps802154_fproc_nothing_handle(local, access);
+		break;
+	case MCPS802154_ACCESS_METHOD_IDLE:
+		access->error = mcps802154_fproc_idle_handle(local, access);
 		break;
 	case MCPS802154_ACCESS_METHOD_IMMEDIATE_RX:
-		r = mcps802154_fproc_rx_handle(local, access);
+		access->error = mcps802154_fproc_rx_handle(local, access);
 		break;
 	case MCPS802154_ACCESS_METHOD_IMMEDIATE_TX:
-		r = mcps802154_fproc_tx_handle(local, access);
+		access->error = mcps802154_fproc_tx_handle(local, access);
 		break;
 	case MCPS802154_ACCESS_METHOD_MULTI:
-		r = mcps802154_fproc_multi_handle(local, access);
+		access->error = mcps802154_fproc_multi_handle(local, access);
 		break;
 	case MCPS802154_ACCESS_METHOD_VENDOR:
-		r = mcps802154_fproc_vendor_handle(local, access);
+		access->error = mcps802154_fproc_vendor_handle(local, access);
 		break;
 	default:
-		r = -1;
+		access->error = -1;
 	}
 
-	if (r) {
-		mcps802154_fproc_access_done(local, true);
-		if (r == -ETIME)
-			mcps802154_fproc_access_now(local);
-		else
+	if (access->error) {
+		if (mcps802154_fproc_is_non_recoverable_error(access)) {
+			mcps802154_fproc_access_done(local, true);
 			mcps802154_fproc_broken_handle(local);
+		} else {
+			mcps802154_fproc_access_done(local, false);
+			mcps802154_fproc_access_now(local);
+		}
 	}
 }
 
@@ -150,6 +174,22 @@ static void mcps802154_broken_safe(struct mcps802154_local *local)
 		mcps802154_fproc_broken_handle(local);
 }
 
+static void mcps802154_fproc_call_deferred(struct mcps802154_local *local)
+{
+	struct mcps802154_region *region = local->fproc.deferred;
+
+	if (region) {
+		local->fproc.deferred = NULL;
+		region->ops->deferred(region);
+	}
+}
+
+void mcps802154_fproc_schedule_change(struct mcps802154_local *local)
+{
+	local->fproc.state->schedule_change(local);
+	mcps802154_fproc_call_deferred(local);
+}
+
 void mcps802154_rx_frame(struct mcps802154_llhw *llhw)
 {
 	struct mcps802154_local *local = llhw_to_local(llhw);
@@ -160,6 +200,7 @@ void mcps802154_rx_frame(struct mcps802154_llhw *llhw)
 		local->fproc.state->rx_frame(local);
 	else
 		mcps802154_broken_safe(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
@@ -175,6 +216,7 @@ void mcps802154_rx_timeout(struct mcps802154_llhw *llhw)
 		local->fproc.state->rx_timeout(local);
 	else
 		mcps802154_broken_safe(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
@@ -191,6 +233,7 @@ void mcps802154_rx_error(struct mcps802154_llhw *llhw,
 		local->fproc.state->rx_error(local, error);
 	else
 		mcps802154_broken_safe(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
@@ -206,6 +249,7 @@ void mcps802154_tx_done(struct mcps802154_llhw *llhw)
 		local->fproc.state->tx_done(local);
 	else
 		mcps802154_broken_safe(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
@@ -223,7 +267,7 @@ void mcps802154_tx_too_late(struct mcps802154_llhw *llhw)
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
-EXPORT_SYMBOL_GPL(mcps802154_tx_too_late);
+EXPORT_SYMBOL(mcps802154_tx_too_late);
 
 void mcps802154_rx_too_late(struct mcps802154_llhw *llhw)
 {
@@ -237,7 +281,7 @@ void mcps802154_rx_too_late(struct mcps802154_llhw *llhw)
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
-EXPORT_SYMBOL_GPL(mcps802154_rx_too_late);
+EXPORT_SYMBOL(mcps802154_rx_too_late);
 
 void mcps802154_broken(struct mcps802154_llhw *llhw)
 {
@@ -246,6 +290,7 @@ void mcps802154_broken(struct mcps802154_llhw *llhw)
 	mutex_lock(&local->fsm_lock);
 	trace_llhw_event_broken(local);
 	mcps802154_broken_safe(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }
@@ -259,6 +304,7 @@ void mcps802154_timer_expired(struct mcps802154_llhw *llhw)
 	trace_llhw_event_timer_expired(local);
 	if (local->fproc.state->timer_expired)
 		local->fproc.state->timer_expired(local);
+	mcps802154_fproc_call_deferred(local);
 	trace_llhw_event_done(local);
 	mutex_unlock(&local->fsm_lock);
 }

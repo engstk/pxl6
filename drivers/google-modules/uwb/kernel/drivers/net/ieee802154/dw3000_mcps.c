@@ -37,6 +37,7 @@
 #include "dw3000_pctt_mcps.h"
 #include "dw3000_coex.h"
 #include "dw3000_cir.h"
+#include "dw3000_power_stats.h"
 
 static int completion_active(struct completion *completion)
 {
@@ -47,12 +48,14 @@ static int completion_active(struct completion *completion)
 #endif
 }
 
-static inline u32 timestamp_rctu_to_dtu(struct dw3000 *dw, u64 timestamp_rctu);
 static inline u64 timestamp_rctu_to_rmarker_rctu(struct dw3000 *dw,
 						 u64 timestamp_rctu,
 						 u32 rmarker_dtu);
 
-static inline u32 tx_rmarker_offset(struct dw3000 *dw, int ant_set_id)
+static inline u32
+tx_rmarker_offset(struct dw3000 *dw,
+		  const struct mcps802154_channel *channel_params,
+		  int ant_set_id)
 {
 	struct dw3000_config *config = &dw->config;
 	const struct dw3000_antenna_calib *ant_calib;
@@ -60,6 +63,9 @@ static inline u32 tx_rmarker_offset(struct dw3000 *dw, int ant_set_id)
 	int chanidx;
 	int prfidx;
 	s8 ant_idx1, ant_idx2;
+	int chan = channel_params ? channel_params->channel : config->chan;
+	int pcode = channel_params ? channel_params->preamble_code :
+				     config->txCode;
 
 	if (ant_set_id < 0 || ant_set_id >= ANTSET_ID_MAX) {
 		dev_err(dw->dev,
@@ -86,10 +92,10 @@ static inline u32 tx_rmarker_offset(struct dw3000 *dw, int ant_set_id)
 
 	ant_calib = &dw->calib_data.ant[ant_idx1];
 
-	chanidx = config->chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :
-				      DW3000_CALIBRATION_CHANNEL_5;
-	prfidx = config->txCode >= 9 ? DW3000_CALIBRATION_PRF_64MHZ :
-				       DW3000_CALIBRATION_PRF_16MHZ;
+	chanidx = chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :
+			      DW3000_CALIBRATION_CHANNEL_5;
+	prfidx = pcode >= 9 ? DW3000_CALIBRATION_PRF_64MHZ :
+			      DW3000_CALIBRATION_PRF_16MHZ;
 
 	ant_calib_prf = &ant_calib->ch[chanidx].prf[prfidx];
 
@@ -240,7 +246,7 @@ static void stop(struct mcps802154_llhw *llhw)
 
 struct do_tx_frame_params {
 	struct sk_buff *skb;
-	const struct mcps802154_tx_frame_info *info;
+	const struct mcps802154_tx_frame_config *config;
 	int frame_idx;
 };
 
@@ -249,30 +255,30 @@ static int do_tx_frame(struct dw3000 *dw, const void *in, void *out)
 	const struct do_tx_frame_params *params =
 		(const struct do_tx_frame_params *)in;
 
-	return dw3000_do_tx_frame(dw, params->info, params->skb,
+	return dw3000_do_tx_frame(dw, params->config, params->skb,
 				  params->frame_idx);
 }
 
 static int tx_frame(struct mcps802154_llhw *llhw, struct sk_buff *skb,
-		    const struct mcps802154_tx_frame_info *info, int frame_idx,
-		    int next_delay_dtu)
+		    const struct mcps802154_tx_frame_config *config,
+		    int frame_idx, int next_delay_dtu)
 {
 	struct dw3000 *dw = llhw->priv;
 	struct do_tx_frame_params params = { .skb = skb,
-					     .info = info,
+					     .config = config,
 					     .frame_idx = frame_idx };
 	struct dw3000_stm_command cmd = { do_tx_frame, &params, NULL };
 
 	/* Check data : no data if SP3, must have data otherwise */
-	if (((info->flags & MCPS802154_TX_FRAME_STS_MODE_MASK) ==
-	     MCPS802154_TX_FRAME_SP3) != !skb)
+	if (((config->flags & MCPS802154_TX_FRAME_CONFIG_STS_MODE_MASK) ==
+	     MCPS802154_TX_FRAME_CONFIG_SP3) != !skb)
 		return -EINVAL;
 
 	return dw3000_enqueue_generic(dw, &cmd);
 }
 
 struct do_rx_frame_params {
-	const struct mcps802154_rx_info *info;
+	const struct mcps802154_rx_frame_config *config;
 	int frame_idx;
 };
 
@@ -281,15 +287,15 @@ static int do_rx_enable(struct dw3000 *dw, const void *in, void *out)
 	const struct do_rx_frame_params *params =
 		(const struct do_rx_frame_params *)in;
 
-	return dw3000_do_rx_enable(dw, params->info, params->frame_idx);
+	return dw3000_do_rx_enable(dw, params->config, params->frame_idx);
 }
 
 static int rx_enable(struct mcps802154_llhw *llhw,
-		     const struct mcps802154_rx_info *info, int frame_idx,
-		     int next_delay_dtu)
+		     const struct mcps802154_rx_frame_config *config,
+		     int frame_idx, int next_delay_dtu)
 {
 	struct dw3000 *dw = llhw->priv;
-	struct do_rx_frame_params params = { .info = info,
+	struct do_rx_frame_params params = { .config = config,
 					     .frame_idx = frame_idx };
 	struct dw3000_stm_command cmd = { do_rx_enable, &params, NULL };
 
@@ -387,6 +393,30 @@ static int get_ranging_sts_fom(struct mcps802154_llhw *llhw,
 	/* DW3000 only support one STS segment. */
 	info->ranging_sts_fom[0] =
 		clamp(1 + sts_acc_qual * 254 / sts_acc_max, 1, 255);
+	/* Set FoM of all other segments to maximum value so that they do not
+	 * cause quality check failure. */
+	memset(&info->ranging_sts_fom[1], 0xFF, MCPS802154_STS_N_SEGS_MAX - 1);
+	return ret;
+}
+
+static int rx_get_rssi(struct dw3000 *dw, struct mcps802154_rx_frame_info *info,
+		       const enum dw3000_stats_items item)
+{
+	struct dw3000_config *config = &dw->config;
+	int ret = 0;
+
+	if (dw->stats.enabled || info->flags & MCPS802154_RX_FRAME_INFO_RSSI) {
+		struct dw3000_rssi rssi;
+		u8 sts = config->stsMode & DW3000_STS_BASIC_MODES_MASK;
+		ret = dw3000_rx_store_rssi(dw, &rssi, sts);
+		if (ret) {
+			info->flags &= ~MCPS802154_RX_FRAME_INFO_RSSI;
+			return ret;
+		}
+		if (dw->stats.enabled)
+			dw3000_rx_stats_inc(dw, item, &rssi);
+		ret = dw3000_rx_calc_rssi(dw, &rssi, info, sts);
+	}
 	return ret;
 }
 
@@ -437,7 +467,7 @@ static int rx_get_frame(struct mcps802154_llhw *llhw, struct sk_buff **skb,
 				MCPS802154_RX_FRAME_INFO_RANGING_STS_TIMESTAMP_RCTU);
 		else {
 			u32 rmarker_dtu =
-				timestamp_rctu_to_dtu(dw, timestamp_rctu);
+				dw3000_sys_time_rctu_to_dtu(dw, timestamp_rctu);
 			u64 rmarker_rctu = timestamp_rctu_to_rmarker_rctu(
 				dw, timestamp_rctu, rmarker_dtu);
 			info->timestamp_rctu =
@@ -469,12 +499,6 @@ static int rx_get_frame(struct mcps802154_llhw *llhw, struct sk_buff **skb,
 		ret = dw3000_prog_xtrim(dw);
 		if (unlikely(ret))
 			goto error;
-	}
-	/* In case of PDoA. */
-	if (info->flags & MCPS802154_RX_FRAME_INFO_RANGING_PDOA) {
-		info->ranging_pdoa_rad_q11 = dw3000_read_pdoa(dw);
-		info->ranging_aoa_rad_q11 =
-			dw3000_pdoa_to_aoa_lut(dw, info->ranging_pdoa_rad_q11);
 	}
 	/* In case of STS */
 	if (info->flags & MCPS802154_RX_FRAME_INFO_RANGING_STS_TIMESTAMP_RCTU) {
@@ -519,6 +543,17 @@ static int rx_get_frame(struct mcps802154_llhw *llhw, struct sk_buff **skb,
 		info->ranging_tracking_interval_rctu = 1 << 26;
 	}
 
+	/* If dbgfs file is opened & waiting for data, fill structure and wake-up reading process */
+	if (dw->cir_data && completion_active(&dw->cir_data->complete)) {
+		ret = dw3000_read_frame_cir_data(dw, info, pkt_ts);
+		if (ret)
+			goto error;
+	}
+	/* Report statistics and if required process RSSI */
+	ret = rx_get_rssi(dw, info, DW3000_STATS_RX_GOOD);
+	if (ret)
+		goto error;
+
 	/* Keep only implemented. */
 	info->flags &= (MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
 			MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU |
@@ -527,16 +562,9 @@ static int rx_get_frame(struct mcps802154_llhw *llhw, struct sk_buff **skb,
 			MCPS802154_RX_FRAME_INFO_RANGING_PDOA_FOM |
 			MCPS802154_RX_FRAME_INFO_RANGING_STS_FOM |
 			MCPS802154_RX_FRAME_INFO_RANGING_STS_TIMESTAMP_RCTU |
-			MCPS802154_RX_FRAME_INFO_RANGING_OFFSET);
+			MCPS802154_RX_FRAME_INFO_RANGING_OFFSET |
+			MCPS802154_RX_FRAME_INFO_RSSI);
 	trace_dw3000_return_int_u32(dw, info->flags, *skb ? (*skb)->len : 0);
-
-	/* If dbgfs file is opened & waiting for data, fill structure and wake-up reading process */
-	if (dw->cir_data && completion_active(&dw->cir_data->complete)) {
-		ret = dw3000_read_frame_cir_data(dw, info, pkt_ts);
-		if (ret)
-			goto error;
-	}
-
 	return 0;
 
 error:
@@ -559,13 +587,63 @@ static int rx_get_error_frame(struct mcps802154_llhw *llhw,
 	if (info->flags & MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU) {
 		if (dw3000_read_rx_timestamp(dw, &info->timestamp_rctu))
 			info->flags &= ~MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU;
-	} else {
-		/* Not implemented */
-		info->flags = 0;
 	}
+	/* Report statistics and if required process RSSI */
+	ret = rx_get_rssi(dw, info, DW3000_STATS_RX_ERROR);
+	if (ret)
+		goto error;
+	/* Keep only implemented. */
+	info->flags &= (MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
+			MCPS802154_RX_FRAME_INFO_RSSI);
+
 error:
 	trace_dw3000_return_int_u32(dw, ret, info->flags);
 	return ret;
+}
+
+/**
+ * rx_get_measurement - Update measurement.
+ * @llhw: Low-level device pointer.
+ * @rx_ctx: Custom rx context (can be NULL).
+ * @info: Measurement to update.
+ *
+ * Return: 0 or error.
+ */
+static int rx_get_measurement(struct mcps802154_llhw *llhw, void *rx_ctx,
+			      struct mcps802154_rx_measurement_info *info)
+{
+	struct dw3000 *dw = llhw->priv;
+
+	if (info->flags & MCPS802154_RX_MEASUREMENTS_AOAS) {
+		info->aoas[0].pdoa_rad_q11 = dw3000_read_pdoa(dw);
+		info->aoas[0].aoa_rad_q11 =
+			dw3000_pdoa_to_aoa_lut(dw, info->aoas[0].pdoa_rad_q11);
+		info->n_aoas = 1;
+	}
+
+	/* TODO: UWB-4961 Usage of a mcps802154_rx_frame_info is a
+	 * workaround used until rx_get_rssi() can be fully removed
+	 * from rx_get_frame(). */
+	if (info->flags & MCPS802154_RX_MEASUREMENTS_RSSIS) {
+		struct mcps802154_rx_frame_info frame_info;
+		int ret;
+
+		frame_info.flags = MCPS802154_RX_FRAME_INFO_RSSI;
+		ret = rx_get_rssi(dw, &frame_info, DW3000_STATS_RX_GOOD);
+		if (ret) {
+			info->n_rssis = 0;
+		} else {
+			info->rssis_q1[0] = frame_info.rssi;
+			/* Only one RSSI computed per frame */
+			info->n_rssis = 1;
+		}
+	}
+
+	/* Keep only implemented. */
+	info->flags &= MCPS802154_RX_MEASUREMENTS_AOAS |
+		       MCPS802154_RX_MEASUREMENTS_RSSIS;
+
+	return 0;
 }
 
 static int dw3000_handle_idle_timeout(struct dw3000 *dw)
@@ -660,14 +738,6 @@ static int get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 	return ret;
 }
 
-static inline u32 timestamp_rctu_to_dtu(struct dw3000 *dw, u64 timestamp_rctu)
-{
-	u32 sys_time = (u32)(timestamp_rctu / DW3000_RCTU_PER_SYS);
-	u32 dtu_near = dw3000_get_dtu_time(dw) - DW3000_DTU_FREQ;
-
-	return dw3000_sys_time_to_dtu(dw, sys_time, dtu_near);
-}
-
 static inline u64 timestamp_rctu_to_rmarker_rctu(struct dw3000 *dw,
 						 u64 timestamp_rctu,
 						 u32 rmarker_dtu)
@@ -696,15 +766,20 @@ static inline u64 timestamp_rctu_to_rmarker_rctu(struct dw3000 *dw,
 	return rmarker_rctu;
 }
 
-static u64 tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
-					    u32 tx_timestamp_dtu,
-					    int ant_set_id)
+static u64 tx_timestamp_dtu_to_rmarker_rctu(
+	struct mcps802154_llhw *llhw, u32 tx_timestamp_dtu,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+	const struct mcps802154_channel *channel_params, int ant_set_id)
 {
 	struct dw3000 *dw = llhw->priv;
 	struct dw3000_rctu_conv *rctu = &dw->rctu_conv;
 
-	const u32 rmarker_dtu = tx_timestamp_dtu + llhw->shr_dtu;
-	const u32 ant_offset = tx_rmarker_offset(dw, ant_set_id);
+	const u32 shr_dtu = hrp_uwb_params ?
+				    compute_shr_dtu_from_conf(hrp_uwb_params) :
+				    llhw->shr_dtu;
+	const u32 rmarker_dtu = tx_timestamp_dtu + shr_dtu;
+	const u32 ant_offset =
+		tx_rmarker_offset(dw, channel_params, ant_set_id);
 	u64 rmarker_rctu;
 	s64 rmarker_diff_dtu;
 
@@ -822,9 +897,11 @@ static int do_set_hrp_uwb_params(struct dw3000 *dw, const void *in, void *out)
 		dss->config_changed |= changed;
 		return 0;
 	}
-	if (changed & DW3000_PREAMBLE_LENGTH_CHANGED) {
-		/* Reconfigure preamble size and SDF timeout count */
-		rc = dw3000_configure_preamble_length_and_datarate(dw, false);
+	if (changed &
+	    (DW3000_PREAMBLE_LENGTH_CHANGED | DW3000_DATA_RATE_CHANGED)) {
+		/* reconfigure data rate and preamble size if needed. */
+		rc = dw3000_configure_preamble_length_and_datarate(
+			dw, !(changed & DW3000_PREAMBLE_LENGTH_CHANGED));
 		if (rc)
 			return rc;
 	}
@@ -839,16 +916,69 @@ static int do_set_hrp_uwb_params(struct dw3000 *dw, const void *in, void *out)
 		if (rc)
 			return rc;
 	}
-	/* If DW3000_PREAMBLE_LENGTH_CHANGED is set, data rate is already configured, skip it. */
-	if ((changed & DW3000_DATA_RATE_CHANGED) &&
-	    !(changed & DW3000_PREAMBLE_LENGTH_CHANGED))
-		rc = dw3000_configure_preamble_length_and_datarate(dw, true);
+
+	if (changed & (DW3000_SFD_CHANGED | DW3000_PREAMBLE_LENGTH_CHANGED))
+		dw3000_update_timings(dw);
 
 	return rc;
 }
 
-int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
-		       int sfd_selector, int phr_rate, int data_rate)
+static int check_hrp_uwb_params(struct mcps802154_llhw *llhw,
+				const struct mcps802154_hrp_uwb_params *params)
+{
+	switch (params->prf) {
+	case MCPS802154_PRF_16:
+	case MCPS802154_PRF_64:
+		break;
+	case MCPS802154_PRF_125:
+	case MCPS802154_PRF_250:
+		return -ENOTSUPP;
+	default:
+		return -EINVAL;
+	}
+	switch (params->psr) {
+	case MCPS802154_PSR_32:
+	case MCPS802154_PSR_64:
+	case MCPS802154_PSR_128:
+	case MCPS802154_PSR_256:
+	case MCPS802154_PSR_1024:
+	case MCPS802154_PSR_4096:
+		break;
+	case MCPS802154_PSR_16:
+	case MCPS802154_PSR_24:
+	case MCPS802154_PSR_48:
+	case MCPS802154_PSR_96:
+		return -ENOTSUPP;
+	default:
+		return -EINVAL;
+	}
+	switch (params->sfd_selector) {
+	case MCPS802154_SFD_4A:
+	case MCPS802154_SFD_4Z_8:
+		break;
+	case MCPS802154_SFD_4Z_4:
+	case MCPS802154_SFD_4Z_16:
+	case MCPS802154_SFD_4Z_32:
+		return -ENOTSUPP;
+	default:
+		return -EINVAL;
+	}
+	switch (params->data_rate) {
+	case MCPS802154_DATA_RATE_6M81:
+	case MCPS802154_DATA_RATE_850K:
+		break;
+	case MCPS802154_DATA_RATE_7M80:
+	case MCPS802154_DATA_RATE_27M2:
+	case MCPS802154_DATA_RATE_31M2:
+		return -ENOTSUPP;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int set_hrp_uwb_params(struct mcps802154_llhw *llhw,
+		       const struct mcps802154_hrp_uwb_params *params)
 {
 	unsigned long changed = 0;
 	struct dw3000 *dw = llhw->priv;
@@ -856,6 +986,7 @@ int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
 	struct dw3000_stm_command cmd = { do_set_hrp_uwb_params, &changed,
 					  NULL };
 	int ret;
+	int psr, sfd_selector, phr_hi_rate, data_rate;
 
 	/* The prf parameter is not used. This is due to the specificity of
 	 * the DW3000 chip where the prf is not programmed explicitly,
@@ -864,44 +995,58 @@ int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
 	 */
 
 	/* Check parameters early */
-	switch (psr) {
-	case DW3000_PLEN_64:
-	case DW3000_PLEN_32:
-	case DW3000_PLEN_72:
-	case DW3000_PLEN_128:
-	case DW3000_PLEN_256:
-	case DW3000_PLEN_512:
-	case DW3000_PLEN_1024:
-	case DW3000_PLEN_1536:
-	case DW3000_PLEN_2048:
-	case DW3000_PLEN_4096:
+	ret = check_hrp_uwb_params(llhw, params);
+	if (ret)
+		return ret;
+
+	switch (params->psr) {
+	case MCPS802154_PSR_32:
+		psr = DW3000_PLEN_32;
+		break;
+	case MCPS802154_PSR_128:
+		psr = DW3000_PLEN_128;
+		break;
+	case MCPS802154_PSR_256:
+		psr = DW3000_PLEN_256;
+		break;
+	case MCPS802154_PSR_1024:
+		psr = DW3000_PLEN_1024;
+		break;
+	case MCPS802154_PSR_4096:
+		psr = DW3000_PLEN_4096;
 		break;
 	default:
-		return -EINVAL;
+		psr = DW3000_PLEN_64;
+		break;
 	}
 
-	switch (sfd_selector) {
-	case DW3000_SFD_TYPE_STD:
-	case DW3000_SFD_TYPE_DW_8:
-	case DW3000_SFD_TYPE_DW_16:
-	case DW3000_SFD_TYPE_4Z:
+	switch (params->sfd_selector) {
+	case MCPS802154_SFD_4A:
+		sfd_selector = DW3000_SFD_TYPE_STD;
 		break;
 	default:
-		return -EINVAL;
+		sfd_selector = DW3000_SFD_TYPE_4Z;
+		break;
 	}
 
-	if (phr_rate != DW3000_PHRRATE_STD && phr_rate != DW3000_PHRRATE_DTA)
-		return -EINVAL;
+	switch (params->data_rate) {
+	case MCPS802154_DATA_RATE_850K:
+		data_rate = DW3000_BR_850K;
+		break;
+	default:
+		data_rate = DW3000_BR_6M8;
+		break;
+	}
 
-	if (data_rate != DW3000_BR_850K && data_rate != DW3000_BR_6M8)
-		return -EINVAL;
+	phr_hi_rate = params->phr_hi_rate ? DW3000_PHRRATE_DTA :
+					    DW3000_PHRRATE_STD;
 
 	/* Detect configuration change(s) */
 	if (config->txPreambLength != psr)
 		changed |= DW3000_PREAMBLE_LENGTH_CHANGED;
 	if (config->sfdType != sfd_selector)
 		changed |= DW3000_SFD_CHANGED;
-	if (config->phrRate != phr_rate)
+	if (config->phrRate != phr_hi_rate)
 		changed |= DW3000_PHR_RATE_CHANGED;
 	if (config->dataRate != data_rate)
 		changed |= DW3000_DATA_RATE_CHANGED;
@@ -911,7 +1056,7 @@ int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
 	/* Update configuration structure */
 	config->txPreambLength = psr;
 	config->sfdType = sfd_selector;
-	config->phrRate = phr_rate;
+	config->phrRate = phr_hi_rate;
 	config->dataRate = data_rate;
 
 	/* Reconfigure the chip with it if needed */
@@ -1138,13 +1283,13 @@ static int do_vendor_cmd(struct dw3000 *dw, const void *in, void *out)
 	const struct do_vendor_params *params = in;
 
 	switch (params->subcmd) {
-	case DW3000_VENDOR_CMD_PCTT_SETUP_HW:
+	case LLHW_VENDOR_CMD_PCTT_SETUP_HW:
 		return dw3000_pctt_vendor_cmd(dw, params->vendor_id,
 					      params->subcmd, params->data,
 					      params->data_len);
-	case DW3000_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS:
-	case DW3000_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION:
-	case DW3000_VENDOR_CMD_NFCC_COEX_STOP:
+	case LLHW_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS:
+	case LLHW_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION:
+	case LLHW_VENDOR_CMD_NFCC_COEX_STOP:
 		return dw3000_nfcc_coex_vendor_cmd(dw, params->vendor_id,
 						   params->subcmd, params->data,
 						   params->data_len);
@@ -1176,6 +1321,66 @@ static int vendor_cmd(struct mcps802154_llhw *llhw, u32 vendor_id, u32 subcmd,
 	return dw3000_enqueue_generic(dw, &cmd);
 }
 
+static int get_antenna_caps(struct mcps802154_llhw *llhw, int ant_idx,
+			    uint32_t *caps)
+{
+	struct dw3000 *dw = llhw->priv;
+	const struct dw3000_antenna_calib *ant_calib;
+
+	if (ant_idx < 0 || ant_idx >= ANTMAX) {
+		dev_err(dw->dev, "Bad antenna number (%d)\n", ant_idx);
+		return -EINVAL;
+	}
+
+	ant_calib = &dw->calib_data.ant[ant_idx];
+	*caps = ant_calib->caps;
+	return 0;
+}
+
+/**
+ * get_power_stats() - Forward vendor commands processing to dw3000 function.
+ * @llhw: Low-level hardware without MCPS.
+ * @pwr_stats: mcps802154_power_stats structure to be filled.
+ *
+ * Return: 0 on success or negative error code.
+ */
+static int get_power_stats(struct mcps802154_llhw *llhw,
+			   struct mcps802154_power_stats *pwr_stats)
+{
+	struct dw3000 *dw = llhw->priv;
+	u64 idle_dur, rx_ns, tx_ns;
+
+	/* Update the power statistics if needed. */
+	if (dw->power.cur_state <= DW3000_PWR_IDLE)
+		dw3000_power_stats(dw, dw->power.cur_state, 0);
+	/* TX/RX are kept in DTU unit. Convert it here to limit conversion error */
+	rx_ns = dw->power.stats[DW3000_PWR_RX].dur * 10000 /
+		(DW3000_DTU_FREQ / 100000);
+	tx_ns = dw->power.stats[DW3000_PWR_TX].dur * 10000 /
+		(DW3000_DTU_FREQ / 100000);
+	idle_dur = dw->power.stats[DW3000_PWR_RUN].dur - tx_ns - rx_ns;
+
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_OFF].dur =
+		dw->power.stats[DW3000_PWR_OFF].dur;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_OFF].count =
+		dw->power.stats[DW3000_PWR_OFF].count;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_SLEEP].dur =
+		dw->power.stats[DW3000_PWR_DEEPSLEEP].dur;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_SLEEP].count =
+		dw->power.stats[DW3000_PWR_DEEPSLEEP].count;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_IDLE].dur = idle_dur;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_IDLE].count =
+		dw->power.stats[DW3000_PWR_IDLE].count;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_RX].dur = rx_ns;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_RX].count =
+		dw->power.stats[DW3000_PWR_RX].count;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_TX].dur = tx_ns;
+	pwr_stats->power_state_stats[MCPS802154_PWR_STATE_TX].count =
+		dw->power.stats[DW3000_PWR_TX].count;
+	pwr_stats->interrupts = atomic64_read(&dw->power.interrupts);
+	return 0;
+}
+
 static const struct mcps802154_ops dw3000_mcps_ops = {
 	.start = start,
 	.stop = stop,
@@ -1184,6 +1389,7 @@ static const struct mcps802154_ops dw3000_mcps_ops = {
 	.rx_disable = rx_disable,
 	.rx_get_frame = rx_get_frame,
 	.rx_get_error_frame = rx_get_error_frame,
+	.rx_get_measurement = rx_get_measurement,
 	.idle = idle,
 	.reset = reset,
 	.get_current_timestamp_dtu = get_current_timestamp_dtu,
@@ -1192,6 +1398,7 @@ static const struct mcps802154_ops dw3000_mcps_ops = {
 	.compute_frame_duration_dtu = compute_frame_duration_dtu,
 	.set_channel = set_channel,
 	.set_hrp_uwb_params = set_hrp_uwb_params,
+	.check_hrp_uwb_params = check_hrp_uwb_params,
 	.set_sts_params = set_sts_params,
 	.set_hw_addr_filt = set_hw_addr_filt,
 	.set_txpower = set_txpower,
@@ -1202,6 +1409,8 @@ static const struct mcps802154_ops dw3000_mcps_ops = {
 	.get_calibration = get_calibration,
 	.list_calibration = list_calibration,
 	.vendor_cmd = vendor_cmd,
+	.get_antenna_caps = get_antenna_caps,
+	.get_power_stats = get_power_stats,
 	MCPS802154_TESTMODE_CMD(dw3000_tm_cmd)
 };
 
@@ -1229,7 +1438,18 @@ struct dw3000 *dw3000_mcps_alloc(struct device *dev)
 	llhw->hw->flags =
 		(IEEE802154_HW_TX_OMIT_CKSUM | IEEE802154_HW_AFILT |
 		 IEEE802154_HW_PROMISCUOUS | IEEE802154_HW_RX_OMIT_CKSUM);
-	llhw->flags = llhw->hw->flags;
+	llhw->flags =
+		(MCPS802154_LLHW_BPRF | MCPS802154_LLHW_DATA_RATE_850K |
+		 MCPS802154_LLHW_DATA_RATE_6M81 |
+		 MCPS802154_LLHW_PHR_DATA_RATE_850K |
+		 MCPS802154_LLHW_PHR_DATA_RATE_6M81 | MCPS802154_LLHW_PRF_16 |
+		 MCPS802154_LLHW_PRF_64 | MCPS802154_LLHW_PSR_32 |
+		 MCPS802154_LLHW_PSR_64 | MCPS802154_LLHW_PSR_128 |
+		 MCPS802154_LLHW_PSR_256 | MCPS802154_LLHW_PSR_1024 |
+		 MCPS802154_LLHW_PSR_4096 | MCPS802154_LLHW_SFD_4A |
+		 MCPS802154_LLHW_SFD_4Z_8 | MCPS802154_LLHW_STS_SEGMENT_1 |
+		 MCPS802154_LLHW_AOA_AZIMUTH | MCPS802154_LLHW_AOA_ELEVATION |
+		 MCPS802154_LLHW_AOA_FOM);
 
 	llhw->hw->phy->supported.channels[4] = DW3000_SUPPORTED_CHANNELS;
 
@@ -1254,6 +1474,8 @@ struct dw3000 *dw3000_mcps_alloc(struct device *dev)
 	llhw->hw->phy->current_channel = dw->config.chan;
 	llhw->hw->phy->current_page = 4;
 	llhw->current_preamble_code = dw->config.txCode;
+	/* AoA/PDoA filtering. */
+	llhw->rx_ctx_size = sizeof(struct dw3000_rx_ctx);
 
 	return dw;
 }

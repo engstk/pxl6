@@ -32,6 +32,8 @@ int dw3000_d0_init(struct dw3000 *dw);
 int dw3000_d0_coex_init(struct dw3000 *dw);
 const struct dw3000_chip_register *dw3000_d0_get_registers(struct dw3000 *dw,
 							   size_t *count);
+u32 dw3000_d0_compute_rssi(struct dw3000 *dw, struct dw3000_rssi *rssi,
+			   bool rx_tune, u8 sts);
 
 const u32 *dw3000_e0_get_config_mrxlut_chan(struct dw3000 *dw, u8 channel)
 {
@@ -706,4 +708,5 @@ const struct dw3000_chip_ops dw3000_chip_e0_ops = {
 	.pll_coarse_code = dw3000_e0_pll_coarse_code,
 	.set_mrxlut = dw3000_e0_set_mrxlut,
 	.get_registers = dw3000_d0_get_registers,
+	.compute_rssi = dw3000_d0_compute_rssi,
 };

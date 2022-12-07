@@ -1441,6 +1441,7 @@ dhdpcie_bus_isr(dhd_bus_t *bus)
 					"intstat=0x%x enab=%d\n", __FUNCTION__,
 					intstatus, bus->cto_enable));
 				bus->cto_triggered = 1;
+				bus->dhd->do_chip_bighammer = TRUE;
 				dhd_bus_dump_imp_cfg_registers(bus);
 				/*
 				 * DAR still accessible

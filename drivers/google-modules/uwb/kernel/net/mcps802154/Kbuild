@@ -1,4 +1,8 @@
-obj-m := mcps802154.o mcps802154_region_fira.o \
+ifndef CONFIG_MCPS802154
+CONFIG_MCPS802154:=m
+endif
+
+obj-$(CONFIG_MCPS802154) := mcps802154.o mcps802154_region_fira.o \
 	 mcps802154_region_nfcc_coex.o \
 	 mcps802154_region_pctt.o \
 
@@ -9,31 +13,29 @@ mcps802154-y := \
 	default_region.o \
 	endless_scheduler.o \
 	on_demand_scheduler.o \
+	idle_region.o \
 	fproc.o \
 	fproc_broken.o \
 	fproc_multi.o \
 	fproc_vendor.o \
 	fproc_nothing.o \
+	fproc_idle.o \
 	fproc_rx.o \
 	fproc_stopped.o \
 	fproc_tx.o \
 	frame.o \
 	ie.o \
 	mcps_main.o \
+	mcps_skb_frag.o \
 	nl.o \
 	ops.o \
 	regions.o \
-	simple_ranging_region.o \
 	schedule.o \
 	schedulers.o \
 	trace.o
 
-mcps802154-$(CONFIG_MCPS802154_TESTMODE) += ping_pong_region.o
-
 mcps802154_region_fira-y := \
 	fira_access.o \
-	fira_aead.o \
-	fira_cmac.o \
 	fira_crypto.o \
 	fira_round_hopping_sequence.o \
 	fira_round_hopping_crypto.o \
@@ -41,7 +43,13 @@ mcps802154_region_fira-y := \
 	fira_region.o \
 	fira_region_call.o \
 	fira_session.o \
-	fira_trace.o
+	fira_session_fsm.o \
+	fira_session_fsm_init.o \
+	fira_session_fsm_idle.o \
+	fira_session_fsm_active.o \
+	fira_sts.o \
+	fira_trace.o \
+	mcps_crypto.o
 
 mcps802154_region_nfcc_coex-y := \
 	nfcc_coex_access.o \

@@ -16603,16 +16603,24 @@ int
 dhd_dev_set_rssi_monitor_cfg(struct net_device *dev, int start,
              int8 max_rssi, int8 min_rssi)
 {
-	int err;
+	int err, ifidx;
 	wl_rssi_monitor_cfg_t rssi_monitor;
 	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(dev);
+
+
+	ifidx = dhd_net2idx(dhd, dev);
+	if (ifidx == DHD_BAD_IF) {
+		DHD_ERROR(("%s: bad ifidx\n", __FUNCTION__));
+		err = -ENODEV;
+		return err;
+	}
 
 	rssi_monitor.version = RSSI_MONITOR_VERSION_1;
 	rssi_monitor.max_rssi = max_rssi;
 	rssi_monitor.min_rssi = min_rssi;
 	rssi_monitor.flags = start ? 0: RSSI_MONITOR_STOP;
-	err = dhd_iovar(&dhd->pub, 0, "rssi_monitor", (char *)&rssi_monitor, sizeof(rssi_monitor),
-			NULL, 0, TRUE);
+	err = dhd_iovar(&dhd->pub, ifidx, "rssi_monitor", (char *)&rssi_monitor,
+			sizeof(rssi_monitor), NULL, 0, TRUE);
 	if (err < 0 && err != BCME_UNSUPPORTED) {
 		DHD_ERROR(("%s : Failed to execute rssi_monitor %d\n", __FUNCTION__, err));
 	}
@@ -23272,6 +23280,11 @@ dhd_schedule_cto_recovery(dhd_pub_t *dhdp)
 	if (dhdp->up == FALSE) {
 		DHD_ERROR(("%s : skip scheduling cto because dhd is not up\n",
 				__FUNCTION__));
+		return;
+	}
+
+	if (dhdp->info->scheduled_memdump) {
+		DHD_ERROR(("%s, memdump in progress\n", __FUNCTION__));
 		return;
 	}
 

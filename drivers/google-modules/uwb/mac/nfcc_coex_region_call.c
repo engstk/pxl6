@@ -42,6 +42,8 @@ static const struct nla_policy nfcc_coex_session_param_nla_policy
 	[NFCC_COEX_CCC_SESSION_PARAM_ATTR_MAX + 1] = {
 		[NFCC_COEX_CCC_SESSION_PARAM_ATTR_TIME0_NS] = { .type = NLA_U64 },
 		[NFCC_COEX_CCC_SESSION_PARAM_ATTR_CHANNEL_NUMBER] = { .type = NLA_U8 },
+		[NFCC_COEX_CCC_SESSION_PARAM_ATTR_VERSION] =
+			NLA_POLICY_RANGE(NLA_U8, 2, 3),
 	};
 
 /**
@@ -84,6 +86,7 @@ static int nfcc_coex_session_set_parameters(struct nfcc_coex_local *local,
 
 	P(TIME0_NS, time0_ns, u64, x);
 	P(CHANNEL_NUMBER, channel_number, u8, x);
+	P(VERSION, version, u8, x);
 
 #undef P
 
@@ -94,7 +97,6 @@ static int nfcc_coex_session_set_parameters(struct nfcc_coex_local *local,
 
 	if (p->time0_ns - now_ns > max_time0_ns)
 		return -ERANGE;
-
 	return 0;
 }
 
@@ -116,7 +118,7 @@ static int nfcc_coex_session_start(struct nfcc_coex_local *local,
 	s64 diff_dtu;
 	int r;
 
-	WARN_ON(session->started);
+	WARN_ON(session->state == NFCC_COEX_STATE_STARTED);
 
 	trace_region_nfcc_coex_session_start(local, p);
 	r = mcps802154_get_current_timestamp_dtu(local->llhw, &now_dtu);
@@ -132,7 +134,7 @@ static int nfcc_coex_session_start(struct nfcc_coex_local *local,
 	session->region_demand.max_duration_dtu = 0;
 	session->event_portid = info->snd_portid;
 	session->first_access = true;
-	session->started = true;
+	nfcc_coex_set_state(local, NFCC_COEX_STATE_STARTED);
 
 	mcps802154_reschedule(local->llhw);
 	return 0;
@@ -162,7 +164,7 @@ static int nfcc_coex_session_start_all(struct nfcc_coex_local *local,
 	if (r)
 		return r;
 
-	if (local->session.started)
+	if (local->session.state == NFCC_COEX_STATE_STARTED)
 		return -EBUSY;
 
 	nfcc_coex_session_init(local);
@@ -189,21 +191,13 @@ static int nfcc_coex_session_start_all(struct nfcc_coex_local *local,
 static int nfcc_coex_session_stop(struct nfcc_coex_local *local)
 {
 	struct nfcc_coex_session *session = &local->session;
-	int r = 0;
 
 	trace_region_nfcc_coex_session_stop(local);
-	if (session->started) {
-		if (session->state == NFCC_COEX_STATE_ACCESSING) {
-			nfcc_coex_set_state(local, NFCC_COEX_STATE_STOPPING);
-			r = mcps802154_vendor_cmd(
-				local->llhw, VENDOR_QORVO_OUI,
-				DW3000_VENDOR_CMD_NFCC_COEX_STOP, NULL, 0);
-			if (!r)
-				/* Access is stopped. */
-				mcps802154_reschedule(local->llhw);
-		}
+	if (session->state == NFCC_COEX_STATE_STARTED) {
+		nfcc_coex_set_state(local, NFCC_COEX_STATE_STOPPING);
+		mcps802154_schedule_invalidate(local->llhw);
 	}
-	return r;
+	return 0;
 }
 
 int nfcc_coex_session_control(struct nfcc_coex_local *local, u32 call_id,

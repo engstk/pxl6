@@ -76,7 +76,7 @@ static inline int dw3000_coex_start(struct dw3000 *dw, bool *trx_delayed,
 	int delay_us;
 	int timer_us = 0;
 
-	if (dw->coex_gpio < 0)
+	if (dw->coex_gpio < 0 || !dw->coex_enabled)
 		return 0;
 	/* Add a margin for required SPI transactions to the coex delay time
 	 * to ensure GPIO change at right time. */
@@ -120,7 +120,7 @@ static inline int dw3000_coex_start(struct dw3000 *dw, bool *trx_delayed,
  */
 static inline int dw3000_coex_stop(struct dw3000 *dw)
 {
-	if (dw->coex_gpio < 0)
+	if (dw->coex_gpio < 0 || !dw->coex_enabled)
 		return 0;
 
 	trace_dw3000_coex_gpio_stop(dw, dw->coex_status);

@@ -68,6 +68,8 @@ struct audio_sz_type {
 	char hwinfo_part_number[AUDIOMETRIC_CH_LENGTH];
 	struct wdsp_stat_priv_type wdsp_stat_priv;
 	uint32_t mic_broken_degrade;
+	uint32_t ams_count;
+	uint32_t cs_count;
 };
 
 struct audiometrics_priv_type {
@@ -343,6 +345,61 @@ static ssize_t mic_broken_degrade_show(struct device *dev,
 	return counts;
 }
 
+static ssize_t ams_cs_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+
+	if (IS_ERR_OR_NULL(dev))
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	counts = scnprintf(buf, PAGE_SIZE, "%u,%u", priv->sz.ams_count, priv->sz.cs_count);
+	mutex_unlock(&priv->lock);
+
+	return counts;
+}
+
+static ssize_t ams_rate_read_once_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+	uint milli_rate = 0;
+	const int scale = 100000;
+
+
+	if (IS_ERR_OR_NULL(dev))
+		return -EINVAL;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+
+	if (priv->sz.cs_count)
+		milli_rate = (priv->sz.ams_count * scale / priv->sz.cs_count);
+
+	if (milli_rate > scale)
+		milli_rate = scale;
+
+	counts = scnprintf(buf, PAGE_SIZE, "%u", milli_rate);
+
+	priv->sz.ams_count = 0;
+	priv->sz.cs_count = 0;
+
+	mutex_unlock(&priv->lock);
+	return counts;
+}
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -466,6 +523,33 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 
 		break;
 
+		case AMCS_OP_AMS:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_GET) {
+				params.val[1] =	priv->sz.ams_count;
+				params.val[2] =	priv->sz.cs_count;
+			} else if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.ams_count = params.val[1];
+				priv->sz.cs_count = params.val[2];
+			}
+			mutex_unlock(&priv->lock);
+
+			if (!copy_to_user((struct amcs_params *)arg, &params, _IOC_SIZE(cmd)))
+				ret = 0;
+			else
+				ret = -EINVAL;
+		break;
+
+		case AMCS_OP_AMS_INCREASE:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.ams_count += params.val[1];
+				priv->sz.cs_count += params.val[2];
+			}
+			mutex_unlock(&priv->lock);
+			ret = 0;
+		break;
+
 		default:
 			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
 			ret = -EINVAL;
@@ -525,6 +609,8 @@ static DEVICE_ATTR_RO(hwinfo_part_number);
 static DEVICE_ATTR_RO(wdsp_stat);
 static DEVICE_ATTR_RO(mic_broken_degrade);
 static DEVICE_ATTR_RO(codec_crashed_counter);
+static DEVICE_ATTR_RO(ams_cs);
+static DEVICE_ATTR_RO(ams_rate_read_once);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -538,6 +624,8 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_wdsp_stat.attr,
 	&dev_attr_mic_broken_degrade.attr,
 	&dev_attr_codec_crashed_counter.attr,
+	&dev_attr_ams_cs.attr,
+	&dev_attr_ams_rate_read_once.attr,
 	NULL,
 };
 

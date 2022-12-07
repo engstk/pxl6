@@ -105,10 +105,16 @@ static int do_tm_cmd_get_rx_diag(struct dw3000 *dw, const void *in, void *out)
 {
 	const struct do_tm_cmd_params *params = in;
 	struct dw3000_stats *stats = &dw->stats;
-	size_t rssi_len =
-		stats->count[DW3000_STATS_RX_GOOD] * sizeof(struct dw3000_rssi);
 	struct sk_buff *nl_skb;
+	size_t rssi_len;
+	int count = stats->count[DW3000_STATS_RX_GOOD];
 	int rc;
+
+	/* TODO: we don't send RSSI data for error frames. We should change this. */
+	rssi_len = count < (DW3000_RSSI_REPORTS_MAX << 1) ?
+			   count :
+			   DW3000_RSSI_REPORTS_MAX << 1;
+	rssi_len *= sizeof(struct dw3000_rssi);
 
 	/**
 	 * Allocate netlink message. The approximated size includes
@@ -320,8 +326,8 @@ static int do_tm_cmd_stop_cont_tx(struct dw3000 *dw, const void *in, void *out)
 	return dw3000_testmode_continuous_tx_stop(dw);
 }
 
-static int do_tm_cmd_set_hrp_params(struct dw3000 *dw, const void *in,
-				    void *out)
+static int do_tm_cmd_set_hrp_uwb_params(struct dw3000 *dw, const void *in,
+					void *out)
 {
 	const struct do_tm_cmd_params *params = in;
 	u32 psr;
@@ -398,7 +404,7 @@ int dw3000_tm_cmd(struct mcps802154_llhw *llhw, void *data, int len)
 		[DW3000_TM_CMD_START_CONTINUOUS_TX] = do_tm_cmd_start_cont_tx,
 		[DW3000_TM_CMD_STOP_CONTINUOUS_TX] = do_tm_cmd_stop_cont_tx,
 		[DW3000_TM_CMD_DEEP_SLEEP] = do_tm_cmd_deep_sleep,
-		[DW3000_TM_CMD_SET_HRP_PARAMS] = do_tm_cmd_set_hrp_params,
+		[DW3000_TM_CMD_SET_HRP_PARAMS] = do_tm_cmd_set_hrp_uwb_params,
 		[DW3000_TM_CMD_SET_CHANNEL] = do_tm_cmd_set_channel,
 	};
 	u32 tm_cmd;

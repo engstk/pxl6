@@ -437,7 +437,7 @@ wl_cellavoid_do_csa_work(struct work_struct *work)
 		} else {
 			wl_cellavoid_free_csa_info(cellavoid_info, csa_info->ndev);
 			if (err < 0) {
-				WL_ERR(("csa failed, target chanspec %x\n", csa_info->chanspec));
+				WL_ERR(("csa failed, err %d\n", err));
 				delay = CSA_DELAYWORK_FAIL_INTERVAL;
 			} else {
 				delay = CSA_DELAYWORK_CSA_INTERVAL;

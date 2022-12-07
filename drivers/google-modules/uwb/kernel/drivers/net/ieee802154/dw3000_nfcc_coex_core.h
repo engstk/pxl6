@@ -34,8 +34,7 @@ int dw3000_nfcc_coex_cancel_watchdog(struct dw3000 *dw);
 int dw3000_nfcc_coex_spi1_avail(struct dw3000 *dw);
 int dw3000_nfcc_coex_idle_timeout(struct dw3000 *dw);
 void dw3000_nfcc_coex_init(struct dw3000 *dw);
-int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel,
-			    bool sync_time_needed);
+int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel);
 int dw3000_nfcc_coex_disable(struct dw3000 *dw);
 int dw3000_nfcc_coex_configure(struct dw3000 *dw);
 

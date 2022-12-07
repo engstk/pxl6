@@ -36,6 +36,8 @@
 /* General defines */
 #define MBOX_WC_INTERRUPTS 16
 
+#define DT_NON_WAKE_CHANNEL_KEY "wc-mbox-non-wake-channels"
+
 static int wc_mbox_probe(struct platform_device *dev);
 static int wc_mbox_remove(struct platform_device *dev);
 static int wc_mbox_suspend(struct platform_device *dev, pm_message_t state);
@@ -51,6 +53,8 @@ static bool wc_mbox_peek_data(struct mbox_chan *chan);
 struct wc_mbox_prvdata {
 	void __iomem *base;
 	struct mbox_controller *mbox;
+	u32 sleep_mask;
+	u32 non_waking_services;
 	int interrupt;
 	int shared_registers;
 };
@@ -101,6 +105,19 @@ static int wc_mbox_int_clear(void *base, u8 i)
 	return 0;
 }
 
+static int wc_mbox_get_interrupt_mask(void *base)
+{
+	return ioread32(base + MB_INTMR1);
+}
+
+static int wc_mbox_set_interrupt_mask(void *base, u16 mask)
+{
+	u32 value = mask;
+
+	iowrite32(value, base + MB_INTMR1);
+	return 0;
+}
+
 static int wc_mbox_enable_interrupt(void *base, u16 index)
 {
 	u32 mask;
@@ -108,9 +125,9 @@ static int wc_mbox_enable_interrupt(void *base, u16 index)
 	if (index > MBOX_WC_INTERRUPTS)
 		return -1;
 
-	mask = ioread32(base + MB_INTMR1);
+	mask = wc_mbox_get_interrupt_mask(base);
 	mask &= ~(1 << index);
-	iowrite32(mask, base + MB_INTMR1);
+	wc_mbox_set_interrupt_mask(base, mask);
 
 	return 0;
 }
@@ -122,18 +139,10 @@ static int wc_mbox_disable_interrupt(void *base, u16 index)
 	if (index > MBOX_WC_INTERRUPTS)
 		return -1;
 
-	mask = ioread32(base + MB_INTMR1);
+	mask = wc_mbox_get_interrupt_mask(base);
 	mask |= (1 << index);
-	iowrite32(mask, base + MB_INTMR1);
+	wc_mbox_set_interrupt_mask(base, mask);
 
-	return 0;
-}
-
-static int wc_mbox_set_interrupt_mask(void *base, u16 mask)
-{
-	u32 value = mask;
-
-	iowrite32(value, base + MB_INTMR1);
 	return 0;
 }
 
@@ -257,8 +266,12 @@ static bool wc_mbox_peek_data(struct mbox_chan *chan)
 
 static int wc_mbox_suspend(struct platform_device *pdev, pm_message_t state)
 {
+	u32 waking_mask;
 	struct wc_mbox_prvdata *prvdata = platform_get_drvdata(pdev);
 
+	prvdata->sleep_mask = wc_mbox_get_interrupt_mask(prvdata->base);
+	waking_mask = prvdata->sleep_mask & ~(prvdata->non_waking_services);
+	wc_mbox_set_interrupt_mask(prvdata->base, waking_mask);
 	enable_irq_wake(prvdata->interrupt);
 	return 0;
 }
@@ -268,6 +281,7 @@ static int wc_mbox_resume(struct platform_device *pdev)
 	struct wc_mbox_prvdata *prvdata = platform_get_drvdata(pdev);
 
 	disable_irq_wake(prvdata->interrupt);
+	wc_mbox_set_interrupt_mask(prvdata->base, prvdata->sleep_mask);
 	return 0;
 }
 
@@ -280,6 +294,7 @@ static int wc_mbox_probe(struct platform_device *pdev)
 
 	struct resource *base;
 	size_t region_size;
+	u32 non_wake_mask;
 	int interrupt;
 	int ret;
 	int i;
@@ -309,6 +324,15 @@ static int wc_mbox_probe(struct platform_device *pdev)
 	prvdata->interrupt = interrupt;
 	prvdata->shared_registers = 8;
 	prvdata->mbox = mbox;
+
+	ret = of_property_read_u32(dev->of_node, DT_NON_WAKE_CHANNEL_KEY, &non_wake_mask);
+	if (ret == 0) {
+		if (prvdata->non_waking_services > 0xffff)
+			dev_err(dev, "Invalid non-waking services mask %#10x",
+				prvdata->non_waking_services);
+
+		prvdata->non_waking_services = non_wake_mask;
+	}
 
 	mbox->num_chans = MBOX_WC_INTERRUPTS;
 	mbox->txpoll_period = 2;

@@ -3448,10 +3448,11 @@ bool wl_cfg80211_check_in_progress(struct net_device *dev);
 extern int wl_android_set_ncho_mode(struct net_device *dev, int mode);
 #endif /* WES_SUPPORT */
 #ifdef KEEP_ALIVE
-extern int wl_cfg80211_start_mkeep_alive(struct bcm_cfg80211 *cfg, uint8 mkeep_alive_id,
-	uint16 ether_type, uint8 *ip_pkt, uint16 ip_pkt_len, uint8* src_mac_addr,
-	uint8* dst_mac_addr, uint32 period_msec);
-extern int wl_cfg80211_stop_mkeep_alive(struct bcm_cfg80211 *cfg, uint8 mkeep_alive_id);
+extern int wl_cfg80211_start_mkeep_alive(struct net_device *ndev, struct bcm_cfg80211 *cfg,
+	uint8 mkeep_alive_id, uint16 ether_type, uint8 *ip_pkt, uint16 ip_pkt_len,
+	uint8* src_mac_addr, uint8* dst_mac_addr, uint32 period_msec);
+extern int wl_cfg80211_stop_mkeep_alive(struct net_device *ndev, struct bcm_cfg80211 *cfg,
+	uint8 mkeep_alive_id);
 #endif /* KEEP_ALIVE */
 
 extern s32 wl_cfg80211_handle_macaddr_change(struct net_device *dev, u8 *macaddr);

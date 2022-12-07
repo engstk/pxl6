@@ -32,12 +32,9 @@
 #include "mcps802154_i.h"
 #include "llhw-ops.h"
 #include "default_region.h"
-#include "simple_ranging_region.h"
+#include "idle_region.h"
 #include "endless_scheduler.h"
 #include "on_demand_scheduler.h"
-#ifdef CONFIG_MCPS802154_TESTMODE
-#include "ping_pong_region.h"
-#endif
 #include "nl.h"
 #include "warn_return.h"
 
@@ -207,13 +204,16 @@ int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 }
 EXPORT_SYMBOL(mcps802154_get_current_timestamp_dtu);
 
-u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
-						u32 tx_timestamp_dtu,
-						int ant_set_id)
+u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
+	struct mcps802154_llhw *llhw, u32 tx_timestamp_dtu,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+	const struct mcps802154_channel *channel_params, int ant_set_id)
 {
 	struct mcps802154_local *local = llhw_to_local(llhw);
 
 	return llhw_tx_timestamp_dtu_to_rmarker_rctu(local, tx_timestamp_dtu,
+						     hrp_uwb_params,
+						     channel_params,
 						     ant_set_id);
 }
 EXPORT_SYMBOL(mcps802154_tx_timestamp_dtu_to_rmarker_rctu);
@@ -228,6 +228,15 @@ s64 mcps802154_difference_timestamp_rctu(struct mcps802154_llhw *llhw,
 					      timestamp_b_rctu);
 }
 EXPORT_SYMBOL(mcps802154_difference_timestamp_rctu);
+
+int mcps802154_rx_get_measurement(struct mcps802154_llhw *llhw, void *rx_ctx,
+				  struct mcps802154_rx_measurement_info *info)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	return llhw_rx_get_measurement(local, rx_ctx, info);
+}
+EXPORT_SYMBOL(mcps802154_rx_get_measurement);
 
 int mcps802154_compute_frame_duration_dtu(struct mcps802154_llhw *llhw,
 					  int payload_bytes)
@@ -246,6 +255,16 @@ int mcps802154_vendor_cmd(struct mcps802154_llhw *llhw, u32 vendor_id,
 	return llhw_vendor_cmd(local, vendor_id, subcmd, data, data_len);
 }
 EXPORT_SYMBOL(mcps802154_vendor_cmd);
+
+int mcps802154_check_hrp_uwb_params(
+	struct mcps802154_llhw *llhw,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	return llhw_check_hrp_uwb_params(local, hrp_uwb_params);
+}
+EXPORT_SYMBOL(mcps802154_check_hrp_uwb_params);
 
 struct mcps802154_local *mcps802154_get_first_by_idx(int hw_idx)
 {
@@ -274,30 +293,24 @@ int __init mcps802154_init(void)
 		return r;
 	r = mcps802154_default_region_init();
 	WARN_RETURN(r);
-	r = simple_ranging_region_init();
-	WARN_ON(r);
+	r = mcps802154_idle_region_init();
+	WARN_RETURN(r);
 	r = mcps802154_endless_scheduler_init();
 	WARN_ON(r);
 	r = mcps802154_default_scheduler_init();
 	WARN_ON(r);
 	r = mcps802154_on_demand_scheduler_init();
 	WARN_ON(r);
-#ifdef CONFIG_MCPS802154_TESTMODE
-	r = ping_pong_region_init();
-	WARN_ON(r);
-#endif
+
 	return r;
 }
 
 void __exit mcps802154_exit(void)
 {
-#ifdef CONFIG_MCPS802154_TESTMODE
-	ping_pong_region_exit();
-#endif
 	mcps802154_on_demand_scheduler_exit();
 	mcps802154_default_scheduler_exit();
 	mcps802154_endless_scheduler_exit();
-	simple_ranging_region_exit();
+	mcps802154_idle_region_exit();
 	mcps802154_default_region_exit();
 	mcps802154_nl_exit();
 }
