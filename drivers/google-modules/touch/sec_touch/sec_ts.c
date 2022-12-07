@@ -15,6 +15,10 @@ struct sec_ts_data *tsp_info;
 #include "sec_ts.h"
 #include <samsung/exynos_drm_connector.h>
 
+/* init the kfifo for health check. */
+#define SEC_TS_HC_KFIFO_LEN 4 /* must be power of 2. */
+DEFINE_KFIFO(hc_fifo, struct sec_ts_health_check, SEC_TS_HC_KFIFO_LEN);
+
 /* init the kfifo for debug used. */
 #define SEC_TS_DEBUG_KFIFO_LEN 4 /* must be power of 2. */
 DEFINE_KFIFO(debug_fifo, struct sec_ts_coordinate, SEC_TS_DEBUG_KFIFO_LEN);
@@ -1856,6 +1860,55 @@ static void sec_ts_handle_lib_status_event(struct sec_ts_data *ts,
 }
 #endif
 
+
+#ifdef SEC_TS_HC_KFIFO_LEN
+inline void sec_ts_hc_update_and_push(struct sec_ts_data *ts, struct sec_ts_health_check *hc)
+{
+	hc->int_ktime = ts->timestamp;
+	hc->int_idx = ts->int_cnt;
+	hc->coord_idx = ts->coord_event_cnt;
+	hc->status_idx = ts->status_event_cnt;
+	hc->active_bit = ts->tid_touch_state;
+
+	if (kfifo_is_full(&hc_fifo))
+		kfifo_skip(&hc_fifo);
+	kfifo_in(&hc_fifo, hc, 1);
+}
+
+inline void sec_ts_hc_dump(struct sec_ts_data *ts)
+{
+	int i;
+	s64 delta;
+	s64 sec_delta;
+	u32 ms_delta;
+	ktime_t current_time = ktime_get();
+	struct sec_ts_health_check last_hc[SEC_TS_HC_KFIFO_LEN];
+
+	kfifo_out_peek(&hc_fifo, last_hc, kfifo_size(&hc_fifo));
+	for (i = 0 ; i < ARRAY_SIZE(last_hc) ; i++) {
+		sec_delta = 0;
+		ms_delta = 0;
+		delta = ktime_ms_delta(current_time, last_hc[i].int_ktime);
+		if (delta > 0)
+			sec_delta = div_u64_rem(delta, MSEC_PER_SEC, &ms_delta);
+
+		input_info(true, &ts->client->dev,
+			"dump-int: #%llu(%llu.%u): S#%llu%s C#%llu(0x%lx)%s.\n",
+			last_hc[i].int_idx,
+			sec_delta, ms_delta,
+			last_hc[i].status_idx,
+			(last_hc[i].status_updated) ? "(+)" : "   ",
+			last_hc[i].coord_idx,
+			last_hc[i].active_bit,
+			(last_hc[i].coord_updated) ? "(+)" : ""
+			);
+	}
+}
+#else
+#define sec_ts_hc_update_and_push(ts, hc) do {} while (0)
+#define sec_ts_hc_dump(ts) do {} while (0)
+#endif /* #ifdef SEC_TS_HC_KFIFO_LEN */
+
 #ifdef SEC_TS_DEBUG_KFIFO_LEN
 inline void sec_ts_kfifo_push_coord(struct sec_ts_data *ts, u8 slot)
 {
@@ -2851,6 +2904,7 @@ static void sec_ts_offload_set_running(struct sec_ts_data *ts, bool running)
 
 #endif /* CONFIG_TOUCHSCREEN_OFFLOAD */
 
+#define FOD_CANCEL_EVENT_DELTA_TIME 500
 static void sec_ts_handle_fod_event(struct sec_ts_data *ts,
 					struct sec_ts_event_status *p_event_status)
 {
@@ -2858,6 +2912,7 @@ static void sec_ts_handle_fod_event(struct sec_ts_data *ts,
 				(struct sec_ts_fod_event *)p_event_status;
 	int x = p_fod->x_b11_b8 << 8 | p_fod->x_b7_b0;
 	int y = p_fod->y_b11_b8 << 8 | p_fod->y_b7_b0;
+	s64 delta_ms = ktime_ms_delta(ktime_get(), ts->ktime_resume);
 
 	if (test_bit(0, &ts->tid_touch_state)) {
 		input_info(true, &ts->client->dev,
@@ -2875,6 +2930,40 @@ static void sec_ts_handle_fod_event(struct sec_ts_data *ts,
 
 	input_info(true, &ts->client->dev,
 		   "STATUS: FoD: %s, X,Y: %d, %d\n", p_fod->status ? "ON" : "OFF", x, y);
+	/*
+	 * Send input cancel event to tunr off HBM if the following conditions match:
+	 * 1. FoD status is off.
+	 * 2. FoD event is before the time of (driver reusme + FOD_CANCEL_EVENT_DELTA_TIME).
+	 */
+	if (p_fod->status == false && delta_ms < FOD_CANCEL_EVENT_DELTA_TIME) {
+		input_info(true, &ts->client->dev, "FoD: send input cancel event.\n");
+		mutex_lock(&ts->eventlock);
+		input_mt_slot(ts->input_dev, 0);
+		input_report_key(ts->input_dev, BTN_TOUCH, 1);
+		input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, 1);
+		input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
+		input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
+		input_report_abs(ts->input_dev, ABS_MT_TOUCH_MAJOR, 140);
+		input_report_abs(ts->input_dev, ABS_MT_TOUCH_MINOR, 140);
+		input_report_abs(ts->input_dev, ABS_MT_PRESSURE, 1);
+		input_sync(ts->input_dev);
+
+		/* Report MT_TOOL_PALM for canceling the touch event. */
+		input_mt_slot(ts->input_dev, 0);
+		input_report_key(ts->input_dev, BTN_TOUCH, 1);
+		input_mt_report_slot_state(ts->input_dev, MT_TOOL_PALM, 1);
+		input_sync(ts->input_dev);
+
+		/* Release slot 0. */
+		input_mt_slot(ts->input_dev, 0);
+		input_report_abs(ts->input_dev, ABS_MT_PRESSURE, 0);
+		input_mt_report_slot_state(ts->input_dev,
+					   MT_TOOL_FINGER, 0);
+		input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, -1);
+		input_report_key(ts->input_dev, BTN_TOUCH, 0);
+		input_sync(ts->input_dev);
+		mutex_unlock(&ts->eventlock);
+	}
 }
 
 static void sec_ts_read_vendor_event(struct sec_ts_data *ts,
@@ -2996,6 +3085,7 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_OFFLOAD)
 	struct touch_offload_frame *frame = NULL;
 #endif
+	struct sec_ts_health_check hc[1] = {0};
 
 	if (ts->power_status == SEC_TS_STATE_LPM) {
 
@@ -3091,6 +3181,8 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 
 		switch (event_id) {
 		case SEC_TS_STATUS_EVENT:
+			hc->status_updated = true;
+			ts->status_event_cnt++;
 			p_event_status =
 				(struct sec_ts_event_status *)event_buff;
 
@@ -3180,6 +3272,8 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 			break;
 
 		case SEC_TS_COORDINATE_EVENT:
+			hc->coord_updated = true;
+			ts->coord_event_cnt++;
 			processed_pointer_event = true;
 			mutex_lock(&ts->eventlock);
 			sec_ts_handle_coord_event(ts,
@@ -3300,6 +3394,9 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 	if (!ts->offload.offload_running)
 		update_motion_filter(ts, ts->tid_touch_state);
 #endif
+
+	/* Update the health check info. */
+	sec_ts_hc_update_and_push(ts, hc);
 }
 
 static irqreturn_t sec_ts_isr(int irq, void *handle)
@@ -3307,6 +3404,7 @@ static irqreturn_t sec_ts_isr(int irq, void *handle)
 	struct sec_ts_data *ts = (struct sec_ts_data *)handle;
 
 	ts->timestamp = ktime_get();
+	ts->int_cnt++;
 
 	return IRQ_WAKE_THREAD;
 }
@@ -5616,7 +5714,7 @@ static void sec_ts_suspend_work(struct work_struct *work)
 					      suspend_work);
 	int ret = 0;
 
-	input_info(true, &ts->client->dev, "%s\n", __func__);
+	input_info(true, &ts->client->dev, "%s: int_cnt %llu.\n", __func__, ts->int_cnt);
 	input_info(true, &ts->client->dev, "%s: encoded skipped %d/%d\n",
 		   __func__, ts->plat_data->encoded_skip_counter,
 		   ts->plat_data->encoded_frame_counter);
@@ -5625,17 +5723,32 @@ static void sec_ts_suspend_work(struct work_struct *work)
 			__func__, sec_ts_ptflib_get_grip_prescreen_frames(ts));
 	}
 
-	mutex_lock(&ts->device_mutex);
-
-	reinit_completion(&ts->bus_resumed);
-
 	if (ts->power_status == SEC_TS_STATE_SUSPEND) {
 		input_err(true, &ts->client->dev, "%s: already suspended.\n",
 			  __func__);
-		mutex_unlock(&ts->device_mutex);
 		return;
 	}
 
+	mutex_lock(&ts->device_mutex);
+	/*
+	 * Do the system reset to initialize the FW to the default state
+	 * before handing over to AOC. And, recover the charger mode to
+	 * have the AFE setting as the original one.
+	 */
+	sec_ts_system_reset(ts, RESET_MODE_AUTO, true, false);
+	ret = ts->sec_ts_write(ts, SET_TS_CMD_SET_CHARGER_MODE,
+			       &ts->charger_mode, 1);
+	if (ret < 0) {
+		input_err(true, &ts->client->dev,
+			  "%s: write reg %#x %#x failed, returned %i\n",
+			__func__, SET_TS_CMD_SET_CHARGER_MODE, ts->charger_mode,
+			ret);
+	} else {
+		input_info(true, &ts->client->dev, "%s: set charger mode %#x\n",
+			__func__, ts->charger_mode);
+	}
+
+	reinit_completion(&ts->bus_resumed);
 	sec_ts_enable_fw_grip(ts, true);
 
 	/* Stop T-IC */
@@ -5663,6 +5776,7 @@ static void sec_ts_suspend_work(struct work_struct *work)
 #endif
 	mutex_unlock(&ts->device_mutex);
 
+	sec_ts_hc_dump(ts);
 	sec_ts_debug_dump(ts);
 }
 
@@ -5673,7 +5787,8 @@ static void sec_ts_resume_work(struct work_struct *work)
 	u8 touch_mode[2] = {0};
 	int ret = 0;
 
-	input_info(true, &ts->client->dev, "%s\n", __func__);
+	input_info(true, &ts->client->dev, "%s: int_cnt %llu.\n", __func__, ts->int_cnt);
+	ts->ktime_resume = ktime_get();
 	ts->comm_err_count = 0;
 	ts->hw_reset_count = 0;
 	ts->longest_duration = 0;

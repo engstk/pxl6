@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -21,10 +21,29 @@
  * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
-#ifndef NET_MCPS802154_SIMPLE_RANGING_REGION_H
-#define NET_MCPS802154_SIMPLE_RANGING_REGION_H
+#ifndef IDLE_REGION_NL_H
+#define IDLE_REGION_NL_H
 
-int simple_ranging_region_init(void);
-void simple_ranging_region_exit(void);
+/**
+ * enum idle_param_attrs - Idle parameters attributes.
+ *
+ * @IDLE_PARAM_ATTR_MIN_DURATION_DTU:
+ *	Minimum duration of an access.
+ * @IDLE_PARAM_ATTR_MAX_DURATION_DTU:
+ *	Maximum duration of an access.
+ *
+ * @IDLE_PARAM_ATTR_UNSPEC: Invalid command.
+ * @__IDLE_PARAM_ATTR_AFTER_LAST: Internal use.
+ * @IDLE_PARAM_ATTR_MAX: Internal use.
+ */
+enum idle_param_attrs {
+	IDLE_PARAM_ATTR_UNSPEC,
 
-#endif /* NET_MCPS802154_SIMPLE_RANGING_REGION_H */
+	IDLE_PARAM_ATTR_MIN_DURATION_DTU,
+	IDLE_PARAM_ATTR_MAX_DURATION_DTU,
+
+	__IDLE_PARAM_ATTR_AFTER_LAST,
+	IDLE_PARAM_ATTR_MAX = __IDLE_PARAM_ATTR_AFTER_LAST - 1
+};
+
+#endif /* IDLE_REGION_NL_H */

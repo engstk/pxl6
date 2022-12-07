@@ -698,6 +698,25 @@ BCMFASTPATH(dhd_start_xmit)(struct sk_buff *skb, struct net_device *net)
 
 	bcm_object_trace_opr(skb, BCM_OBJDBG_ADD_PKT, __FUNCTION__, __LINE__);
 
+#ifdef HOST_SFH_LLC
+	/* if upper layer has cloned the skb, ex:- packet filter
+	 * unclone the skb, otherwise due to host sfh llc insertion
+	 * the upper layer packet capture will show wrong ethernet DA/SA
+	 */
+	if (unlikely(skb_cloned(skb))) {
+		int res = 0;
+		gfp_t gfp_flags = CAN_SLEEP() ? GFP_KERNEL : GFP_ATOMIC;
+		res = skb_unclone(skb, gfp_flags);
+		if (res) {
+			DHD_ERROR_RLMT(("%s: sbk_unclone fails ! err = %d\n",
+				__FUNCTION__, res));
+#ifdef CUSTOMER_HW2_DEBUG
+			return -ENOMEM;
+#endif /* CUSTOMER_HW2_DEBUG */
+		}
+	}
+#endif /* HOST_SFH_LLC */
+
 	/* re-align socket buffer if "skb->data" is odd address */
 	if (((unsigned long)(skb->data)) & 0x1) {
 		unsigned char *data = skb->data;

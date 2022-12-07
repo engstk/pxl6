@@ -76,4 +76,3 @@
         panid = <&dw3000>,"decawave,panid;0";
     };
 };
-

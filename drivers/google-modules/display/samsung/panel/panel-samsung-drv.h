@@ -231,10 +231,11 @@ struct exynos_panel_funcs {
 	 * @set_cabc_mode:
 	 *
 	 * This callback is used to implement panel specific logic for cabc mode
-	 * enablement. If this is not defined, it means that panel does not
-	 * support cabc.
+	 * enablement. If this is not defined, it means that panel does not support
+	 * cabc.
 	 */
-	void (*set_cabc_mode)(struct exynos_panel *exynos_panel, enum exynos_cabc_mode mode);
+	void (*set_cabc_mode)(struct exynos_panel *exynos_panel,
+				 enum exynos_cabc_mode mode);
 
 	/**
 	 * @set_local_hbm_mode:
@@ -602,6 +603,9 @@ struct exynos_panel {
 	ktime_t last_mode_set_ts;
 	ktime_t last_self_refresh_active_ts;
 	struct delayed_work idle_work;
+
+	/* Record the current CABC mode if force_off enabled */
+	enum exynos_cabc_mode current_cabc_mode;
 
 	/**
 	 * Record the last refresh rate switch. Note the mode switch doesn't

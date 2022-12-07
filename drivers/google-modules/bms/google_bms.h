@@ -82,10 +82,23 @@ struct gbms_chg_profile {
 	S(USB_BRICKID),	\
 	S(USB_HVDCP),	\
 	S(USB_HVDCP3),	\
+	S(FLOAT),	\
 	S(WLC),		\
 	S(WLC_EPP),	\
 	S(WLC_SPP),	\
-	S(POGO),	\
+	S(GPP),		\
+	S(10W),		\
+	S(L7),		\
+	S(DL),		\
+	S(WPC_EPP),	\
+	S(WPC_GPP),	\
+	S(WPC_10W),	\
+	S(WPC_BPP),	\
+	S(WPC_L7),	\
+	S(EXT),	\
+	S(EXT1),	\
+	S(EXT2),	\
+	S(EXT_UNKNOWN), \
 
 #define CHG_EV_ADAPTER_STRING(s)	#s
 #define _CHG_EV_ADAPTER_PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
@@ -294,8 +307,10 @@ enum gbms_stats_tier_idx_t {
 	GBMS_STATS_BD_TI_OVERHEAT_TEMP = 110,
 	GBMS_STATS_BD_TI_CUSTOM_LEVELS = 111,
 	GBMS_STATS_BD_TI_TRICKLE = 112,
+	GBMS_STATS_BD_TI_DOCK = 113,
 
 	GBMS_STATS_BD_TI_TRICKLE_CLEARED = 122,
+	GBMS_STATS_BD_TI_DOCK_CLEARED = 123,
 };
 
 /* health state */
@@ -307,6 +322,7 @@ struct batt_chg_health {
 	ktime_t rest_deadline;	/* full by this in seconds */
 	ktime_t dry_run_deadline; /* full by this in seconds (prediction) */
 	int rest_rate;		/* centirate once enter */
+	int rest_rate_before_trigger;
 
 	enum chg_health_state rest_state;
 	int rest_cc_max;
@@ -363,10 +379,10 @@ struct gbms_charging_event {
 };
 
 #define GBMS_CCCM_LIMITS_SET(profile, ti, vi) \
-	profile->cccm_limits[(ti * profile->volt_nb_limits) + vi]
+	profile->cccm_limits[((ti) * profile->volt_nb_limits) + (vi)]
 
 #define GBMS_CCCM_LIMITS(profile, ti, vi) \
-	(ti >= 0 && vi >= 0) ? profile->cccm_limits[(ti * profile->volt_nb_limits) + vi] : 0
+	(((ti) >= 0 && (vi) >= 0) ? profile->cccm_limits[((ti) * profile->volt_nb_limits) + (vi)] : 0)
 
 /* newgen charging */
 #define GBMS_CS_FLAG_BUCK_EN	BIT(0)
@@ -507,10 +523,33 @@ int ttf_ref_cc(const struct batt_ttf_stats *stats, int soc);
 
 int ttf_pwr_ibatt(const struct gbms_ce_tier_stats *ts);
 
+void ttf_tier_reset(struct batt_ttf_stats *stats);
+
 int gbms_read_aacr_limits(struct gbms_chg_profile *profile,
 			  struct device_node *node);
 
 bool chg_state_is_disconnected(const union gbms_charger_state *chg_state);
+
+/* Voltage tier stats */
+void gbms_tier_stats_init(struct gbms_ce_tier_stats *stats, int8_t idx);
+
+void gbms_chg_stats_tier(struct gbms_ce_tier_stats *tier,
+				int msc_state,
+				ktime_t elap);
+
+void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp,
+				ktime_t elap, int cc, union gbms_charger_state *chg_state,
+				enum gbms_msc_states_t msc_state, int soc_in,
+				struct gbms_ce_tier_stats *tier);
+
+int gbms_tier_stats_cstr(char *buff, int size,
+				const struct gbms_ce_tier_stats *tier_stat,
+				bool verbose);
+
+void gbms_log_cstr_handler(struct logbuffer *log, char *buf, int len);
+
+
+
 
 /*
  * Charger modes

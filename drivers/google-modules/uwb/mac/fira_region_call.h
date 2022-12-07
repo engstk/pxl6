@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -26,7 +26,7 @@
 #include "fira_region.h"
 
 /**
- * fira_get_capabilities() - Get Fira capabilities.
+ * fira_get_capabilities() - Get FiRa capabilities.
  * @local: FiRa context.
  * @info: Request information.
  *
@@ -36,15 +36,15 @@ int fira_get_capabilities(struct fira_local *local,
 			  const struct genl_info *info);
 
 /**
- * fira_session_control() - Control Fira session.
+ * fira_session_control() - Control FiRa session.
  * @local: FiRa context.
- * @call_id: Identifier of the fira procedure.
+ * @call_id: Identifier of the FiRa procedure.
  * @params: Nested attribute containing procedure parameters.
  * @info: Request information.
  *
  * Return: 0 or error.
  */
-int fira_session_control(struct fira_local *local, u32 call_id,
+int fira_session_control(struct fira_local *local, enum fira_call call_id,
 			 const struct nlattr *params,
 			 const struct genl_info *info);
 

@@ -41,11 +41,30 @@
  */
 #define PCTT_DATA_PAYLOAD_SIZE_MAX 84
 
+/**
+ * enum pctt_device_role - **[NOT IMPLEMENTED]**  Role played by a device.
+ * @PCTT_DEVICE_ROLE_RESPONDER: The device acts as a responder.
+ * @PCTT_DEVICE_ROLE_INITIATOR: The device acts as an initiator.
+ *
+ * Current implementation does not support decorrelation between the
+ * device's role and the device's type. The controller is always
+ * the initiator and the controlee is always the responder.
+ *
+ * This enum is not used in the current implementation.
+ */
 enum pctt_device_role {
 	PCTT_DEVICE_ROLE_RESPONDER,
 	PCTT_DEVICE_ROLE_INITIATOR,
 };
 
+/**
+ * enum pctt_rframe_config - Rframe configuration used to transmit/receive
+ * ranging messages.
+ * @PCTT_RFRAME_CONFIG_SP0: Use SP0 mode.
+ * @PCTT_RFRAME_CONFIG_SP1: Use SP1 mode.
+ * @PCTT_RFRAME_CONFIG_SP2: RFU
+ * @PCTT_RFRAME_CONFIG_SP3: Use SP3 mode.
+ */
 enum pctt_rframe_config {
 	PCTT_RFRAME_CONFIG_SP0,
 	PCTT_RFRAME_CONFIG_SP1,
@@ -53,16 +72,42 @@ enum pctt_rframe_config {
 	PCTT_RFRAME_CONFIG_SP3,
 };
 
+/**
+ * enum pctt_prf_mode - Pulse Repetition Frequency mode.
+ * @PCTT_PRF_MODE_BPRF: Base Pulse Repetition Frequency.
+ * @PCTT_PRF_MODE_HPRF: Higher Pulse Repetition Frequency.
+ * @PCTT_PRF_MODE_HPRF_HIGH_RATE: Higher Pulse Repetition Frequency allowing
+ * higher data rates (27M2 and 31M2).
+ *
+ * This enum is not used in the current implementation.
+ */
 enum pctt_prf_mode {
 	PCTT_PRF_MODE_BPRF,
 	PCTT_PRF_MODE_HPRF,
+	PCTT_PRF_MODE_HPRF_HIGH_RATE,
 };
 
+/**
+ * enum pctt_preamble_duration - Duration of preamble in symbols.
+ * @PCTT_PREAMBLE_DURATION_32: 32 symbols duration.
+ * @PCTT_PREAMBLE_DURATION_64: 64 symbols duration.
+ */
 enum pctt_preamble_duration {
 	PCTT_PREAMBLE_DURATION_32,
 	PCTT_PREAMBLE_DURATION_64,
 };
 
+/**
+ * enum pctt_sfd_id - Start-of-frame delimiter.
+ * @PCTT_SFD_ID_0: Delimiter is [0 +1 0 –1 +1 0 0 –1]
+ * @PCTT_SFD_ID_1: Delimiter is [ –1 –1 +1 –1 ]
+ * @PCTT_SFD_ID_2: Delimiter is [ –1 –1 –1 +1 –1 –1 +1 –1 ]
+ * @PCTT_SFD_ID_3: Delimiter is
+ * [ –1 –1 –1 –1 –1 +1 +1 –1 –1 +1 –1 +1 –1 –1 +1 –1 ]
+ * @PCTT_SFD_ID_4: Delimiter is
+ * [ –1 –1 –1 –1 –1 –1 –1 +1 –1 –1 +1 –1 –1 +1 –1 +1 –1 +1
+ * –1 –1 –1 +1 +1 –1 –1 –1 +1 –1 +1 +1 –1 –1 ]
+ */
 enum pctt_sfd_id {
 	PCTT_SFD_ID_0,
 	PCTT_SFD_ID_1,
@@ -71,17 +116,46 @@ enum pctt_sfd_id {
 	PCTT_SFD_ID_4,
 };
 
+/**
+ * enum pctt_number_of_sts_segments - Number of STS segments.
+ * @PCTT_NUMBER_OF_STS_SEGMENTS_NONE: No STS Segment (Rframe config SP0).
+ * @PCTT_NUMBER_OF_STS_SEGMENTS_1_SEGMENT: 1 STS Segment.
+ * @PCTT_NUMBER_OF_STS_SEGMENTS_2_SEGMENTS: 2 STS Segments.
+ * @PCTT_NUMBER_OF_STS_SEGMENTS_3_SEGMENTS: 3 STS Segments.
+ * @PCTT_NUMBER_OF_STS_SEGMENTS_4_SEGMENTS: 4 STS Segments.
+ */
 enum pctt_number_of_sts_segments {
 	PCTT_NUMBER_OF_STS_SEGMENTS_NONE,
 	PCTT_NUMBER_OF_STS_SEGMENTS_1_SEGMENT,
 	PCTT_NUMBER_OF_STS_SEGMENTS_2_SEGMENTS,
+	PCTT_NUMBER_OF_STS_SEGMENTS_3_SEGMENTS,
+	PCTT_NUMBER_OF_STS_SEGMENTS_4_SEGMENTS,
 };
 
+/**
+ * enum pctt_psdu_data_rate - Data rate used to exchange PSDUs.
+ * @PCTT_PSDU_DATA_RATE_6M81: 6.8Mb/s rate.
+ * @PCTT_PSDU_DATA_RATE_7M80: 7.8Mb/s rate.
+ * @PCTT_PSDU_DATA_RATE_27M2: 27.2Mb/s rate.
+ * @PCTT_PSDU_DATA_RATE_31M2: 31.2Mb/s rate.
+ */
 enum pctt_psdu_data_rate {
 	PCTT_PSDU_DATA_RATE_6M81,
 	PCTT_PSDU_DATA_RATE_7M80,
 	PCTT_PSDU_DATA_RATE_27M2,
 	PCTT_PSDU_DATA_RATE_31M2,
+};
+
+/**
+ * enum pctt_phr_data_rate - Data rate used to exchange PHR.
+ * @PCTT_PHR_DATA_RATE_850K: 850kb/s rate.
+ * @PCTT_PHR_DATA_RATE_6M81: 6.8Mb/s rate.
+ *
+ * This enum is not used in the current implementation.
+ */
+enum pctt_phr_data_rate {
+	PCTT_PHR_DATA_RATE_850K,
+	PCTT_PHR_DATA_RATE_6M81,
 };
 
 enum pctt_mac_fcs_type {
@@ -129,6 +203,18 @@ enum pctt_session_state {
 	PCTT_SESSION_STATE_DEINIT,
 	PCTT_SESSION_STATE_ACTIVE,
 	PCTT_SESSION_STATE_IDLE,
+};
+
+/**
+ * enum pctt_sts_length - Number of symbols in a STS segment.
+ * @PCTT_STS_LENGTH_32: The STS length is 32 symbols.
+ * @PCTT_STS_LENGTH_64: The STS length is 64 symbols.
+ * @PCTT_STS_LENGTH_128: The STS length is 128 symbols.
+ */
+enum pctt_sts_length {
+	PCTT_STS_LENGTH_32 = 0,
+	PCTT_STS_LENGTH_64 = 1,
+	PCTT_STS_LENGTH_128 = 2,
 };
 
 #endif /* NET_PCTT_REGION_PARAMS_H */

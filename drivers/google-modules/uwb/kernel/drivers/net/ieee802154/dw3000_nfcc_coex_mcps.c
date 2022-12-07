@@ -30,10 +30,48 @@
 
 #define DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS 24000
 
+static int dw3000_nfcc_coex_wakeup_and_send(struct dw3000 *dw,
+					    s32 idle_duration_dtu,
+					    u32 send_timestamp_dtu)
+{
+	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
+	int r;
+
+	trace_dw3000_nfcc_coex_wakeup_and_send(
+		dw, nfcc_coex->send, idle_duration_dtu, send_timestamp_dtu);
+
+	if (idle_duration_dtu > dw->llhw->anticip_dtu) {
+		r = dw3000_idle(dw, true, send_timestamp_dtu,
+				dw3000_nfcc_coex_idle_timeout,
+				DW3000_OP_STATE_MAX);
+		goto wakeup_and_send_end;
+	} else if (dw->current_operational_state ==
+		   DW3000_OP_STATE_DEEP_SLEEP) {
+		r = dw3000_deepsleep_wakeup_now(dw,
+						dw3000_nfcc_coex_idle_timeout,
+						send_timestamp_dtu,
+						DW3000_OP_STATE_MAX);
+		goto wakeup_and_send_end;
+	}
+
+	r = dw3000_nfcc_coex_configure(dw);
+	if (r)
+		goto wakeup_and_send_end;
+	r = dw3000_nfcc_coex_message_send(dw);
+	if (r)
+		goto wakeup_and_send_end;
+	return 0;
+
+wakeup_and_send_end:
+	if (r)
+		dw3000_nfcc_coex_disable(dw);
+	return r;
+}
+
 /**
  * dw3000_nfcc_coex_handle_access() - handle access to provide to NFCC.
  * @dw: Driver context.
- * @data: Adress of handle access information.
+ * @data: Address of handle access information.
  * @data_len: Number of byte of the data object.
  *
  * Return: 0 on success, else an error.
@@ -41,10 +79,10 @@
 static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 					  int data_len)
 {
-	const struct dw3000_vendor_cmd_nfcc_coex_handle_access *info = data;
+	const struct llhw_vendor_cmd_nfcc_coex_handle_access *info = data;
 	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
 	const u32 dtu_per_ms = dw->llhw->dtu_freq_hz / 1000;
-	u32 now_dtu, message_send_timestamp_dtu;
+	u32 now_dtu;
 	s32 idle_duration_dtu;
 	int r;
 
@@ -56,19 +94,32 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 		return -EBUSY;
 	}
 
-	r = dw3000_nfcc_coex_enable(dw, info->chan, info->start);
+	r = dw3000_nfcc_coex_enable(dw, info->chan);
 	if (r)
 		return r;
 
 	now_dtu = dw3000_get_dtu_time(dw);
-	message_send_timestamp_dtu =
-		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
-	idle_duration_dtu = message_send_timestamp_dtu - now_dtu;
+	idle_duration_dtu = info->timestamp_dtu - now_dtu;
 
 	trace_dw3000_nfcc_coex_handle_access(dw, info, idle_duration_dtu);
-	/* Save start session date, to retrieve MSB bits lost for next date. */
-	nfcc_coex->access_start_dtu = info->timestamp_dtu;
-	/* Build the when spi must be released. */
+	nfcc_coex->send = info->start ? DW3000_NFCC_COEX_SEND_CLK_SYNC :
+					DW3000_NFCC_COEX_SEND_CLK_OFFSET;
+	if (info->start) {
+		nfcc_coex->version = info->version;
+		/*
+		 * Save first start session date, to retrieve MSB bits lost
+		 * for next received timestamp through session_time0_dtu.
+		 * It's saved because between session_time0_dtu and
+		 * access_start_dtu, a deep sleep can occur, and so
+		 * `dtu_to_sys_time` must be call after the wake up.
+		 * Between access_start_dtu and now, the duration can be less
+		 * than 2 ms (fira slot) in multi-region feature.
+		 * So the margin is like a second anticip dtu to add to provide
+		 * time for NFC handling.
+		 */
+		nfcc_coex->access_start_dtu =
+			info->timestamp_dtu + dw3000_nfcc_coex_margin_dtu;
+	}
 	nfcc_coex->watchdog_timer.expires =
 		jiffies +
 		msecs_to_jiffies((info->timestamp_dtu - now_dtu) / dtu_per_ms +
@@ -76,38 +127,14 @@ static int dw3000_nfcc_coex_handle_access(struct dw3000 *dw, void *data,
 	add_timer(&nfcc_coex->watchdog_timer);
 
 	/* Send message and so release the SPI close to the nfc_coex_margin. */
-	message_send_timestamp_dtu =
-		info->timestamp_dtu - dw3000_nfcc_coex_margin_dtu;
-	if (idle_duration_dtu > 0) {
-		r = dw3000_idle(dw, true, message_send_timestamp_dtu,
-				dw3000_nfcc_coex_idle_timeout,
-				DW3000_OP_STATE_MAX);
-		goto handle_access_end;
-	} else if (dw->current_operational_state ==
-		   DW3000_OP_STATE_DEEP_SLEEP) {
-		r = dw3000_deepsleep_wakeup_now(
-			dw, dw3000_nfcc_coex_idle_timeout, DW3000_OP_STATE_MAX);
-		goto handle_access_end;
-	}
-
-	r = dw3000_nfcc_coex_configure(dw);
-	if (r)
-		goto handle_access_end;
-	r = dw3000_nfcc_coex_message_send(dw);
-	if (r)
-		goto handle_access_end;
-	return 0;
-
-handle_access_end:
-	if (r)
-		dw3000_nfcc_coex_disable(dw);
-	return r;
+	return dw3000_nfcc_coex_wakeup_and_send(dw, idle_duration_dtu,
+						info->timestamp_dtu);
 }
 
 /**
  * dw3000_nfcc_coex_get_access_information() - Forward access info cached.
  * @dw: Driver context.
- * @data: Adress where to write access information.
+ * @data: Address where to write access information.
  * @data_len: Number of byte of the data object.
  *
  * Return: 0 on success, else an error.
@@ -115,7 +142,7 @@ handle_access_end:
 static int dw3000_nfcc_coex_get_access_information(struct dw3000 *dw,
 						   void *data, int data_len)
 {
-	const struct dw3000_vendor_cmd_nfcc_coex_get_access_info *access_info =
+	const struct llhw_vendor_cmd_nfcc_coex_get_access_info *access_info =
 		&dw->nfcc_coex.access_info;
 
 	if (!data || data_len != sizeof(*access_info))
@@ -128,22 +155,60 @@ static int dw3000_nfcc_coex_get_access_information(struct dw3000 *dw,
 /**
  * dw3000_nfcc_coex_stop() - Stop NFCC.
  * @dw: Driver context.
+ * @data: Address of stop information.
+ * @data_len: Number of byte of the data object.
  *
  * Return: 0 on success, else an error.
  */
-static int dw3000_nfcc_coex_stop(struct dw3000 *dw)
+static int dw3000_nfcc_coex_stop(struct dw3000 *dw, void *data, int data_len)
 {
+	const struct llhw_vendor_cmd_nfcc_coex_stop *info = data;
+	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
+	const u32 dtu_per_ms = dw->llhw->dtu_freq_hz / 1000;
+	u32 now_dtu, send_timestamp_dtu;
+	s32 idle_duration_dtu;
 	int r;
 
-	/* Cancel the idle timeout, and ignore the deepsleep state. */
-	r = dw3000_idle_cancel_timer(dw);
+	if (data_len && data_len != sizeof(*info))
+		return -EINVAL;
+
+	if (timer_pending(&nfcc_coex->watchdog_timer)) {
+		trace_dw3000_nfcc_coex_err(dw, "watchdog timer is pending");
+		return -EBUSY;
+	}
+
+	r = dw3000_nfcc_coex_enable(dw, dw->config.chan);
 	if (r)
 		return r;
-	/* Cancel the watchdog which have a bigger timeout. */
-	r = dw3000_nfcc_coex_cancel_watchdog(dw);
-	if (r)
-		return r;
-	return dw3000_nfcc_coex_disable(dw);
+
+	nfcc_coex->send = DW3000_NFCC_COEX_SEND_STOP;
+
+	if (info) {
+		now_dtu = dw3000_get_dtu_time(dw);
+		send_timestamp_dtu = info->timestamp_dtu;
+		idle_duration_dtu = send_timestamp_dtu - now_dtu;
+		nfcc_coex->watchdog_timer.expires =
+			jiffies +
+			msecs_to_jiffies(
+				(info->timestamp_dtu - now_dtu) / dtu_per_ms +
+				DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS);
+		nfcc_coex->version = info->version;
+	} else {
+		send_timestamp_dtu = 0;
+		idle_duration_dtu = 0;
+		nfcc_coex->watchdog_timer.expires =
+			jiffies +
+			msecs_to_jiffies(
+				DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS);
+		/* Cancel wakeup timer launch by idle() */
+		dw3000_idle_cancel_timer(dw);
+	}
+
+	add_timer(&nfcc_coex->watchdog_timer);
+
+	/* Send message and so release the SPI close to the nfc_coex_margin. */
+	return dw3000_nfcc_coex_wakeup_and_send(dw, idle_duration_dtu,
+						send_timestamp_dtu);
 }
 
 /**
@@ -165,13 +230,13 @@ int dw3000_nfcc_coex_vendor_cmd(struct dw3000 *dw, u32 vendor_id, u32 subcmd,
 		return -EOPNOTSUPP;
 
 	switch (subcmd) {
-	case DW3000_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS:
+	case LLHW_VENDOR_CMD_NFCC_COEX_HANDLE_ACCESS:
 		return dw3000_nfcc_coex_handle_access(dw, data, data_len);
-	case DW3000_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION:
+	case LLHW_VENDOR_CMD_NFCC_COEX_GET_ACCESS_INFORMATION:
 		return dw3000_nfcc_coex_get_access_information(dw, data,
 							       data_len);
-	case DW3000_VENDOR_CMD_NFCC_COEX_STOP:
-		return dw3000_nfcc_coex_stop(dw);
+	case LLHW_VENDOR_CMD_NFCC_COEX_STOP:
+		return dw3000_nfcc_coex_stop(dw, data, data_len);
 	default:
 		return -EINVAL;
 	}

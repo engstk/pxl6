@@ -97,6 +97,7 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	struct decon_device *decon;
 	struct exynos_dqe *dqe;
 	uint32_t *crtc_id = data;
+	unsigned long flags;
 
 	obj = drm_mode_object_find(dev, file, *crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
@@ -118,16 +119,20 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	 * TODO: Now only one observer is allowed at a time at the moment.
 	 * This will be allowed for multiple observer in the future.
 	 */
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
 	if (dqe->state.event) {
 		pr_warn("decon%u histogram already registered\n", decon->id);
+		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 		return -EBUSY;
 	}
 	dqe->state.event = create_histogram_event(dev, file);
 	if (IS_ERR_OR_NULL(dqe->state.event)) {
 		dqe->state.event = NULL;
 		pr_err("failed to create a histogram event\n");
+		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 		return -EINVAL;
 	}
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
 	pr_debug("created histogram event(0x%pK) of decon%u\n",
 			dqe->state.event, decon->id);
@@ -143,6 +148,7 @@ int histogram_cancel_ioctl(struct drm_device *dev, void *data,
 	struct decon_device *decon;
 	struct exynos_dqe *dqe;
 	uint32_t *crtc_id = data;
+	unsigned long flags;
 
 	obj = drm_mode_object_find(dev, file, *crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
@@ -160,11 +166,13 @@ int histogram_cancel_ioctl(struct drm_device *dev, void *data,
 		return -ENODEV;
 	}
 
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
 	if (dqe->state.event) {
 		pr_debug("remained event(0x%pK)\n", dqe->state.event);
 		drm_event_cancel_free(dev, &dqe->state.event->base);
 		dqe->state.event = NULL;
 	}
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
 	pr_debug("terminated histogram event of decon%u\n", decon->id);
 
@@ -173,18 +181,24 @@ int histogram_cancel_ioctl(struct drm_device *dev, void *data,
 
 void handle_histogram_event(struct exynos_dqe *dqe)
 {
-	struct exynos_drm_pending_histogram_event *e = dqe->state.event;
+	/* This function runs in interrupt context */
+	struct exynos_drm_pending_histogram_event *e;
 	struct drm_device *dev = dqe->decon->drm_dev;
-	u32 id = dqe->decon->id;
+	uint32_t id, crtc_id;
 
-	if (!e)
-		return;
-
-	pr_debug("Histogram event(0x%pK) will be handled\n", dqe->state.event);
-	dqe_reg_get_histogram_bins(id, &e->event.bins);
-	drm_send_event(dev, &e->base);
-	pr_debug("histogram event of decon%u signalled\n", dqe->decon->id);
-	dqe->state.event = NULL;
+	spin_lock(&dqe->state.histogram_slock);
+	crtc_id = dqe->decon->crtc->base.base.id;
+	id = dqe->decon->id;
+	e = dqe->state.event;
+	if (e) {
+		pr_debug("Histogram event(0x%pK) will be handled\n", dqe->state.event);
+		dqe_reg_get_histogram_bins(id, &e->event.bins);
+		e->event.crtc_id = crtc_id;
+		drm_send_event(dev, &e->base);
+		pr_debug("histogram event of decon%u signalled\n", dqe->decon->id);
+		dqe->state.event = NULL;
+	}
+	spin_unlock(&dqe->state.histogram_slock);
 }
 
 static void
@@ -809,6 +823,7 @@ struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 	dqe->funcs = &dqe_funcs;
 	dqe->initialized = false;
 	dqe->decon = decon;
+	spin_lock_init(&dqe->state.histogram_slock);
 
 	scnprintf(dqe_name, MAX_DQE_NAME_SIZE, "dqe%u", decon->id);
 	dqe->dqe_class = class_create(THIS_MODULE, dqe_name);

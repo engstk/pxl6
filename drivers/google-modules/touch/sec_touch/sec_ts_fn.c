@@ -8109,6 +8109,7 @@ static void force_touch_active(void *device_data)
 		bus_ref = SEC_TS_BUS_REF_BUGREPORT;
 		active = (sec->cmd_param[1]) ? true : false;
 		if (active) {
+			sec_ts_hc_dump(ts);
 			sec_ts_debug_dump(ts);
 			ts->bugreport_ktime_start = ktime_get();
 		} else {

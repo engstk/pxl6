@@ -52,10 +52,10 @@ TRACE_DEFINE_ENUM(NFCC_COEX_CALL_CCC_SESSION_NOTIFICATION);
 	}
 #define NFCC_COEX_STATE_SYMBOLS                          \
 	nfcc_coex_state_name(IDLE),                      \
-	nfcc_coex_state_name(ACCESSING),                 \
+	nfcc_coex_state_name(STARTED),                   \
 	nfcc_coex_state_name(STOPPING)
 TRACE_DEFINE_ENUM(NFCC_COEX_STATE_IDLE);
-TRACE_DEFINE_ENUM(NFCC_COEX_STATE_ACCESSING);
+TRACE_DEFINE_ENUM(NFCC_COEX_STATE_STARTED);
 TRACE_DEFINE_ENUM(NFCC_COEX_STATE_STOPPING);
 
 #define NFCC_COEX_LOCAL_ENTRY __field(enum nfcc_coex_state, state)
@@ -86,15 +86,17 @@ TRACE_EVENT(
 		NFCC_COEX_LOCAL_ENTRY
 		__field(u64, time0_ns)
 		__field(u8, channel_number)
+		__field(u8, version)
 	),
 	TP_fast_assign(
 		NFCC_COEX_LOCAL_ASSIGN;
 		__entry->time0_ns = p->time0_ns;
 		__entry->channel_number = p->channel_number;
+		__entry->version = p->version;
 	),
-	TP_printk(NFCC_COEX_LOCAL_PR_FMT " time0_ns=%llu channel_number=%d",
+	TP_printk(NFCC_COEX_LOCAL_PR_FMT " time0_ns=%llu channel_number=%d version=%d",
 		  NFCC_COEX_LOCAL_PR_ARG, __entry->time0_ns,
-		  __entry->channel_number)
+		  __entry->channel_number, __entry->version)
 );
 
 DEFINE_EVENT(
@@ -125,32 +127,6 @@ TRACE_EVENT(
 	TP_printk(NFCC_COEX_LOCAL_PR_FMT " call_id=%s",
 		  NFCC_COEX_LOCAL_PR_ARG,
 		  __print_symbolic(__entry->call_id, NFCC_COEX_CALL_SYMBOLS))
-);
-
-TRACE_EVENT(
-	region_nfcc_coex_get_demand,
-	TP_PROTO(const struct nfcc_coex_local *local,
-		 u32 next_timestamp_dtu,
-		 const struct mcps802154_region_demand *rd),
-	TP_ARGS(local, next_timestamp_dtu, rd),
-	TP_STRUCT__entry(
-		NFCC_COEX_LOCAL_ENTRY
-		__field(u32, next_timestamp_dtu)
-		__field(u32, timestamp_dtu)
-		__field(int, duration_dtu)
-		),
-	TP_fast_assign(
-		NFCC_COEX_LOCAL_ASSIGN;
-		__entry->next_timestamp_dtu = next_timestamp_dtu;
-		__entry->timestamp_dtu = rd->timestamp_dtu;
-		__entry->duration_dtu = rd->max_duration_dtu;
-		),
-	TP_printk(NFCC_COEX_LOCAL_PR_FMT " next_timestamp_dtu=0x%08x "
-		  "rd.timestamp_dtu=0x%08x rd.duration_dtu=0x%08x",
-		  NFCC_COEX_LOCAL_PR_ARG,
-		  __entry->next_timestamp_dtu,
-		  __entry->timestamp_dtu,
-		  __entry->duration_dtu)
 );
 
 TRACE_EVENT(
@@ -197,7 +173,7 @@ TRACE_EVENT(
 TRACE_EVENT(
 	region_nfcc_coex_report,
 	TP_PROTO(const struct nfcc_coex_local *local,
-		 const struct dw3000_vendor_cmd_nfcc_coex_get_access_info *info),
+		 const struct llhw_vendor_cmd_nfcc_coex_get_access_info *info),
 	TP_ARGS(local, info),
 	TP_STRUCT__entry(
 		NFCC_COEX_LOCAL_ENTRY

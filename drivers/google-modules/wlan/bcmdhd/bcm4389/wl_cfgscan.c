@@ -2431,14 +2431,6 @@ wl_set_legacy_scan_states(struct bcm_cfg80211 *cfg,
 		cfg->wl11u = FALSE;
 	}
 #endif /* WL11U */
-
-	if (request) {
-		err = wl_cfg80211_set_mgmt_vndr_ies(cfg, ndev_to_cfgdev(ndev), bssidx,
-				VNDR_IE_PRBREQ_FLAG, request->ie, request->ie_len);
-		if (unlikely(err)) {
-			WL_ERR(("vndr_ie set for probereq failed for bssidx:%d!\n", bssidx));
-		}
-	}
 }
 
 static bool
@@ -2608,6 +2600,13 @@ __wl_cfg80211_scan(struct wiphy *wiphy, struct net_device *ndev,
 			wl_set_p2p_scan_states(cfg, ndev);
 		} else {
 			wl_set_legacy_scan_states(cfg, request, ndev, bssidx);
+		}
+
+		/* configure upper app provided IEs to the firmware */
+		err = wl_cfg80211_set_mgmt_vndr_ies(cfg, ndev_to_cfgdev(ndev), bssidx,
+				VNDR_IE_PRBREQ_FLAG, request->ie, request->ie_len);
+		if (unlikely(err)) {
+			WL_ERR(("vndr_ie set for probereq failed for bssidx:%d!\n", bssidx));
 		}
 	}
 

@@ -125,6 +125,7 @@ struct mdis_thermal_device
 	u32 *thermal_mitigation;
 	int thermal_levels;
 	int current_level;
+	int therm_fan_alarm_level;
 };
 
 struct gcpm_drv  {
@@ -154,6 +155,7 @@ struct gcpm_drv  {
 	/* MDIS: device and current budget */
 	struct mdis_thermal_device thermal_device;
 	struct gvotable_election *mdis_votable;
+	struct gvotable_election *fan_level_votable;
 
 	/* CSI */
 	struct gvotable_election *csi_status_votable;
@@ -602,7 +604,8 @@ static int gcpm_dc_fcc_update(struct gcpm_drv *gcpm, int value)
 		goto error_exit;
 
 	/* apply/enable DC_FCC only when a WLC_DC source is selected */
-	if (gcpm->pps_index != PPS_INDEX_WLC || limit < 0)
+	if ((gcpm->pps_index != PPS_INDEX_WLC) ||
+	    (gcpm->dc_index <= GCPM_DEFAULT_CHARGER) || limit < 0)
 		limit = -1;
 
 	/*
@@ -2318,6 +2321,34 @@ static ssize_t dc_ctl_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(dc_ctl);
 
+static ssize_t thermal_mdis_fan_alarm_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	struct gcpm_drv *gcpm = dev_get_drvdata(dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", gcpm->thermal_device.therm_fan_alarm_level);
+}
+
+static ssize_t thermal_mdis_fan_alarm_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct gcpm_drv *gcpm = dev_get_drvdata(dev);
+	int ret = 0;
+	u32 value;
+
+	ret = kstrtou32(buf, 0, &value);
+	if (ret < 0)
+		return ret;
+
+	if (value <= gcpm->thermal_device.thermal_levels)
+		gcpm->thermal_device.therm_fan_alarm_level = value;
+
+	return count;
+}
+static DEVICE_ATTR_RW(thermal_mdis_fan_alarm);
+
 /* ------------------------------------------------------------------------ */
 
 static int gcpm_get_max_charge_cntl_limit(struct thermal_cooling_device *tcd,
@@ -2336,6 +2367,40 @@ static int gcpm_get_cur_charge_cntl_limit(struct thermal_cooling_device *tcd,
 
 	*lvl = tdev->current_level;
 	return 0;
+}
+
+#define FAN_MDIS_ALARM_DEFAULT 3
+static int fan_get_level(struct mdis_thermal_device *tdev)
+{
+	int fan_level = FAN_LVL_UNKNOWN;
+
+	if (tdev->current_level <= 0)
+		fan_level = FAN_LVL_NOT_CARE;
+	else if (tdev->current_level >= tdev->therm_fan_alarm_level)
+		fan_level = FAN_LVL_ALARM;
+	else
+		fan_level = FAN_LVL_MED;
+
+	return fan_level;
+}
+
+static int gcpm_mdis_update_fan(struct gcpm_drv *gcpm)
+{
+	int ret = 0;
+
+	if (!gcpm->fan_level_votable)
+		gcpm->fan_level_votable = gvotable_election_get_handle(VOTABLE_FAN_LEVEL);
+
+	if (gcpm->fan_level_votable) {
+		const int level = fan_get_level(&gcpm->thermal_device);
+
+		ret = gvotable_cast_int_vote(gcpm->fan_level_votable, "THERMAL_MDIS",
+					     level, true);
+		if (ret < 0)
+			pr_err("%s: cannot update fan level (%d)", __func__, ret);
+	}
+
+	return ret;
 }
 
 static inline int mdis_cast_vote(struct gvotable_election *el, int vote, bool enabled)
@@ -2431,7 +2496,7 @@ static int gcpm_mdis_update_limits(struct gcpm_drv *gcpm, int msc_fcc,
 	if (dc_icl != 0 && dc_icl_votable) {
 		int wlc_state;
 
-		/* need to set online WLC if not onlne */
+		/* need to set online WLC if not online */
 		wlc_state = mdis_set_wlc_online(gcpm);
 		if (wlc_state == PPS_PSY_OFFLINE)
 			dev_err(gcpm->device, "MDIS: WLC offine\n");
@@ -2514,28 +2579,33 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 		 * to determine when to swich source.
 		 */
 		in_idx = gcpm_mdis_match_cp_source(gcpm, &online);
-		if (in_idx < 0) {
+		if (in_idx < 0 || online != PPS_PSY_PROG_ONLINE) {
 			/*
-			 * this happens when none of the sources are online.
-			 * and CAN happen when we resume after the thermal
-			 * engine has shut this down. Forces cp_fcc to 0
-			 * to apply dc_icl and msc_fcc.
+			 * this happens when none of the sources are online
+			 * or when not using the CP. It CAN happen when we
+			 * resume after the thermal engine has shut this down.
+			 * Forces cp_fcc to 0 to apply dc_icl and msc_fcc.
 			 */
 			cp_fcc = 0;
+
+			/* forces wlc-overrides-fcc when wireless charging */
+			if (online && gcpm_mdis_in_is_wireless(gcpm, in_idx))
+				msc_fcc = -1;
 		} else if (gcpm_mdis_in_is_wireless(gcpm, in_idx)) {
 			/* WLC_CP use the charge pump with wireless charging */
 			cp_fcc = gcpm->mdis_out_limits[1][lvl + tdev->thermal_levels];
+
 			if (gcpm->dc_limit_cc_min_wlc >= 0)
 				cp_min = gcpm->dc_limit_cc_min_wlc;
 			else if (gcpm->dc_limit_cc_min >= 0)
 				cp_min = gcpm->dc_limit_cc_min;
 
 			/*
-			* forces wlc-overrides-fcc when wireless charging
-			* Reset only in PROG_ONLINE to allow transitioning
-			* OUT of WLC_DC when the charging current falls
-			* under the DC limit.
-			*/
+			 * forces wlc-overrides-fcc when wireless charging
+			 * Reset only in PROG_ONLINE to allow transitioning
+			 * OUT of WLC_DC when the charging current falls
+			 * under the DC limit.
+			 */
 			msc_fcc = -1;
 		} else {
 			/* PPS_CP use the charge pump with TCPM */
@@ -2907,6 +2977,8 @@ static int gcpm_mdis_callback(struct gvotable_election *el, const char *reason,
 		}
 	}
 
+	gcpm_mdis_update_fan(gcpm);
+
 	if (!gcpm->csi_status_votable) {
 		gcpm->csi_status_votable = gvotable_election_get_handle(VOTABLE_CSI_STATUS);
 		if (!gcpm->csi_status_votable)
@@ -3025,6 +3097,11 @@ static int gcpm_init_mdis(struct gcpm_drv *gcpm)
 
 		gcpm->mdis_out_limits[i] = limits;
 	}
+
+	ret = of_property_read_u32(gcpm->device->of_node, "google,mdis-fan-alarm-level",
+				   &tdev->therm_fan_alarm_level);
+	if (ret < 0)
+		tdev->therm_fan_alarm_level = FAN_MDIS_ALARM_DEFAULT;
 
 	/* mdis thermal engine uses this callback */
 	gcpm->mdis_votable =
@@ -3995,6 +4072,10 @@ static int google_cpm_probe(struct platform_device *pdev)
 	ret = device_create_file(gcpm->device, &dev_attr_dc_ctl);
 	if (ret)
 		dev_err(gcpm->device, "Failed to create dc_crl\n");
+
+	ret = device_create_file(gcpm->device, &dev_attr_thermal_mdis_fan_alarm);
+	if (ret)
+		dev_err(gcpm->device, "Failed to create thermal_mdis_fan_alarm\n");
 
 	/* give time to fg driver to start */
 	schedule_delayed_work(&gcpm->init_work,

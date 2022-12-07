@@ -54,7 +54,7 @@ struct dw3000_cir_record {
  * @fp_power3: first path power component f3
  * @offset: user defined offset
  * @fp_index: index of first path record in CIR register
- * @tdoa: tdoa raw value
+ * @pdoa: pdoa raw value
  * @acc: number of symbols accumulated in CIR
  * @type: CIR type field
  * @dummy: store the dummy byte firstly received at each CIR memory reading
@@ -73,7 +73,7 @@ struct dw3000_cir_data {
 	u32 fp_power3;
 	s32 offset;
 	u16 fp_index;
-	s16 tdoa;
+	u16 pdoa;
 	u16 acc;
 	u8 type;
 	u8 dummy;

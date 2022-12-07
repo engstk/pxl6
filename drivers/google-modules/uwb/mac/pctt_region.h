@@ -34,9 +34,21 @@
 #include "pctt_session.h"
 
 #define PCTT_SESSION_ID 0
-#define PCTT_PAYLOAD_MAX_LEN 4096
 #define PCTT_BOOLEAN_MAX 1
 #define PCTT_FRAMES_MAX 2
+
+#define PCTT_TIMESTAMP_SHIFT 9
+/**
+ * map_rad_q11_to_deg_q7() - Map a Fixed Point angle to a signed 16-bit integer
+ * @ang_rad_q11: angle as Q11 fixed_point value in range [-PI, PI]
+ *
+ * Return: the angle mapped to deg q7
+ */
+static inline s16 map_rad_q11_to_deg_q7(int ang_rad_q11)
+{
+	/* 180 / (pi * (1 << 4)) => ~3,581. */
+	return ang_rad_q11 * 3581 / 1000;
+}
 
 /**
  * struct pctt_test_per_rx_results - PER_RX result for report.
@@ -94,6 +106,10 @@ struct pctt_test_per_rx_results {
 	 * @eof: No. of times end of frame event was triggered.
 	 */
 	u32 eof;
+	/**
+	 * @rssi: Received signal strength indication (RSSI).
+	 */
+	u8 rssi;
 };
 
 /**
@@ -117,10 +133,6 @@ struct pctt_test_rx_results {
 	 */
 	s16 aoa_elevation;
 	/**
-	 * @toa_gap: ToA of main path minus ToA of first path in nanosecond.
-	 */
-	u8 toa_gap;
-	/**
 	 * @phr: Received PHR (bits 0-12 as per IEEE spec).
 	 */
 	u16 phr;
@@ -128,6 +140,14 @@ struct pctt_test_rx_results {
 	 * @psdu_data_len: Length of PSDU Data(N).
 	 */
 	u16 psdu_data_len;
+	/**
+	 * @toa_gap: ToA of main path minus ToA of first path in nanosecond.
+	 */
+	u8 toa_gap;
+	/**
+	 * @rssi: Received signal strength indication (RSSI).
+	 */
+	u8 rssi;
 	/**
 	 * @psdu_data: Received PSDU Data[0:N] bytes.
 	 */
@@ -151,6 +171,52 @@ struct pctt_test_ss_twr_results {
 	 * Treply time of Responder depending on DEVICE_ROLE option.
 	 */
 	u32 measurement_rctu;
+	/**
+	 * @pdoa_azimuth_deg_q7: Phase Difference of Arrival Azimuth in deg Q7
+	 */
+	s16 pdoa_azimuth_deg_q7;
+	/**
+	 * @aoa_azimuth_deg_q7: AoA Azimuth in deg Q7
+	 */
+	s16 aoa_azimuth_deg_q7;
+	/**
+	 * @pdoa_elevation_deg_q7: Phase Difference of Arrival Elevation in deg Q7
+	 */
+	s16 pdoa_elevation_deg_q7;
+	/**
+	 * @aoa_elevation_deg_q7: AoA Elevation in deg Q7
+	 */
+	s16 aoa_elevation_deg_q7;
+	/**
+	 * @rssi: Received signal strength indication (RSSI).
+	 */
+	u8 rssi;
+};
+
+/**
+ * struct pctt_test_loopback_results - LOOPBACK result for report.
+ */
+struct pctt_test_loopback_results {
+	/**
+	 * @rssi: Received signal strength indication (RSSI).
+	 */
+	u8 rssi;
+	/**
+	 * @tx_ts_int: Integer part of TX timestamp in 1/124.8 us. resolution.
+	 */
+	u32 tx_ts_int;
+	/**
+	 * @tx_ts_frac: Fractional part of TX timestamp in 1/124.8/512 us. resolution.
+	 */
+	u16 tx_ts_frac;
+	/**
+	 * @rx_ts_int: Integer part of Rx timestamp in 1/124.8 us. resolution.
+	 */
+	u32 rx_ts_int;
+	/**
+	 * @rx_ts_frac: Fractional part of RX timestamp in 1/124.8/512 us. resolution.
+	 */
+	u16 rx_ts_frac;
 };
 
 /**
@@ -169,6 +235,10 @@ union pctt_tests_results {
 	 * @ss_twr: Result of the SS_TWR command.
 	 */
 	struct pctt_test_ss_twr_results ss_twr;
+	/**
+	 * @loopback: Result of the LOOPBACK command.
+	 */
+	struct pctt_test_loopback_results loopback;
 };
 
 /**
@@ -202,7 +272,7 @@ struct pctt_slot {
 	 */
 	bool is_immediate;
 	/**
-	 * @timeout_dtu: see (mcps802154_rx_info).timeout_dtu.
+	 * @timeout_dtu: see (mcps802154_rx_frame_config).timeout_dtu.
 	 */
 	int timeout_dtu;
 };
@@ -244,14 +314,6 @@ struct pctt_local {
 	 * @frames_remaining_nb: Number of frame remaining to do for the current test.
 	 */
 	int frames_remaining_nb;
-	/**
-	 * @data_payload: Data to put in TX test frame.
-	 */
-	u8 data_payload[PCTT_PAYLOAD_MAX_LEN];
-	/**
-	 * @data_payload_len: Length of data to put in TX test frame.
-	 */
-	int data_payload_len;
 };
 
 static inline struct pctt_local *

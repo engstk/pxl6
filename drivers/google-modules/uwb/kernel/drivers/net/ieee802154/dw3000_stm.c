@@ -75,7 +75,7 @@ int dw3000_enqueue_generic(struct dw3000 *dw, struct dw3000_stm_command *cmd)
 		return cmd->cmd(dw, cmd->in, cmd->out);
 	}
 
-	/* Mutex is used in dw3000_enqueue_generic() 
+	/* Mutex is used in dw3000_enqueue_generic()
 	* This protection will work with the spinlock in order to allow
 	* the CPU to sleep and avoid ressources wasting during spinning
 	*/
@@ -302,8 +302,11 @@ int dw3000_state_init(struct dw3000 *dw, int cpu)
 	stm->mthread = kthread_create(dw3000_event_thread, dw, "dw3000-%s",
 				      dev_name(dw->dev));
 	if (IS_ERR(stm->mthread)) {
-		return PTR_ERR(stm->mthread);
+		int err = PTR_ERR(stm->mthread);
+		stm->mthread = NULL;
+		return err;
 	}
+	get_task_struct(stm->mthread);
 	if (cpu >= 0)
 		kthread_bind(stm->mthread, (unsigned)cpu);
 	dw->dw3000_pid = stm->mthread->pid;
@@ -360,8 +363,13 @@ int dw3000_state_stop(struct dw3000 *dw)
 {
 	struct dw3000_state *stm = &dw->stm;
 
+	if (stm->mthread == NULL)
+		return 0; /* already stopped or not created yet */
+
 	/* Stop state machine thread */
 	kthread_stop(stm->mthread);
+	put_task_struct(stm->mthread);
+	stm->mthread = NULL;
 
 	dev_dbg(dw->dev, "state machine stopped\n");
 	return 0;
