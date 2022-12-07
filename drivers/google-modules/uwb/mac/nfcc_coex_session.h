@@ -42,20 +42,24 @@ struct nfcc_coex_session_params {
 	 * @channel_number: Channel to use for the session, 5 or 9.
 	 */
 	u8 channel_number;
+	/**
+	 * @version: Protocol version to use.
+	 */
+	u8 version;
 };
 
 /**
  * enum nfcc_coex_state - State of the unique session.
  * @NFCC_COEX_STATE_IDLE:
  *     Session is not used by access right now.
- * @NFCC_COEX_STATE_ACCESSING:
- *     Session is currently used on an access.
+ * @NFCC_COEX_STATE_STARTED:
+ *     Session is started.
  * @NFCC_COEX_STATE_STOPPING:
  *     Session is currently used for the last access.
  */
 enum nfcc_coex_state {
 	NFCC_COEX_STATE_IDLE,
-	NFCC_COEX_STATE_ACCESSING,
+	NFCC_COEX_STATE_STARTED,
 	NFCC_COEX_STATE_STOPPING,
 };
 
@@ -75,7 +79,7 @@ struct nfcc_coex_session {
 	/**
 	 * @get_access_info: Next access feedback get through a vendor command.
 	 */
-	struct dw3000_vendor_cmd_nfcc_coex_get_access_info get_access_info;
+	struct llhw_vendor_cmd_nfcc_coex_get_access_info get_access_info;
 	/**
 	 * @region_demand: Region access demand which contains start and duration.
 	 */
@@ -88,10 +92,6 @@ struct nfcc_coex_session {
 	 * @state: State of the unique session.
 	 */
 	enum nfcc_coex_state state;
-	/**
-	 * @started: Session is currently started.
-	 */
-	bool started;
 };
 
 /* Forward declaration. */

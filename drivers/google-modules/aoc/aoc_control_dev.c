@@ -34,6 +34,7 @@ struct stats_prvdata {
 	struct aoc_stat *discovered_stats;
 	int total_stats;
 	long service_timeout;
+	u8 memory_vote_core_id;
 };
 
 /* Driver methods */
@@ -174,7 +175,7 @@ static ssize_t memory_exception_show(struct device *dev,
 
 static DEVICE_ATTR_RO(memory_exception);
 
-static ssize_t memory_votes_show(struct device *dev,
+static ssize_t memory_votes_stats(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	struct stats_prvdata *prvdata = dev_get_drvdata(dev);
@@ -184,6 +185,11 @@ static ssize_t memory_votes_show(struct device *dev,
 	u32 i;
 	u32 bytes_written;
 	int ret;
+	const char* core_names[] = {"A32", "FF1", "HF0", "HF1"};
+
+	if (prvdata->memory_vote_core_id < 1 ||
+		prvdata->memory_vote_core_id > 4)
+		return -EINVAL;
 
 	AocCmdHdrSet(&get_count_cmd.parent, CMD_GET_MEMORY_VOTES_DATA_COUNT_ID,
 		sizeof(get_count_cmd));
@@ -198,11 +204,13 @@ static ssize_t memory_votes_show(struct device *dev,
 
 	bytes_written = 0;
 
+	bytes_written += scnprintf(buf + bytes_written, PAGE_SIZE - bytes_written,
+				"\nCore %s:\n", core_names[prvdata->memory_vote_core_id - 1]);
 	for (i = 0; i < total_count; i++) {
-
 		AocCmdHdrSet(&get_data_cmd.parent, CMD_GET_MEMORY_VOTES_DATA_ID, sizeof(get_data_cmd));
 		get_data_cmd.app_id = i;
 		get_data_cmd.valid = false;
+		get_data_cmd.core_id = prvdata->memory_vote_core_id;
 
 		ret = read_attribute(prvdata, &get_data_cmd, sizeof(get_data_cmd),
 			&get_data_cmd, sizeof(get_data_cmd));
@@ -212,7 +220,7 @@ static ssize_t memory_votes_show(struct device *dev,
 
 		if (get_data_cmd.valid) {
 			bytes_written += scnprintf(buf + bytes_written, PAGE_SIZE - bytes_written,
-				"App %hhu, votes Curr/Tot/ON %5u / %5u / %5u Last %10llu us, Dur %10llu us\n",
+				"App %2hhu, votes Curr/Tot/ON %5u / %5u / %5u Last %10llu us, Dur %10llu us\n",
 				get_data_cmd.app_id,
 				get_data_cmd.votes,
 				get_data_cmd.total_votes,
@@ -225,7 +233,18 @@ static ssize_t memory_votes_show(struct device *dev,
 	return bytes_written;
 }
 
-static DEVICE_ATTR_RO(memory_votes);
+#define DECLARE_MEMORY_VOTES(memory_votes_name, id)                            \
+	static ssize_t memory_votes_name##_show(                               \
+		struct device *dev, struct device_attribute *attr, char *buf)  \
+	{                                                                      \
+		struct stats_prvdata *prvdata = dev_get_drvdata(dev);          \
+		prvdata->memory_vote_core_id = id;                             \
+		return memory_votes_stats(dev, attr, buf);                     \
+	}                                                                      \
+	static DEVICE_ATTR_RO(memory_votes_name)
+
+DECLARE_MEMORY_VOTES(memory_votes_a32, 1);
+DECLARE_MEMORY_VOTES(memory_votes_ff1, 2);
 
 /* Driver methods */
 
@@ -500,7 +519,8 @@ static struct attribute *aoc_stats_attrs[] = {
 	&dev_attr_logging_wakeup.attr,
 	&dev_attr_hotword_wakeup.attr,
 	&dev_attr_memory_exception.attr,
-	&dev_attr_memory_votes.attr,
+	&dev_attr_memory_votes_a32.attr,
+	&dev_attr_memory_votes_ff1.attr,
 	&dev_attr_udfps_set_clock_source.attr,
 	&dev_attr_udfps_get_osc_freq.attr,
 	&dev_attr_udfps_get_disp_freq.attr,
@@ -611,6 +631,7 @@ static int aoc_control_probe(struct aoc_service_dev *sd)
 	prvdata->service = sd;
 	prvdata->service_timeout = msecs_to_jiffies(100);
 	mutex_init(&prvdata->lock);
+	prvdata->memory_vote_core_id = 1;
 
 	INIT_WORK(&prvdata->discovery_work, discovery_workitem);
 	dev_set_drvdata(dev, prvdata);

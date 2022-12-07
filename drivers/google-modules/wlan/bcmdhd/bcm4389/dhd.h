@@ -2269,6 +2269,7 @@ extern void dhd_os_oob_irq_wake_unlock(dhd_pub_t *pub);
  * It can be adjusted depending on the host platform.
  */
 #define DHD_PACKET_TIMEOUT_MS	100
+#define DHD_HANDSHAKE_TIMEOUT_MS       1000
 #define DHD_EVENT_TIMEOUT_MS	1500
 #define SCAN_WAKE_LOCK_TIMEOUT	10000
 #define MAX_TX_TIMEOUT			100

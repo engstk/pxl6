@@ -30,6 +30,7 @@
 #include <linux/netdevice.h>
 
 #include "mcps802154_i.h"
+#include "trace.h"
 
 static LIST_HEAD(registered_regions);
 static DEFINE_MUTEX(registered_regions_lock);
@@ -125,11 +126,11 @@ EXPORT_SYMBOL_GPL(mcps802154_region_close);
 void mcps802154_region_notify_stop(struct mcps802154_llhw *llhw,
 				   struct mcps802154_region *region)
 {
-	const struct mcps802154_region_ops *ops;
+	if (!region->ops->notify_stop)
+		return;
 
-	ops = region->ops;
-	if (ops->notify_stop)
-		ops->notify_stop(region);
+	trace_region_notify_stop(region);
+	region->ops->notify_stop(region);
 }
 EXPORT_SYMBOL_GPL(mcps802154_region_notify_stop);
 
@@ -165,10 +166,16 @@ int mcps802154_region_get_demand(struct mcps802154_llhw *llhw,
 				 u32 next_timestamp_dtu,
 				 struct mcps802154_region_demand *demand)
 {
+	int r;
+
 	if (!region->ops->get_demand)
 		return -EOPNOTSUPP;
 
-	return region->ops->get_demand(region, next_timestamp_dtu, demand);
+	trace_region_get_demand(region, next_timestamp_dtu);
+	r = region->ops->get_demand(region, next_timestamp_dtu, demand);
+	trace_region_get_demand_return(region, demand, r);
+
+	return r;
 }
 EXPORT_SYMBOL_GPL(mcps802154_region_get_demand);
 
@@ -206,3 +213,17 @@ void mcps802154_region_rx_skb(struct mcps802154_llhw *llhw,
 	ieee802154_rx_irqsafe(local->hw, skb, lqi);
 }
 EXPORT_SYMBOL_GPL(mcps802154_region_rx_skb);
+
+int mcps802154_region_deferred(struct mcps802154_llhw *llhw,
+			       struct mcps802154_region *region)
+{
+	struct mcps802154_local *local = llhw_to_local(llhw);
+
+	if (local->fproc.deferred && local->fproc.deferred != region)
+		return -EINVAL;
+
+	local->fproc.deferred = region;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mcps802154_region_deferred);

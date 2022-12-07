@@ -74,15 +74,54 @@ static int snd_usb_audio_vendor_set_pcm_intf(struct usb_interface *intf, int ifa
 	struct usb_device *udev;
 	struct xhci_hcd *xhci;
 	struct xhci_vendor_data *vendor_data;
+	struct usb_host_interface *cur_alt;
+	struct feedback_ep_info_args cmd_args;
+	int i;
 
 	if (!intf) {
 		pr_err("%s: Invalid parameter\n", __func__);
 		return 0;
 	}
 
+	cur_alt = intf->cur_altsetting;
 	udev = interface_to_usbdev(intf);
 	xhci = get_xhci_hcd_by_udev(udev);
 	vendor_data = xhci_to_priv(xhci)->vendor_data;
+
+	if (alt != 0 && cur_alt->desc.bNumEndpoints == 0)
+		dev_warn(&intf->dev, "Set PCM intf without endpoint\n");
+
+	for (i = 0; i < cur_alt->desc.bNumEndpoints; i++) {
+		const struct usb_endpoint_descriptor *epd = &cur_alt->endpoint[i].desc;
+
+		dev_dbg(&intf->dev, "EP[%d], bLength=%u, bDescriptorType=%u, bEndpointAddress=%u, bmAttributes=0%x, wMaxPacketSize=%u, bInterval=%u, bRefresh=%u, bSynchAddress=%u\n",
+			i, epd->bLength, epd->bDescriptorType, epd->bEndpointAddress,
+			epd->bmAttributes, epd->wMaxPacketSize, epd->bInterval,
+			epd->bRefresh, epd->bSynchAddress);
+
+		/**
+		 * By below condition, we consider the endpoint is an feedback endpoint,
+		 * 1. Its type is isoc.
+		 * 2. Its sync type is none or async. (it should be none, add async for compaibility)
+		 * 3. wMaxPacketSize <= 8, the max feedback data size is 4, reserve 8 for the future.
+		 */
+		if (usb_endpoint_type(epd) == USB_ENDPOINT_XFER_ISOC && usb_endpoint_dir_in(epd) &&
+		    ((epd->bmAttributes & USB_ENDPOINT_SYNCTYPE) == USB_ENDPOINT_SYNC_ASYNC ||
+		     (epd->bmAttributes & USB_ENDPOINT_SYNCTYPE) == USB_ENDPOINT_SYNC_NONE) &&
+		    epd->wMaxPacketSize <= 8) {
+
+			cmd_args.enabled = (alt != 0) ? true : false;
+			cmd_args.bus_id = udev->bus->busnum;
+			cmd_args.dev_num = udev->devnum;
+			cmd_args.slot_id = udev->slot_id;
+			cmd_args.ep_num = usb_endpoint_num(epd);
+			cmd_args.max_packet = epd->wMaxPacketSize;
+			cmd_args.binterval = epd->bInterval;
+			cmd_args.brefresh = epd->bRefresh;
+
+			xhci_send_feedback_ep_info(xhci, &cmd_args);
+		}
+	}
 
 	if (vendor_data->offload_state) {
 		xhci_dbg(xhci, "offloading is enabled\n");

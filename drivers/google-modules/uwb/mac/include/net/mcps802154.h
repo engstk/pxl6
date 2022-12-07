@@ -35,6 +35,12 @@
 /** Maximum number of STS segments. */
 #define MCPS802154_STS_N_SEGS_MAX 4
 
+/** Maximum number of RSSI values. */
+#define MCPS802154_RSSIS_N_MAX 2
+
+/** Maximum number of angle of arrival measurements. */
+#define MCPS802154_RX_AOA_MEASUREMENTS_MAX 3
+
 /**
  * struct mcps802154_channel - Channel parameters.
  */
@@ -61,10 +67,125 @@ struct mcps802154_channel {
  *	Support for ranging (RDEV). TODO: move to &ieee802154_hw.
  * @MCPS802154_LLHW_ERDEV:
  *	Support for enhanced ranging (ERDEV). TODO: move to &ieee802154_hw.
+ * @MCPS802154_LLHW_BPRF:
+ *	Support for BPRF.
+ * @MCPS802154_LLHW_HPRF:
+ *	Support for HPRF.
+ * @MCPS802154_LLHW_DATA_RATE_850K:
+ *	Support for data rate 110 kpbs.
+ * @MCPS802154_LLHW_DATA_RATE_6M81:
+ *	Support for data rate 6.81 Mpbs.
+ * @MCPS802154_LLHW_DATA_RATE_7M80:
+ *	Support for data rate 7.8 Mpbs.
+ * @MCPS802154_LLHW_DATA_RATE_27M2:
+ *	Support for data rate 27.2 Mpbs.
+ * @MCPS802154_LLHW_DATA_RATE_31M2:
+ *	Support for data rate 31.2 Mpbs.
+ * @MCPS802154_LLHW_DATA_RATE_CUSTOM:
+ *	Support for custom data rate, When presents extra data rate are
+ *	possible to set.
+ * @MCPS802154_LLHW_PHR_DATA_RATE_850K:
+ *	Support PHR data rate 850 kpbs.
+ * @MCPS802154_LLHW_PHR_DATA_RATE_6M81:
+ *	Support PHR data rate 6.81 Mpbs.
+ * @MCPS802154_LLHW_PRF_4:
+ *	Support Pulse Repetition Frequency 4 MHz.
+ * @MCPS802154_LLHW_PRF_16:
+ *	Support Pulse Repetition Frequency 16 MHz.
+ * @MCPS802154_LLHW_PRF_64:
+ *	Support Pulse Repetition Frequency 64 MHz.
+ * @MCPS802154_LLHW_PRF_125:
+ *	Support Pulse Repetition Frequency 125 MHz.
+ * @MCPS802154_LLHW_PRF_250:
+ *	Support Pulse Repetition Frequency 250 MHz.
+ * @MCPS802154_LLHW_PSR_16:
+ *	Support 16 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_24:
+ *	Support 24 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_32:
+ *	Support 32 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_48:
+ *	Support 48 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_64:
+ *	Support 64 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_96:
+ *	Support 96 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_128:
+ *	Support 128 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_256:
+ *	Support 256 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_1024:
+ *	Support 1024 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_PSR_4096:
+ *	Support 4096 symbols in preamble symbol repetitions.
+ * @MCPS802154_LLHW_SFD_4A:
+ *	Support SFD defined in 4a.
+ * @MCPS802154_LLHW_SFD_4Z_4:
+ *	Support SFD defined in 4z with length of 4 symbols.
+ * @MCPS802154_LLHW_SFD_4Z_8:
+ *	Support SFD defined in 4z with length of 8 symbols.
+ * @MCPS802154_LLHW_SFD_4Z_16:
+ *	Support SFD defined in 4z with length of 16 symbols.
+ * @MCPS802154_LLHW_SFD_4Z_32:
+ *	Support SFD defined in 4z with length of 32 symbols.
+ * @MCPS802154_LLHW_STS_SEGMENT_1:
+ *	Support one STS segment.
+ * @MCPS802154_LLHW_STS_SEGMENT_2:
+ *	Support two STS segments.
+ * @MCPS802154_LLHW_STS_SEGMENT_3:
+ *	Support three STS segments.
+ * @MCPS802154_LLHW_STS_SEGMENT_4:
+ *	Support four STS segments.
+ * @MCPS802154_LLHW_AOA_AZIMUTH:
+ *	Support AOA azimuth [-90°,+90°].
+ * @MCPS802154_LLHW_AOA_AZIMUTH_FULL:
+ *	Support AOA full azimuth [-180°,+180°].
+ * @MCPS802154_LLHW_AOA_ELEVATION:
+ *	Support AOA elevation [-90°,+90°].
+ * @MCPS802154_LLHW_AOA_FOM:
+ *	Support AOA figure of merit.
  */
 enum mcps802154_llhw_flags {
 	MCPS802154_LLHW_RDEV = BIT(0),
 	MCPS802154_LLHW_ERDEV = BIT(1),
+	MCPS802154_LLHW_BPRF = BIT(2),
+	MCPS802154_LLHW_HPRF = BIT(3),
+	MCPS802154_LLHW_DATA_RATE_850K = BIT(4),
+	MCPS802154_LLHW_DATA_RATE_6M81 = BIT(5),
+	MCPS802154_LLHW_DATA_RATE_7M80 = BIT(6),
+	MCPS802154_LLHW_DATA_RATE_27M2 = BIT(7),
+	MCPS802154_LLHW_DATA_RATE_31M2 = BIT(8),
+	MCPS802154_LLHW_DATA_RATE_CUSTOM = BIT(9),
+	MCPS802154_LLHW_PHR_DATA_RATE_850K = BIT(10),
+	MCPS802154_LLHW_PHR_DATA_RATE_6M81 = BIT(11),
+	MCPS802154_LLHW_PRF_4 = BIT(12),
+	MCPS802154_LLHW_PRF_16 = BIT(13),
+	MCPS802154_LLHW_PRF_64 = BIT(14),
+	MCPS802154_LLHW_PRF_125 = BIT(15),
+	MCPS802154_LLHW_PRF_250 = BIT(16),
+	MCPS802154_LLHW_PSR_16 = BIT(17),
+	MCPS802154_LLHW_PSR_24 = BIT(18),
+	MCPS802154_LLHW_PSR_32 = BIT(19),
+	MCPS802154_LLHW_PSR_48 = BIT(20),
+	MCPS802154_LLHW_PSR_64 = BIT(21),
+	MCPS802154_LLHW_PSR_96 = BIT(22),
+	MCPS802154_LLHW_PSR_128 = BIT(23),
+	MCPS802154_LLHW_PSR_256 = BIT(24),
+	MCPS802154_LLHW_PSR_1024 = BIT(25),
+	MCPS802154_LLHW_PSR_4096 = BIT(26),
+	MCPS802154_LLHW_SFD_4A = BIT(27),
+	MCPS802154_LLHW_SFD_4Z_4 = BIT(28),
+	MCPS802154_LLHW_SFD_4Z_8 = BIT(29),
+	MCPS802154_LLHW_SFD_4Z_16 = BIT(30),
+	MCPS802154_LLHW_SFD_4Z_32 = BIT(31),
+	MCPS802154_LLHW_STS_SEGMENT_1 = BIT_ULL(32),
+	MCPS802154_LLHW_STS_SEGMENT_2 = BIT_ULL(33),
+	MCPS802154_LLHW_STS_SEGMENT_3 = BIT_ULL(34),
+	MCPS802154_LLHW_STS_SEGMENT_4 = BIT_ULL(35),
+	MCPS802154_LLHW_AOA_AZIMUTH = BIT_ULL(36),
+	MCPS802154_LLHW_AOA_AZIMUTH_FULL = BIT_ULL(37),
+	MCPS802154_LLHW_AOA_ELEVATION = BIT_ULL(38),
+	MCPS802154_LLHW_AOA_FOM = BIT_ULL(39),
 };
 
 /**
@@ -131,7 +252,7 @@ struct mcps802154_llhw {
 	/**
 	 * @flags: Low-level hardware flags, see &enum mcps802154_llhw_flags.
 	 */
-	u32 flags;
+	u64 flags;
 	/**
 	 * @hw: Pointer to IEEE802154 hardware exposed by MCPS. The low-level
 	 * driver needs to update this and hw->phy according to supported
@@ -153,57 +274,61 @@ struct mcps802154_llhw {
 	 * @priv: Driver private data.
 	 */
 	void *priv;
+	/**
+	 * @rx_ctx_size: size of the context.
+	 */
+	u32 rx_ctx_size;
 };
 
 /**
- * enum mcps802154_tx_frame_info_flags - Flags for transmitting a frame.
- * @MCPS802154_TX_FRAME_TIMESTAMP_DTU:
+ * enum mcps802154_tx_frame_config_flags - Flags for transmitting a frame.
+ * @MCPS802154_TX_FRAME_CONFIG_TIMESTAMP_DTU:
  *	Start transmission at given timestamp in device time unit.
- * @MCPS802154_TX_FRAME_CCA:
+ * @MCPS802154_TX_FRAME_CONFIG_CCA:
  *	Use CCA before transmission using the programmed mode.
- * @MCPS802154_TX_FRAME_RANGING:
+ * @MCPS802154_TX_FRAME_CONFIG_RANGING:
  *	Enable precise timestamping for the transmitted frame and its response
  *	(RDEV only).
- * @MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK:
+ * @MCPS802154_TX_FRAME_CONFIG_KEEP_RANGING_CLOCK:
  *      Request that the ranging clock be kept valid after the transmission of
  *      this frame (RDEV only).
- * @MCPS802154_TX_FRAME_RANGING_PDOA:
+ * @MCPS802154_TX_FRAME_CONFIG_RANGING_PDOA:
  *	Enable phase difference of arrival measurement for the response frame
  *	(RDEV only).
- * @MCPS802154_TX_FRAME_SP1:
+ * @MCPS802154_TX_FRAME_CONFIG_SP1:
  *	Enable STS for the transmitted frame and its response, mode 1 (STS after
  *	SFD and before PHR, ERDEV only).
- * @MCPS802154_TX_FRAME_SP2:
+ * @MCPS802154_TX_FRAME_CONFIG_SP2:
  *	Enable STS for the transmitted frame and its response, mode 2 (STS after
  *	the payload, ERDEV only).
- * @MCPS802154_TX_FRAME_SP3:
+ * @MCPS802154_TX_FRAME_CONFIG_SP3:
  *	Enable STS for the transmitted frame and its response, mode 3 (STS after
  *	SFD, no PHR, no payload, ERDEV only).
- * @MCPS802154_TX_FRAME_STS_MODE_MASK:
+ * @MCPS802154_TX_FRAME_CONFIG_STS_MODE_MASK:
  *      Mask covering all the STS mode configuration values.
- * @MCPS802154_TX_FRAME_RANGING_ROUND:
+ * @MCPS802154_TX_FRAME_CONFIG_RANGING_ROUND:
  *	Inform low-level driver the transmitted frame is the start of a ranging
  *	round (RDEV only).
  *
  * If no timestamp flag is given, transmit as soon as possible.
  */
-enum mcps802154_tx_frame_info_flags {
-	MCPS802154_TX_FRAME_TIMESTAMP_DTU = BIT(0),
-	MCPS802154_TX_FRAME_CCA = BIT(1),
-	MCPS802154_TX_FRAME_RANGING = BIT(2),
-	MCPS802154_TX_FRAME_KEEP_RANGING_CLOCK = BIT(3),
-	MCPS802154_TX_FRAME_RANGING_PDOA = BIT(4),
-	MCPS802154_TX_FRAME_SP1 = BIT(5),
-	MCPS802154_TX_FRAME_SP2 = BIT(6),
-	MCPS802154_TX_FRAME_SP3 = BIT(5) | BIT(6),
-	MCPS802154_TX_FRAME_STS_MODE_MASK = BIT(5) | BIT(6),
-	MCPS802154_TX_FRAME_RANGING_ROUND = BIT(7),
+enum mcps802154_tx_frame_config_flags {
+	MCPS802154_TX_FRAME_CONFIG_TIMESTAMP_DTU = BIT(0),
+	MCPS802154_TX_FRAME_CONFIG_CCA = BIT(1),
+	MCPS802154_TX_FRAME_CONFIG_RANGING = BIT(2),
+	MCPS802154_TX_FRAME_CONFIG_KEEP_RANGING_CLOCK = BIT(3),
+	MCPS802154_TX_FRAME_CONFIG_RANGING_PDOA = BIT(4),
+	MCPS802154_TX_FRAME_CONFIG_SP1 = BIT(5),
+	MCPS802154_TX_FRAME_CONFIG_SP2 = BIT(6),
+	MCPS802154_TX_FRAME_CONFIG_SP3 = BIT(5) | BIT(6),
+	MCPS802154_TX_FRAME_CONFIG_STS_MODE_MASK = BIT(5) | BIT(6),
+	MCPS802154_TX_FRAME_CONFIG_RANGING_ROUND = BIT(7),
 };
 
 /**
- * struct mcps802154_tx_frame_info - Information for transmitting a frame.
+ * struct mcps802154_tx_frame_config - Information for transmitting a frame.
  */
-struct mcps802154_tx_frame_info {
+struct mcps802154_tx_frame_config {
 	/**
 	 * @timestamp_dtu: If timestamped, date of transmission start.
 	 */
@@ -221,7 +346,7 @@ struct mcps802154_tx_frame_info {
 	 */
 	int rx_enable_after_tx_timeout_dtu;
 	/**
-	 * @flags: See &enum mcps802154_tx_frame_info_flags.
+	 * @flags: See &enum mcps802154_tx_frame_config_flags.
 	 */
 	u8 flags;
 	/**
@@ -231,52 +356,52 @@ struct mcps802154_tx_frame_info {
 };
 
 /**
- * enum mcps802154_rx_info_flags - Flags for enabling the receiver.
- * @MCPS802154_RX_INFO_TIMESTAMP_DTU:
+ * enum mcps802154_rx_frame_config_flags - Flags for enabling the receiver.
+ * @MCPS802154_RX_FRAME_CONFIG_TIMESTAMP_DTU:
  *	Enable receiver at given timestamp in device time unit.
- * @MCPS802154_RX_INFO_AACK:
+ * @MCPS802154_RX_FRAME_CONFIG_AACK:
  *	Enable automatic acknowledgment.
- * @MCPS802154_RX_INFO_RANGING:
+ * @MCPS802154_RX_FRAME_CONFIG_RANGING:
  *	Enable precise timestamping for the received frame (RDEV only).
- * @MCPS802154_RX_INFO_KEEP_RANGING_CLOCK:
+ * @MCPS802154_RX_FRAME_CONFIG_KEEP_RANGING_CLOCK:
  *      Request that the ranging clock be kept valid after the reception of the
  *      frame (RDEV only).
- * @MCPS802154_RX_INFO_RANGING_PDOA:
+ * @MCPS802154_RX_FRAME_CONFIG_RANGING_PDOA:
  *	Enable phase difference of arrival measurement (RDEV only).
- * @MCPS802154_RX_INFO_SP1:
+ * @MCPS802154_RX_FRAME_CONFIG_SP1:
  *	Enable STS for the received frame, mode 1 (STS after SFD and before PHR,
  *	ERDEV only).
- * @MCPS802154_RX_INFO_SP2:
+ * @MCPS802154_RX_FRAME_CONFIG_SP2:
  *	Enable STS for the received frame, mode 2 (STS after the payload, ERDEV
  *	only).
- * @MCPS802154_RX_INFO_SP3:
+ * @MCPS802154_RX_FRAME_CONFIG_SP3:
  *	Enable STS for the received frame, mode 3 (STS after SFD, no PHR, no
  *	payload, ERDEV only).
- * @MCPS802154_RX_INFO_STS_MODE_MASK:
+ * @MCPS802154_RX_FRAME_CONFIG_STS_MODE_MASK:
  *      Mask covering all the STS mode configuration values.
- * @MCPS802154_RX_INFO_RANGING_ROUND:
+ * @MCPS802154_RX_FRAME_CONFIG_RANGING_ROUND:
  *	Inform low-level driver the expected received frame is the start of a
  *	ranging round (RDEV only).
  *
  * If no timestamp flag is given, enable receiver as soon as possible.
  */
-enum mcps802154_rx_info_flags {
-	MCPS802154_RX_INFO_TIMESTAMP_DTU = BIT(0),
-	MCPS802154_RX_INFO_AACK = BIT(1),
-	MCPS802154_RX_INFO_RANGING = BIT(2),
-	MCPS802154_RX_INFO_KEEP_RANGING_CLOCK = BIT(3),
-	MCPS802154_RX_INFO_RANGING_PDOA = BIT(4),
-	MCPS802154_RX_INFO_SP1 = BIT(5),
-	MCPS802154_RX_INFO_SP2 = BIT(6),
-	MCPS802154_RX_INFO_SP3 = BIT(5) | BIT(6),
-	MCPS802154_RX_INFO_STS_MODE_MASK = BIT(5) | BIT(6),
-	MCPS802154_RX_INFO_RANGING_ROUND = BIT(7),
+enum mcps802154_rx_frame_config_flags {
+	MCPS802154_RX_FRAME_CONFIG_TIMESTAMP_DTU = BIT(0),
+	MCPS802154_RX_FRAME_CONFIG_AACK = BIT(1),
+	MCPS802154_RX_FRAME_CONFIG_RANGING = BIT(2),
+	MCPS802154_RX_FRAME_CONFIG_KEEP_RANGING_CLOCK = BIT(3),
+	MCPS802154_RX_FRAME_CONFIG_RANGING_PDOA = BIT(4),
+	MCPS802154_RX_FRAME_CONFIG_SP1 = BIT(5),
+	MCPS802154_RX_FRAME_CONFIG_SP2 = BIT(6),
+	MCPS802154_RX_FRAME_CONFIG_SP3 = BIT(5) | BIT(6),
+	MCPS802154_RX_FRAME_CONFIG_STS_MODE_MASK = BIT(5) | BIT(6),
+	MCPS802154_RX_FRAME_CONFIG_RANGING_ROUND = BIT(7),
 };
 
 /**
- * struct mcps802154_rx_info - Information for enabling the receiver.
+ * struct mcps802154_rx_frame_config - Information for enabling the receiver.
  */
-struct mcps802154_rx_info {
+struct mcps802154_rx_frame_config {
 	/**
 	 * @timestamp_dtu: If timestamped, date to enable the receiver.
 	 */
@@ -287,7 +412,13 @@ struct mcps802154_rx_info {
 	 */
 	int timeout_dtu;
 	/**
-	 * @flags: See &enum mcps802154_rx_info_flags.
+	 * @frame_timeout_dtu: If no zero, timeout value for the full frame
+	 * reception. This allow limiting the length of accepted frame. The
+	 * timeout starts after &mcps802154_rx_frame_config.timeout_dtu value.
+	 */
+	int frame_timeout_dtu;
+	/**
+	 * @flags: See &enum mcps802154_rx_frame_config_flags.
 	 */
 	u8 flags;
 	/**
@@ -363,7 +494,8 @@ struct mcps802154_rx_frame_info {
 	 */
 	int frame_duration_dtu;
 	/**
-	 * @rssi: Received signal strength indication (RSSI).
+	 * @rssi: Received signal strength indication (RSSI),
+	 * absolute value in Q1 fixed point format.
 	 */
 	int rssi;
 	/**
@@ -377,16 +509,6 @@ struct mcps802154_rx_frame_info {
 	 * transmitter operates at a higher frequency (RDEV only).
 	 */
 	int ranging_offset_rctu;
-	/**
-	 * @ranging_pdoa_rad_q11: Phase difference of arrival, unit is radian
-	 * multiplied by 2048 (RDEV only).
-	 */
-	int ranging_pdoa_rad_q11;
-	/**
-	 * @ranging_aoa_rad_q11: AoA interpolated by the driver from its
-	 * calibration LUT. unit is rad multiplied by 2048 (RDEV only).
-	 */
-	int ranging_aoa_rad_q11;
 	/**
 	 * @ranging_sts_timestamp_diffs_rctu: For each SRMARKERx, difference
 	 * between the measured timestamp and the expected timestamp relative to
@@ -420,6 +542,190 @@ struct mcps802154_rx_frame_info {
 	 * @flags: See &enum mcps802154_rx_frame_info_flags.
 	 */
 	u16 flags;
+};
+
+/**
+ * enum mcps802154_rx_measurement_info_flags - Flags for measurements on a received
+ * frame.
+ * @MCPS802154_RX_MEASUREMENTS_TIMESTAMP:
+ *	Set by MCPS to request time of arrival measurement and associated figure
+ *	of merit (RDEV only).
+ * @MCPS802154_RX_MEASUREMENTS_CLOCK_OFFSET:
+ *	Set by MCPS to request clock characterization data (RDEV only).
+ * @MCPS802154_RX_MEASUREMENTS_STS_SEGS_TIMESTAMPS:
+ *	Set by MCPS to request time of arrival measurement on STS segments and
+ *	associated figure of merit (ERDEV only).
+ * @MCPS802154_RX_MEASUREMENTS_RSSIS:
+ *	Set by MCPS to request RSSI values.
+ * @MCPS802154_RX_MEASUREMENTS_AOAS:
+ *	Set by MCPS to request angle of arrival measurements, time difference of
+ *	arrival, phase difference of arrival and associated figure of merit
+ *	(RDEV only).
+ * @MCPS802154_RX_MEASUREMENTS_CIRS:
+ *	Set by MCPS to request CIR samples (RDEV only).
+ * @MCPS802154_RX_MEASUREMENTS_VENDOR0:
+ *	Set by MCPS to request first set of vendor specific measurements.
+ * @MCPS802154_RX_MEASUREMENTS_VENDOR1:
+ *	Set by MCPS to request second set of vendor specific measurements.
+ * @MCPS802154_RX_MEASUREMENTS_VENDOR2:
+ *	Set by MCPS to request third set of vendor specific measurements.
+ * @MCPS802154_RX_MEASUREMENTS_VENDOR3:
+ *	Set by MCPS to request fourth set of vendor specific measurements.
+ *
+ * The low-level driver must clear the corresponding flag if the information is
+ * not available.
+ */
+enum mcps802154_rx_measurement_info_flags {
+	MCPS802154_RX_MEASUREMENTS_TIMESTAMP = BIT(0),
+	MCPS802154_RX_MEASUREMENTS_CLOCK_OFFSET = BIT(1),
+	MCPS802154_RX_MEASUREMENTS_STS_SEGS_TIMESTAMPS = BIT(2),
+	MCPS802154_RX_MEASUREMENTS_RSSIS = BIT(3),
+	MCPS802154_RX_MEASUREMENTS_AOAS = BIT(4),
+	MCPS802154_RX_MEASUREMENTS_CIRS = BIT(5),
+	MCPS802154_RX_MEASUREMENTS_VENDOR0 = BIT(12),
+	MCPS802154_RX_MEASUREMENTS_VENDOR1 = BIT(13),
+	MCPS802154_RX_MEASUREMENTS_VENDOR2 = BIT(14),
+	MCPS802154_RX_MEASUREMENTS_VENDOR3 = BIT(15),
+};
+
+/**
+ * struct mcps802154_rx_aoa_measurements - Angle of arrival measurements on a
+ * received frame (RDEV only).
+ */
+struct mcps802154_rx_aoa_measurements {
+	/**
+	 * @tdoa_rctu: Time difference of arrival, in ranging count time unit.
+	 */
+	s16 tdoa_rctu;
+	/**
+	 * @pdoa_rad_q11: Phase difference of arrival, unit is radian multiplied
+	 * by 2048.
+	 */
+	s16 pdoa_rad_q11;
+	/**
+	 * @aoa_rad_q11: Angle of arrival, unit is radian multiplied by 2048.
+	 */
+	s16 aoa_rad_q11;
+	/**
+	 * @fom: Measurements figure of merit (FoM). Range is 0 to 255, with 0
+	 * being an invalid measure and 255 being a 100% confidence.
+	 */
+	u8 fom;
+	/**
+	 * @type: Measurement type (azimuth, elevation...). Actual value is
+	 * driver dependant.
+	 */
+	u8 type;
+};
+
+/**
+ * struct mcps802154_rx_cir_sample_window - Window of CIR samples.
+ */
+struct mcps802154_rx_cir_sample_window {
+	/**
+	 * @n_samples: The number of samples contained in the window.
+	 */
+	u16 n_samples;
+	/**
+	 * @sizeof_sample: The size of a single sample.
+	 */
+	u16 sizeof_sample;
+	/**
+	 * @samples: CIR samples values.
+	 *
+	 * Each sample is composed of the real and imaginary part which are
+	 * signed numbers. Each sample is encoded using the platform endianness
+	 * with @mcps802154_rx_cir_sample_window.sizeof_sample bytes, first half
+	 * is the real part, second half is the imaginary part.
+	 *
+	 * Must be kept valid until next received frame
+	 */
+	void *samples;
+};
+
+/**
+ * struct mcps802154_rx_cir - CIR measurements.
+ */
+struct mcps802154_rx_cir {
+	/**
+	 * @fp_index: The absolute index of the sample considered as first path.
+	 */
+	u16 fp_index;
+	/**
+	 * @fp_snr: The SNR of the sample considered as first path.
+	 */
+	s16 fp_snr;
+	/**
+	 * @fp_ns_q6: (Q10.6) Time in nanosecond of the first path index
+	 */
+	u16 fp_ns_q6;
+	/**
+	 * @pp_index: The absolute index of the sample considered as peak path.
+	 */
+	u16 pp_index;
+	/**
+	 * @pp_snr: The SNR of the sample considered as peak path.
+	 */
+	s16 pp_snr;
+	/**
+	 * @pp_ns_q6: (Q10.6) Time in nanosecond of the peak path index
+	 */
+	u16 pp_ns_q6;
+	/**
+	 * @fp_sample_offset: The offset of the first path in the sample window.
+	 */
+	u16 fp_sample_offset;
+	/**
+	 * @sample_window: CIR samples.
+	 */
+	struct mcps802154_rx_cir_sample_window sample_window;
+};
+
+/**
+ * struct mcps802154_rx_measurement_info - Measurements on a received frame.
+ */
+struct mcps802154_rx_measurement_info {
+	/**
+	 * @n_rssis: The number of RSSI computed for this frame. Depends on the
+	 * antenna set used to receive.
+	 *
+	 * Set by low-level driver.
+	 */
+	int n_rssis;
+	/**
+	 * @rssis_q1: Received signal strength indication (RSSI), array of
+	 * absolute values in Q7.1 fixed point format, unit is dBm.
+	 */
+	u8 rssis_q1[MCPS802154_RSSIS_N_MAX];
+	/**
+	 * @n_aoas: Number of angle of arrival measurements.
+	 *
+	 * Set by low-level driver.
+	 */
+	int n_aoas;
+	/**
+	 * @aoas: Angle of arrival measurements, ordered by increasing
+	 * measurement type.
+	 */
+	struct mcps802154_rx_aoa_measurements
+		aoas[MCPS802154_RX_AOA_MEASUREMENTS_MAX];
+	/**
+	 * @n_cirs: Number of parts of CIR measurements.
+	 *
+	 * Set by low-level driver.
+	 */
+	int n_cirs;
+	/**
+	 * @cirs: CIR measurements for different parts of the frame.
+	 *
+	 * Set by low-level driver, must be kept valid until next received
+	 * frame.
+	 */
+	struct mcps802154_rx_cir *cirs;
+	/**
+	 * @flags: See &enum mcps802154_rx_measurement_info_flags.
+	 */
+	int flags;
 };
 
 /**
@@ -458,6 +764,246 @@ struct mcps802154_sts_params {
 };
 
 /**
+ * enum mcps802154_prf - Pulse repetition frequency.
+ * @MCPS802154_PRF_16:
+ *	16 MHz, only used in 4a.
+ * @MCPS802154_PRF_64:
+ *	64 MHz, used for 4a and 4z BPRF.
+ * @MCPS802154_PRF_125:
+ *	125 MHz, used for 4z HPRF.
+ * @MCPS802154_PRF_250:
+ *	250 MHz, used for 4z HPRF.
+ */
+enum mcps802154_prf {
+	MCPS802154_PRF_16 = 16,
+	MCPS802154_PRF_64 = 64,
+	MCPS802154_PRF_125 = 125,
+	MCPS802154_PRF_250 = 250,
+};
+
+/**
+ * enum mcps802154_psr - Number of preamble symbol repetitions in the SYNC
+ * sequence.
+ * @MCPS802154_PSR_16:
+ *	16 symbols, used in 4a and 4z HPRF.
+ * @MCPS802154_PSR_24:
+ *	24 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_32:
+ *	32 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_48:
+ *	48 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_64:
+ *	64 symbols, used 4a and 4z BPRF and HPRF.
+ * @MCPS802154_PSR_96:
+ *	96 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_128:
+ *	128 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_256:
+ *	256 symbols, used only in 4z HPRF.
+ * @MCPS802154_PSR_1024:
+ *	1024 symbols, used only in 4a.
+ * @MCPS802154_PSR_4096:
+ *	4096 symbols, used only in 4a.
+ */
+enum mcps802154_psr {
+	MCPS802154_PSR_16 = 16,
+	MCPS802154_PSR_24 = 24,
+	MCPS802154_PSR_32 = 32,
+	MCPS802154_PSR_48 = 48,
+	MCPS802154_PSR_64 = 64,
+	MCPS802154_PSR_96 = 96,
+	MCPS802154_PSR_128 = 128,
+	MCPS802154_PSR_256 = 256,
+	MCPS802154_PSR_1024 = 1024,
+	MCPS802154_PSR_4096 = 4096,
+};
+
+/**
+ * enum mcps802154_sfd - sfd type selector.
+ * @MCPS802154_SFD_4A:
+ *	SFD defined in 4a, length of 8 symbols.
+ * @MCPS802154_SFD_4Z_4:
+ *	SFD defined in 4z, length of 4 symbols.
+ * @MCPS802154_SFD_4Z_8:
+ *	SFD defined in 4z, length of 8 symbols.
+ * @MCPS802154_SFD_4Z_16:
+ *	SFD defined in 4z, length of 16 symbols.
+ * @MCPS802154_SFD_4Z_32:
+ *	SFD defined in 4z, length of 32 symbols.
+ */
+enum mcps802154_sfd {
+	MCPS802154_SFD_4A,
+	MCPS802154_SFD_4Z_4,
+	MCPS802154_SFD_4Z_8,
+	MCPS802154_SFD_4Z_16,
+	MCPS802154_SFD_4Z_32,
+};
+
+/**
+ * enum mcps802154_data_rate - Data rate.
+ * @MCPS802154_DATA_RATE_850K:
+ *	850 kbps, used only for 4a.
+ * @MCPS802154_DATA_RATE_6M81:
+ *	6.81 Mbps, used for 4a and 4z (PRF must be 125MHz).
+ * @MCPS802154_DATA_RATE_7M80:
+ *	7.80 Mbps, only used for 4z (PRF must be 125MHz).
+ * @MCPS802154_DATA_RATE_27M2:
+ *	27.2 Mbps, used for 4a and 4z (PRF must be 250MHz).
+ * @MCPS802154_DATA_RATE_31M2:
+ *	31.2 Mbps, used for 4z (PRF must be 250MHz).
+ * NOTE: device specific values can be set to use a custom data rate.
+ */
+enum mcps802154_data_rate {
+	MCPS802154_DATA_RATE_850K = 0,
+	MCPS802154_DATA_RATE_6M81 = 6,
+	MCPS802154_DATA_RATE_7M80 = 7,
+	MCPS802154_DATA_RATE_27M2 = 27,
+	MCPS802154_DATA_RATE_31M2 = 31,
+};
+
+/**
+ * enum mcps802154_hrp_uwb_psdu_size - PSDU size in HPRF.
+ * @MCPS802154_HRP_UWB_PSDU_SIZE_1023:
+ *	1023-bytes PSDU.
+ * @MCPS802154_HRP_UWB_PSDU_SIZE_2047:
+ *	2047-bytes PSDU.
+ * @MCPS802154_HRP_UWB_PSDU_SIZE_4095:
+ *	4095-bytes PSDU.
+ */
+enum mcps802154_hrp_uwb_psdu_size {
+	MCPS802154_HRP_UWB_PSDU_SIZE_1023 = 0,
+	MCPS802154_HRP_UWB_PSDU_SIZE_2047 = 1,
+	MCPS802154_HRP_UWB_PSDU_SIZE_4095 = 2,
+};
+
+/**
+ * struct mcps802154_hrp_uwb_params - Parameters for HRP UWB.
+ *
+ * Parameters are given directly to driver without checking. The driver needs to
+ * check the parameters for supported values, but it can accept non-standard
+ * values.
+ */
+struct mcps802154_hrp_uwb_params {
+	/**
+	 * @prf: Nominal mean Pulse Repetition Frequency.
+	 *
+	 * For 4a, one of MCPS802154_PRF_16 or MCPS802154_PRF_64.
+	 *
+	 * For 4z BPRF, must be MCPS802154_PRF_64.
+	 *
+	 * For 4z HPRF, one of MCPS802154_PRF_125 or MCPS802154_PRF_250.
+	 */
+	enum mcps802154_prf prf;
+	/**
+	 * @psr: Number of preamble symbol repetitions in the SYNC sequence, or
+	 * preamble length.
+	 *
+	 * For 4a, one of 16, 64, 1024 or 4096.
+	 *
+	 * For 4z BPRF, must be 64.
+	 *
+	 * For 4z HPRF, one of 16, 24, 32, 48, 64, 96, 128 or 256.
+	 */
+	enum mcps802154_psr psr;
+	/**
+	 * @sfd_selector: SFD type selector.
+	 *
+	 * When MCPS802154_SFD_4A, use short SFD defined in 802.15.4a.
+	 *
+	 * When MCPS802154_SFD_4Z_*, use SFD defined in 802.15.4z, with length
+	 * 4, 8, 16 or 32.
+	 *
+	 * For 4a, must be MCPS802154_SFD_4A.
+	 *
+	 * For 4z BPRF, one of MCPS802154_SFD_4A or MCPS802154_SFD_4Z_8.
+	 *
+	 * For 4z HPRF, one of MCPS802154_SFD_4Z_{4,8,16,32}.
+	 */
+	enum mcps802154_sfd sfd_selector;
+	/**
+	 * @data_rate: Data rate.
+	 *
+	 * For 4a, one of 850 kbps, 6.81 Mbps or 27.2 Mbps.
+	 *
+	 * For 4z BPRF, must be 6.81 Mbps.
+	 *
+	 * For 4z HPRF at 125 MHz, use 6.81 Mbps or 7.8 Mbps.
+	 *
+	 * For 4z HPRF at 250 MHz, use 27.2 Mbps or 31.2 Mbps.
+	 */
+	int data_rate;
+	/**
+	 * @phr_hi_rate: Use high PHR data rate, for 4z BPRF only.
+	 *
+	 * For 4a and 4z HPRF, this parameter is ignored.
+	 *
+	 * For 4z BPRF, when enabled use 6.81 Mbps, otherwise use 850 kbps.
+	 */
+	bool phr_hi_rate;
+	/**
+	 * @psdu_size: PSDU size in HPRF.
+	 */
+	enum mcps802154_hrp_uwb_psdu_size psdu_size;
+};
+
+/**
+ * enum mcps802154_antenna_caps - Antenna set capabilities
+ * @MCPS802154_AOA_X_AXIS:
+ *   Antenna can report azimuth
+ * @MCPS802154_AOA_Y_AXIS:
+ *   Antenna can report elevation
+ */
+enum mcps802154_antenna_caps {
+	MCPS802154_AOA_X_AXIS = BIT(0),
+	MCPS802154_AOA_Y_AXIS = BIT(1),
+};
+
+/**
+ * enum mcps802154_power_state - Power states
+ * @MCPS802154_PWR_STATE_OFF:
+ *	Power off state.
+ * @MCPS802154_PWR_STATE_SLEEP:
+ * 	Deep sleep state.
+ * @MCPS802154_PWR_STATE_IDLE:
+ * 	Idle state, ready to transmit or receive.
+ * @MCPS802154_PWR_STATE_RX:
+ * 	Receive state.
+ * @MCPS802154_PWR_STATE_TX:
+ * 	Transmit state.
+ * @MCPS802154_PWR_STATE_MAX:
+ * 	Total power states count.
+ */
+enum mcps802154_power_state {
+	MCPS802154_PWR_STATE_OFF,
+	MCPS802154_PWR_STATE_SLEEP,
+	MCPS802154_PWR_STATE_IDLE,
+	MCPS802154_PWR_STATE_RX,
+	MCPS802154_PWR_STATE_TX,
+	MCPS802154_PWR_STATE_MAX
+};
+
+/**
+ * struct mcps802154_power_state_stats - Statistics for a power state.
+ * @dur: Duration in this power state in ns.
+ * @count: Count of transitions in this power state.
+ */
+struct mcps802154_power_state_stats {
+	u64 dur;
+	u64 count;
+};
+
+/**
+ * struct mcps802154_power_stats - Global power statistics.
+ * @power_state_stats: Array of power statistics for each power state.
+ * @interrupts: Hardware interrupts count on the device.
+ */
+struct mcps802154_power_stats {
+	struct mcps802154_power_state_stats
+		power_state_stats[MCPS802154_PWR_STATE_MAX];
+	u64 interrupts;
+};
+
+/**
  * struct mcps802154_ops - Callback from MCPS to the driver.
  */
 struct mcps802154_ops {
@@ -475,7 +1021,7 @@ struct mcps802154_ops {
 	/**
 	 * @tx_frame: Transmit a frame. skb contains the buffer starting from
 	 * the IEEE 802.15.4 header. The low-level driver should send the frame
-	 * as specified in info. Receiver should be disabled automatically
+	 * as specified in config. Receiver should be disabled automatically
 	 * unless a frame is being received.
 	 *
 	 * The &frame_idx parameter gives the index of the frame in a "block".
@@ -489,7 +1035,7 @@ struct mcps802154_ops {
 	 * -EBUSY if a reception is happening right now, or any other error.
 	 */
 	int (*tx_frame)(struct mcps802154_llhw *llhw, struct sk_buff *skb,
-			const struct mcps802154_tx_frame_info *info,
+			const struct mcps802154_tx_frame_config *config,
 			int frame_idx, int next_delay_dtu);
 	/**
 	 * @rx_enable: Enable receiver.
@@ -505,8 +1051,8 @@ struct mcps802154_ops {
 	 * timestamp, or any other error.
 	 */
 	int (*rx_enable)(struct mcps802154_llhw *llhw,
-			 const struct mcps802154_rx_info *info, int frame_idx,
-			 int next_delay_dtu);
+			 const struct mcps802154_rx_frame_config *config,
+			 int frame_idx, int next_delay_dtu);
 	/**
 	 * @rx_disable: Disable receiver, or a programmed receiver enabling,
 	 * unless a frame reception is happening right now.
@@ -537,6 +1083,14 @@ struct mcps802154_ops {
 	 */
 	int (*rx_get_error_frame)(struct mcps802154_llhw *llhw,
 				  struct mcps802154_rx_frame_info *info);
+	/**
+	 * @rx_get_measurement: Get measurement associated with a received
+	 * frame.
+	 *
+	 * Return: 0, -EBUSY if no longer available, or any other error.
+	 */
+	int (*rx_get_measurement)(struct mcps802154_llhw *llhw, void *rx_ctx,
+				  struct mcps802154_rx_measurement_info *info);
 	/**
 	 * @idle: Put the device into idle mode without time limit or until the
 	 * given timestamp.  The driver should call &mcps802154_timer_expired()
@@ -581,9 +1135,11 @@ struct mcps802154_ops {
 	 *
 	 * Return: The RMARKER timestamp.
 	 */
-	u64 (*tx_timestamp_dtu_to_rmarker_rctu)(struct mcps802154_llhw *llhw,
-						u32 tx_timestamp_dtu,
-						int ant_set_id);
+	u64 (*tx_timestamp_dtu_to_rmarker_rctu)(
+		struct mcps802154_llhw *llhw, u32 tx_timestamp_dtu,
+		const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+		const struct mcps802154_channel *channel_params,
+		int ant_set_id);
 	/**
 	 * @difference_timestamp_rctu: Compute the difference between two
 	 * timestamp values.
@@ -617,9 +1173,18 @@ struct mcps802154_ops {
 	 *
 	 * Return: 0 or error.
 	 */
-	int (*set_hrp_uwb_params)(struct mcps802154_llhw *llhw, int prf,
-				  int psr, int sfd_selector, int phr_rate,
-				  int data_rate);
+	int (*set_hrp_uwb_params)(
+		struct mcps802154_llhw *llhw,
+		const struct mcps802154_hrp_uwb_params *params);
+	/**
+	 * @check_hrp_uwb_params: Check that the HRP parameters are compatible
+	 * with the hardware capabilities.
+	 *
+	 * Return: 0 or error.
+	 */
+	int (*check_hrp_uwb_params)(
+		struct mcps802154_llhw *llhw,
+		const struct mcps802154_hrp_uwb_params *params);
 	/**
 	 * @set_sts_params: Set STS parameters (ERDEV only).
 	 *
@@ -706,6 +1271,20 @@ struct mcps802154_ops {
 	 */
 	int (*vendor_cmd)(struct mcps802154_llhw *llhw, u32 vendor_id,
 			  u32 subcmd, void *data, size_t data_len);
+	/**
+	 * @get_antenna_caps: Return antenna set capabilites.
+	 *
+	 * Return: 0 or error.
+	 */
+	int (*get_antenna_caps)(struct mcps802154_llhw *llhw, int ant_idx,
+				u32 *caps);
+	/**
+	 * @get_power_stats: Get the power statistics.
+	 *
+	 * Return: 0 or error.
+	 */
+	int (*get_power_stats)(struct mcps802154_llhw *llhw,
+			       struct mcps802154_power_stats *pwr_stats);
 #ifdef CONFIG_MCPS802154_TESTMODE
 	/**
 	 * @testmode_cmd: Run a testmode command.
@@ -736,9 +1315,11 @@ struct mcps802154_ops {
  * @MCPS802154_RX_ERROR_FILTERED:
  *	A received frame was rejected due to frame filter.
  * @MCPS802154_RX_ERROR_SFD_TIMEOUT:
- *	A preamble has been detected but no SFD.
+ *	A preamble has been detected but without SFD.
  * @MCPS802154_RX_ERROR_OTHER:
  *	Other error, frame reception is aborted.
+ * @MCPS802154_RX_ERROR_PHR_DECODE:
+ *	the preamble and SFD have been detected but without PHR.
  * @MCPS802154_RX_ERROR_HPDWARN:
  *   Too late to program RX operation.
  */
@@ -750,7 +1331,8 @@ enum mcps802154_rx_error_type {
 	MCPS802154_RX_ERROR_FILTERED = 4,
 	MCPS802154_RX_ERROR_SFD_TIMEOUT = 5,
 	MCPS802154_RX_ERROR_OTHER = 6,
-	MCPS802154_RX_ERROR_HPDWARN = 7,
+	MCPS802154_RX_ERROR_PHR_DECODE = 7,
+	MCPS802154_RX_ERROR_HPDWARN = 8,
 };
 
 /**

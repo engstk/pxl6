@@ -325,6 +325,7 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 {
 	u32 adjusted_tx_power;
 	u16 target_boost = 0;
+	u16 base_target_boost = 0;
 	u16 current_boost = 0;
 	u16 best_boost_abs = 0;
 	u16 best_boost = 0;
@@ -332,7 +333,7 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 	u16 lower_limit = 0;
 
 	const u8 *lut = NULL;
-	uint8_t ref_tx_power_byte[4]; /* txpwr of each segments (UM 8.2.2.20) */
+	uint8_t ref_tx_power_byte[4]; /* txpwr of each segment (UM 8.2.2.20) */
 	uint8_t adj_tx_power_byte[4];
 	uint8_t adj_tx_power_boost[4];
 	u8 best_index;
@@ -341,29 +342,31 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 	u8 ref_fine_gain;
 	bool within_margin_flag;
 	bool reached_max_fine_gain_flag;
+	bool shortcut_optim_flag;
 	u8 unlock;
-	u8 i;
+	u8 i, j;
 	int k;
 	int ret = 0;
 
-	target_boost = calculate_power_boost(frame_duration_us);
+	base_target_boost = calculate_power_boost(frame_duration_us);
 	if (th_boost) {
-		*th_boost = target_boost;
+		*th_boost = base_target_boost;
 	}
 	switch (channel) {
 	case 5:
 		lut = fine_gain_lut_chan5;
-		if (target_boost >= MAX_BOOST_CH5)
-			target_boost = MAX_BOOST_CH5;
+		if (base_target_boost > MAX_BOOST_CH5)
+			base_target_boost = MAX_BOOST_CH5;
 		break;
 	default:
 		lut = fine_gain_lut_chan9;
-		if (target_boost >= MAX_BOOST_CH9)
-			target_boost = MAX_BOOST_CH9;
+		if (base_target_boost > MAX_BOOST_CH9)
+			base_target_boost = MAX_BOOST_CH9;
 		break;
 	}
 
 	for (k = 0; k < 4; k++) {
+		target_boost = base_target_boost;
 		current_boost = 0;
 		best_boost_abs = 0;
 		best_boost = 0;
@@ -371,6 +374,7 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 		best_coarse_gain = 0;
 		within_margin_flag = false;
 		reached_max_fine_gain_flag = false;
+		shortcut_optim_flag = false;
 		unlock = 0;
 		i = 0;
 		ref_tx_power_byte[k] = (u8)(ref_tx_power >> (k << 3));
@@ -382,10 +386,14 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 		i = ref_fine_gain;
 
 		/* Avoid re-doing the same math four times */
-		if (k > 0 && (ref_tx_power_byte[k] == ref_tx_power_byte[0])) {
-			adj_tx_power_byte[k] = adj_tx_power_byte[0];
-			continue;
+		for (j = 0; !shortcut_optim_flag && (j < k); j++) {
+			if (ref_tx_power_byte[k] == ref_tx_power_byte[j]) {
+				adj_tx_power_byte[k] = adj_tx_power_byte[j];
+				shortcut_optim_flag = true;
+			}
 		}
+		if (shortcut_optim_flag)
+			continue;
 
 		/* PHR power must be 6dB lower than PSDU */
 		if (k == 1) {
@@ -458,8 +466,7 @@ static u32 adjust_tx_power(u16 frame_duration_us, u32 ref_tx_power, u8 channel,
 
 			/* Corner case: when fine gain setting is very low, it can happened that
 			 * current boost is already larger than target_boost but not within margin.
-			 * Then, just return current solution.
-			 */
+			 * Then, just return current solution. */
 			if (current_boost >= upper_limit &&
 			    !reached_max_fine_gain_flag) {
 				break;

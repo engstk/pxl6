@@ -374,6 +374,7 @@ int dw3000_configure_sts_iv(struct dw3000 *dw, const u8 *iv);
 int dw3000_load_sts_iv(struct dw3000 *dw);
 int dw3000_configure_sys_cfg(struct dw3000 *dw, struct dw3000_config *config);
 int dw3000_configure_hw_addr_filt(struct dw3000 *dw, unsigned long changed);
+int dw3000_enable_auto_fcs(struct dw3000 *dw, bool on);
 
 int dw3000_clear_sys_status(struct dw3000 *dw, u32 clear_bits);
 int dw3000_clear_dss_status(struct dw3000 *dw, u8 clear_bits);
@@ -383,12 +384,20 @@ int dw3000_read_rdb_status(struct dw3000 *dw, u8 *status);
 int dw3000_read_sys_status(struct dw3000 *dw, u32 *status);
 int dw3000_read_sys_time(struct dw3000 *dw, u32 *sys_time);
 
+int dw3000_rx_store_rssi(struct dw3000 *dw, struct dw3000_rssi *rssi,
+			 u8 pkt_sts);
+int dw3000_rx_calc_rssi(struct dw3000 *dw, struct dw3000_rssi *rssi,
+			struct mcps802154_rx_frame_info *info, u8 pkt_sts);
+int dw3000_rx_stats_inc(struct dw3000 *dw, const enum dw3000_stats_items item,
+			struct dw3000_rssi *rssi);
+
 u32 dw3000_get_dtu_time(struct dw3000 *dw);
 
 int dw3000_forcetrxoff(struct dw3000 *dw);
 
 int dw3000_do_rx_enable(struct dw3000 *dw,
-			const struct mcps802154_rx_info *info, int frame_idx);
+			const struct mcps802154_rx_frame_config *config,
+			int frame_idx);
 int dw3000_rx_enable(struct dw3000 *dw, bool rx_delayed, u32 date_dtu,
 		     u32 timeout_pac);
 int dw3000_rx_disable(struct dw3000 *dw);
@@ -400,9 +409,9 @@ void dw3000_rx_stats_clear(struct dw3000 *dw);
 int dw3000_enable_autoack(struct dw3000 *dw, bool force);
 int dw3000_disable_autoack(struct dw3000 *dw, bool force);
 
-struct mcps802154_tx_frame_info;
+struct mcps802154_tx_frame_config;
 int dw3000_do_tx_frame(struct dw3000 *dw,
-		       const struct mcps802154_tx_frame_info *info,
+		       const struct mcps802154_tx_frame_config *config,
 		       struct sk_buff *skb, int frame_idx);
 
 int dw3000_tx_setcwtone(struct dw3000 *dw, bool on);
@@ -446,6 +455,7 @@ int dw3000_idle(struct dw3000 *dw, bool timestamp, u32 timestamp_dtu,
 		enum operational_state next_operational_state);
 int dw3000_deepsleep_wakeup_now(struct dw3000 *dw,
 				dw3000_idle_timeout_cb idle_timeout_cb,
+				u32 timestamp_dtu,
 				enum operational_state next_operational_state);
 int dw3000_can_deep_sleep(struct dw3000 *dw, int delay_us);
 int dw3000_trace_rssi_info(struct dw3000 *dw, u32 regid, char *chipver);
@@ -453,6 +463,8 @@ int dw3000_trace_rssi_info(struct dw3000 *dw, u32 regid, char *chipver);
 int dw3000_testmode_continuous_tx_start(struct dw3000 *dw, u32 frame_length,
 					u32 rate);
 int dw3000_testmode_continuous_tx_stop(struct dw3000 *dw);
+int dw3000_nfcc_coex_prepare_config(struct dw3000 *dw);
+int dw3000_nfcc_coex_restore_config(struct dw3000 *dw);
 
 /* Preamble length related information. */
 struct dw3000_plen_info {
@@ -495,6 +507,21 @@ static inline int dw3000_compute_shr_dtu(struct dw3000 *dw)
 						   DW3000_PRF_16M]
 			.chip_per_symb;
 	const int shr_symb = plen_info->symb + dw3000_get_sfd_symb(dw);
+	return shr_symb * chip_per_symb / DW3000_CHIP_PER_DTU;
+}
+
+static inline int compute_shr_dtu_from_conf(
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params)
+{
+	const int preamble_symb = hrp_uwb_params->psr;
+	const int chip_per_symb =
+		_prf_info[hrp_uwb_params->prf == MCPS802154_PRF_64 ?
+				  DW3000_PRF_64M :
+				  DW3000_PRF_16M]
+			.chip_per_symb;
+	/* The only possible sfd number of symbols is 8. */
+	const int sfd_symb = 8;
+	const int shr_symb = preamble_symb + sfd_symb;
 	return shr_symb * chip_per_symb / DW3000_CHIP_PER_DTU;
 }
 
@@ -654,6 +681,23 @@ static inline u32 dw3000_sys_time_to_dtu(struct dw3000 *dw, u32 sys_time,
 }
 
 /**
+ * dw3000_sys_time_rctu_to_dtu() - compute current DTU time from RCTU.
+ * @dw: the DW device.
+ * @timestamp_rctu: The DW device RX_STAMP register value in RCTU to convert to DTU.
+ * The RCTU, Ranging Counter Time Unit, is approximately 15.65 picoseconds long.
+ *
+ * Return: The corresponding DTU time.
+ */
+static inline u32 dw3000_sys_time_rctu_to_dtu(struct dw3000 *dw,
+					      u64 timestamp_rctu)
+{
+	u32 sys_time = (u32)(timestamp_rctu / DW3000_RCTU_PER_SYS);
+	u32 dtu_near = dw3000_get_dtu_time(dw) - DW3000_DTU_FREQ;
+
+	return dw3000_sys_time_to_dtu(dw, sys_time, dtu_near);
+}
+
+/**
  * dw3000_reset_rctu_conv_state() - reset RCTU converter
  * @dw: the DW device
  *
@@ -674,6 +718,13 @@ static inline void dw3000_resync_rctu_conv_state(struct dw3000 *dw)
 {
 	if (dw->rctu_conv.state == ALIGNED_SYNCED)
 		dw->rctu_conv.state = ALIGNED;
+}
+
+static inline int pac_to_dly(struct mcps802154_llhw *llhw, int pac)
+{
+	struct dw3000 *dw = llhw->priv;
+
+	return (pac * dw->chips_per_pac / DW3000_CHIP_PER_DLY);
 }
 
 static inline int dtu_to_pac(struct mcps802154_llhw *llhw, int timeout_dtu)

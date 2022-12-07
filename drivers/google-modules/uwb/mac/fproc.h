@@ -68,6 +68,8 @@ struct mcps802154_fproc {
 	struct sk_buff *tx_skb;
 	/** @frame_idx: Frame index for multiple frames method. */
 	size_t frame_idx;
+	/** @deferred: Pointer to region context requesting deferred call. */
+	struct mcps802154_region *deferred;
 };
 
 extern const struct mcps802154_fproc_state mcps802154_fproc_stopped;
@@ -126,6 +128,15 @@ void mcps802154_fproc_access_done(struct mcps802154_local *local, bool error);
 void mcps802154_fproc_access_reset(struct mcps802154_local *local);
 
 /**
+ * mcps802154_fproc_schedule_change() - Try a schedule change.
+ * @local: MCPS private data.
+ *
+ * Inform the current state that the schedule has changed. To be called
+ * exclusively from CA.
+ */
+void mcps802154_fproc_schedule_change(struct mcps802154_local *local);
+
+/**
  * mcps802154_fproc_stopped_handle() - Go to stopped.
  * @local: MCPS private data.
  */
@@ -146,6 +157,17 @@ void mcps802154_fproc_broken_handle(struct mcps802154_local *local);
  */
 int mcps802154_fproc_nothing_handle(struct mcps802154_local *local,
 				    struct mcps802154_access *access);
+
+/**
+ * mcps802154_fproc_idle_handle() - Handle inactivity with trust in
+ * access->duration.
+ * @local: MCPS private data.
+ * @access: Current access to handle.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_fproc_idle_handle(struct mcps802154_local *local,
+				 struct mcps802154_access *access);
 
 /**
  * mcps802154_fproc_rx_handle() - Handle an RX access and change state.

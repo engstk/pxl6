@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -47,7 +47,7 @@ void fira_round_hopping_sequence_destroy(struct fira_session *session);
  *
  * Return: Round index.
  */
-int fira_round_hopping_sequence_get(struct fira_session *session,
+int fira_round_hopping_sequence_get(const struct fira_session *session,
 				    int block_index);
 
 #endif /* NET_MCPS802154_FIRA_ROUND_HOPPING_SEQUENCE_H */

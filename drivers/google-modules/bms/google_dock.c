@@ -41,6 +41,10 @@
 #define DOCK_13_5W_VOUT_UV		9000000
 #define DOCK_ICL_RAMP_DELAY_DEFAULT_MS	(4 * 1000)	/* 4 seconds */
 
+/* type detection */
+#define EXT_DETECT_DELAY_MS		(1000)
+#define EXT_DETECT_RETRIES		(3)
+
 struct dock_drv {
 	struct device *device;
 	struct power_supply *psy;
@@ -50,6 +54,7 @@ struct dock_drv {
 	struct delayed_work init_work;
 	struct delayed_work notifier_work;
 	struct delayed_work icl_ramp_work;
+	struct delayed_work detect_work;
 	struct alarm icl_ramp_alarm;
 	struct notifier_block nb;
 	struct gvotable_election *dc_icl_votable;
@@ -61,6 +66,9 @@ struct dock_drv {
 	u32 icl_ramp_delay_ms;
 	int online;
 	int pogo_ovp_en;
+	int voltage_max;		/* > 10.5V mean Ext1 else > 5V mean Ext2. */
+	int detect_retries;
+	struct wakeup_source *detect_ws;
 };
 
 
@@ -226,9 +234,13 @@ static void google_dock_notifier_check_dc(struct dock_drv *dock)
 		google_dock_set_icl(dock);
 		google_dock_icl_ramp_reset(dock);
 		google_dock_icl_ramp_start(dock);
+		dock->voltage_max = -1;		/* Dock detection started, but not done */
+		schedule_delayed_work(&dock->detect_work,
+				msecs_to_jiffies(EXT_DETECT_DELAY_MS));
 	} else {
 		google_dock_vote_defaults(dock);
 		google_dock_icl_ramp_reset(dock);
+		dock->voltage_max = 0;
 
 		dev_info(dock->device, "%s: online: %d->0\n",
 			 __func__, dock->online);
@@ -331,6 +343,10 @@ static int dock_get_property(struct power_supply *psy,
 
 		/* success */
 		ret = 0;
+		break;
+
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = dock->voltage_max;
 		break;
 
 	default:
@@ -449,6 +465,52 @@ retry_init_work:
 			      msecs_to_jiffies(DOCK_DELAY_INIT_MS));
 }
 
+static void google_dock_detect_work(struct work_struct *work)
+{
+	struct dock_drv *dock = container_of(work, struct dock_drv,
+					     detect_work.work);
+	union power_supply_propval val;
+	int err = 0;
+
+	if (!dock->dc_psy)
+		return;
+
+	__pm_stay_awake(dock->detect_ws);
+	err = power_supply_get_property(dock->dc_psy, POWER_SUPPLY_PROP_PRESENT, &val);
+	if (err < 0 || val.intval == 0) {
+		if (err < 0)
+			dev_dbg(dock->device, "Error getting charging status: %d\n", err);
+		else
+			dev_dbg(dock->device, "dc_psy not present. Retrying detection\n");
+		goto dock_detect_retry;
+	}
+
+	err = power_supply_get_property(dock->dc_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
+	if (err) {
+		if (err != -EAGAIN)
+			dev_dbg(dock->device, "failed to read dc supply voltage err: %d\n", err);
+
+		goto dock_detect_retry;
+	}
+
+	dev_info(dock->device, "dc_psy v=%d, retries=%d\n", val.intval, dock->detect_retries);
+
+	dock->voltage_max = val.intval;
+	dock->detect_retries = EXT_DETECT_RETRIES;
+	__pm_relax(dock->detect_ws);
+	power_supply_changed(dock->psy);
+	return;
+
+dock_detect_retry:
+	if (dock->detect_retries) {
+		dock->detect_retries--;
+		schedule_delayed_work(&dock->detect_work, msecs_to_jiffies(EXT_DETECT_DELAY_MS));
+	} else {
+		dock->detect_retries = EXT_DETECT_RETRIES;
+		__pm_relax(dock->detect_ws);
+	}
+}
+
 static int google_dock_probe(struct platform_device *pdev)
 {
 	const char *dc_psy_name;
@@ -478,11 +540,21 @@ static int google_dock_probe(struct platform_device *pdev)
 	mutex_init(&dock->dock_lock);
 	INIT_DELAYED_WORK(&dock->init_work, google_dock_init_work);
 	INIT_DELAYED_WORK(&dock->icl_ramp_work, google_dock_icl_ramp_work);
+	INIT_DELAYED_WORK(&dock->detect_work, google_dock_detect_work);
 	alarm_init(&dock->icl_ramp_alarm, ALARM_BOOTTIME,
 		   google_dock_icl_ramp_alarm_cb);
 
 	dock->icl_ramp_delay_ms = DOCK_ICL_RAMP_DELAY_DEFAULT_MS;
 	dock->online = 0;
+
+	dock->voltage_max = 0;
+	dock->detect_retries = EXT_DETECT_RETRIES;
+
+	dock->detect_ws = wakeup_source_register(NULL, "Detect");
+	if (!dock->detect_ws) {
+		dev_err(dock->device, "Failed to register dock detect wakeup source\n");
+		return -ENOMEM;
+	}
 
 	platform_set_drvdata(pdev, dock);
 
@@ -539,6 +611,8 @@ static int google_dock_remove(struct platform_device *pdev)
 	cancel_delayed_work(&dock->notifier_work);
 	cancel_delayed_work(&dock->icl_ramp_work);
 	alarm_try_to_cancel(&dock->icl_ramp_alarm);
+	cancel_delayed_work(&dock->detect_work);
+	wakeup_source_unregister(dock->detect_ws);
 
 	return 0;
 }

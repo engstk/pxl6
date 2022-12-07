@@ -92,14 +92,16 @@ static int get_usb_dev_hub_info(struct usb_device *udev)
 static void usb_vendor_dev_suspend(void *unused, struct usb_device *udev,
 				   pm_message_t msg, int *bypass)
 {
+	struct xhci_hcd *xhci;
+	int usb_audio_count = 0;
 	bool usb_playback = false;
 	bool usb_capture = false;
 	enum usb_dev_hub usb_dev_hub;
 
-	if (!udev) {
-		*bypass = 0;
+	*bypass = 0;
+
+	if (!udev)
 		return;
-	}
 
 	usb_dev_hub = get_usb_dev_hub_info(udev);
 
@@ -107,14 +109,28 @@ static void usb_vendor_dev_suspend(void *unused, struct usb_device *udev,
 	 * We don't change dummy_hcd's behavior, the dummy_hcd is in bus 1.
 	 * We don't change undefined device neither.
 	 */
-	if (usb_dev_hub >= USB1 && usb_dev_hub <= USB1_1) {
-		*bypass = 0;
+	if (usb_dev_hub >= USB1 && usb_dev_hub <= USB1_1)
+		return;
+
+	xhci = get_xhci_hcd_by_udev(udev);
+	if (!xhci) {
+		dev_err(&udev->dev, "%s: couldn't get xhci\n", __func__);
 		return;
 	}
 
-	usb_playback = aoc_alsa_usb_playback_enabled();
-	usb_capture = aoc_alsa_usb_capture_enabled();
-	*bypass = 0;
+	usb_audio_count = xhci_get_usb_audio_count(xhci);
+
+	if (usb_audio_count > 0) {
+		/*
+		 * We query playback/capture states only when there is USB
+		 * audio device connected.
+		 */
+		usb_playback = aoc_alsa_usb_playback_enabled();
+		usb_capture = aoc_alsa_usb_capture_enabled();
+	} else {
+		/* If no USB audio device is connected, we won't skip suspend. */
+		return;
+	}
 
 	/*
 	 * Note: Currently we also allow the UNDEFINED case go to check

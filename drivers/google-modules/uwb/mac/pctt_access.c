@@ -21,6 +21,7 @@
  * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
+#include <linux/math64.h>
 #include "pctt_access.h"
 #include "pctt_region.h"
 #include "pctt_region_call.h"
@@ -32,18 +33,34 @@
 #include <net/pctt_region_params.h>
 #include <asm/unaligned.h>
 
-#define PCTT_STS_FOM_THRESHOLD 153
+#include "warn_return.h"
 
-static void pctt_set_sts_params(struct mcps802154_sts_params *sts_params,
-				u32 sts_index)
+#define PCTT_STS_FOM_THRESHOLD 153
+/* The FC-PHY shall have a block timing tolerance of +/-100 ppm as
+   specified in IEEE Std 802.15.4z-2020, subclause 6.9.7.2. */
+#define PCTT_MARGIN_PPM 200
+
+static inline int pctt_rx_margin(int duration)
+{
+	return duration / (1000000 / PCTT_MARGIN_PPM);
+}
+
+static void
+pctt_set_sts_params(struct mcps802154_sts_params *sts_params,
+		    const struct pctt_session_params *session_params)
 {
 	const u8 key[AES_KEYSIZE_128] = { 0x14, 0x14, 0x86, 0x74, 0xd1, 0xd3,
 					  0x36, 0xaa, 0xf8, 0x60, 0x50, 0xa8,
 					  0x14, 0xeb, 0x22, 0xf };
 	u8 *iv = sts_params->v;
+	u8 seg_len = session_params->sts_length == PCTT_STS_LENGTH_128 ?
+			     128 :
+			     session_params->sts_length == PCTT_STS_LENGTH_32 ?
+			     32 :
+			     64;
 
-	sts_params->n_segs = 1;
-	sts_params->seg_len = 64;
+	sts_params->n_segs = session_params->number_of_sts_segments;
+	sts_params->seg_len = seg_len;
 	sts_params->sp2_tx_gap_4chips = 0;
 	sts_params->sp2_rx_gap_4chips[0] = 0;
 	sts_params->sp2_rx_gap_4chips[1] = 0;
@@ -52,9 +69,29 @@ static void pctt_set_sts_params(struct mcps802154_sts_params *sts_params,
 
 	/* Overflow is not propagated to the next IV */
 	put_unaligned_be32(0x362eeb34u, &iv[0]);
-	put_unaligned_be32(0xc44fa8fbu + sts_index, &iv[sizeof(u32)]);
+	put_unaligned_be32(0xc44fa8fbu + session_params->sts_index,
+			   &iv[sizeof(u32)]);
 	put_unaligned_be64(0xd37ec3ca1f9a3de4ull, &iv[sizeof(u64)]);
 	memcpy(sts_params->key, key, AES_KEYSIZE_128);
+}
+
+static void pctt_randomize_psdu(struct pctt_local *local)
+{
+	struct pctt_session *session = &local->session;
+	struct pctt_session_params *p = &session->params;
+
+	if (p->randomize_psdu && session->first_access) {
+		const int A = 1664525, B = 1013904223;
+		/* First byte of data is used as seed. */
+		u32 state = p->data_payload[0];
+		u8 *buf = p->data_payload;
+		int size = p->data_payload_len;
+		int i;
+		for (i = 0; i < size; i++) {
+			state = A * state + B;
+			buf[i] = state >> 8;
+		}
+	}
 }
 
 /**
@@ -77,26 +114,26 @@ static void pctt_access_setup_frame(struct pctt_local *local,
 	bool is_rframe = p->rframe_config != PCTT_RFRAME_CONFIG_SP0;
 
 	if (is_rframe) {
-		pctt_set_sts_params(sts_params, p->sts_index);
+		pctt_set_sts_params(sts_params, p);
 		sts_params_for_access = sts_params;
 	}
 
 	if (slot->is_tx) {
 		u8 flags = slot->is_immediate ?
 				   0 :
-				   MCPS802154_TX_FRAME_TIMESTAMP_DTU;
+				   MCPS802154_TX_FRAME_CONFIG_TIMESTAMP_DTU;
 
 		if (is_rframe) {
 			if (p->rframe_config == PCTT_RFRAME_CONFIG_SP3)
-				flags |= MCPS802154_TX_FRAME_SP3;
+				flags |= MCPS802154_TX_FRAME_CONFIG_SP3;
 			else if (p->rframe_config == PCTT_RFRAME_CONFIG_SP2)
-				flags |= MCPS802154_TX_FRAME_SP2;
+				flags |= MCPS802154_TX_FRAME_CONFIG_SP2;
 			else
-				flags |= MCPS802154_TX_FRAME_SP1;
+				flags |= MCPS802154_TX_FRAME_CONFIG_SP1;
 		}
 		*frame = (struct mcps802154_access_frame){
 			.is_tx = true,
-			.tx_frame_info = {
+			.tx_frame_config = {
 				.timestamp_dtu = frame_dtu,
 				.flags = flags,
 				.ant_set_id = p->tx_antenna_selection,
@@ -106,24 +143,31 @@ static void pctt_access_setup_frame(struct pctt_local *local,
 	} else {
 		u8 flags = slot->is_immediate ?
 				   0 :
-				   MCPS802154_RX_INFO_TIMESTAMP_DTU;
-		u16 request = MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU;
+				   MCPS802154_RX_FRAME_CONFIG_TIMESTAMP_DTU;
+		u16 request = MCPS802154_RX_FRAME_INFO_TIMESTAMP_RCTU |
+			      MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU |
+			      MCPS802154_RX_FRAME_INFO_RSSI;
 
 		if (is_rframe) {
-			flags |= MCPS802154_RX_INFO_RANGING;
 			request |= MCPS802154_RX_FRAME_INFO_RANGING_STS_FOM;
-
+			flags |= MCPS802154_RX_FRAME_CONFIG_RANGING;
+			if (session->cmd_id == PCTT_ID_ATTR_SS_TWR) {
+				flags |=
+					MCPS802154_RX_FRAME_CONFIG_RANGING_PDOA;
+				request |=
+					MCPS802154_RX_FRAME_INFO_RANGING_PDOA;
+			}
 			if (p->rframe_config == PCTT_RFRAME_CONFIG_SP3)
-				flags |= MCPS802154_RX_INFO_SP3;
+				flags |= MCPS802154_RX_FRAME_CONFIG_SP3;
 			else if (p->rframe_config == PCTT_RFRAME_CONFIG_SP2)
-				flags |= MCPS802154_RX_INFO_SP2;
+				flags |= MCPS802154_RX_FRAME_CONFIG_SP2;
 			else
-				flags |= MCPS802154_RX_INFO_SP1;
+				flags |= MCPS802154_RX_FRAME_CONFIG_SP1;
 		}
 		*frame = (struct mcps802154_access_frame){
 			.is_tx = false,
 			.rx = {
-				.info = {
+				.frame_config = {
 					.timestamp_dtu = frame_dtu,
 					.flags = flags,
 					.timeout_dtu = slot->timeout_dtu,
@@ -140,15 +184,15 @@ static struct sk_buff *pctt_tx_get_frame(struct mcps802154_access *access,
 					 int frame_idx)
 {
 	struct pctt_local *local = access_to_local(access);
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
 	struct sk_buff *skb = NULL;
 
-	if (local->data_payload_len) {
-		/* FIXME: Which size is the good one?
-		 *  - 1024,
-		 *  - local->data_payload_len,
-		 *  - PCTT_PAYLOAD_MAX_LEN(4096). */
-		skb = mcps802154_frame_alloc(local->llhw, 1024, GFP_KERNEL);
-		skb_put_data(skb, local->data_payload, local->data_payload_len);
+	if (p->data_payload_len) {
+		skb = mcps802154_frame_alloc(local->llhw, p->data_payload_len,
+					     GFP_KERNEL);
+		if (skb)
+			skb_put_data(skb, p->data_payload, p->data_payload_len);
 	}
 
 	return skb;
@@ -171,11 +215,13 @@ static void pctt_tx_return(struct mcps802154_access *access, int frame_idx,
 
 static bool pctt_rx_sts_good(const struct mcps802154_rx_frame_info *i)
 {
+	int idx;
 	if (!(i->flags & MCPS802154_RX_FRAME_INFO_RANGING_STS_FOM))
 		return false;
-	/* Only one segment for the moment. */
-	if (i->ranging_sts_fom[0] < PCTT_STS_FOM_THRESHOLD)
-		return false;
+	for (idx = 0; idx < MCPS802154_STS_N_SEGS_MAX; idx++) {
+		if (i->ranging_sts_fom[idx] < PCTT_STS_FOM_THRESHOLD)
+			return false;
+	}
 	return true;
 }
 
@@ -192,6 +238,34 @@ static void pctt_rx_frame_ss_twr(struct pctt_local *local,
 			local->results.status =
 				PCTT_STATUS_RANGING_RX_PHY_TOA_FAILED;
 			return;
+		}
+		if (!pctt_rx_sts_good(info)) {
+			local->results.status =
+				PCTT_STATUS_RANGING_RX_PHY_STS_FAILED;
+			return;
+		}
+		if (info->flags & MCPS802154_RX_FRAME_INFO_RANGING_PDOA) {
+			struct mcps802154_rx_measurement_info info = {};
+			int r;
+
+			info.flags |= MCPS802154_RX_MEASUREMENTS_AOAS;
+			r = mcps802154_rx_get_measurement(local->llhw, NULL,
+							  &info);
+			if (!r &&
+			    info.flags & MCPS802154_RX_MEASUREMENTS_AOAS &&
+			    info.n_aoas) {
+				/* TODO: Find which aoas index to use */
+				ss_twr->pdoa_azimuth_deg_q7 =
+					map_rad_q11_to_deg_q7(
+						info.aoas[0].pdoa_rad_q11);
+				ss_twr->aoa_azimuth_deg_q7 =
+					map_rad_q11_to_deg_q7(
+						info.aoas[0].aoa_rad_q11);
+			}
+		}
+
+		if (info->flags & MCPS802154_RX_FRAME_INFO_RSSI) {
+			ss_twr->rssi = info->rssi;
 		}
 
 		ss_twr->rx_timestamps_rctu = info->timestamp_rctu;
@@ -218,6 +292,7 @@ static void pctt_rx_frame_ss_twr(struct pctt_local *local,
 			ss_twr->tx_timestamps_rctu =
 				mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
 					local->llhw, frame_dtu,
+					access->hrp_uwb_params, access->channel,
 					p->tx_antenna_selection);
 
 			pctt_access_setup_frame(local, s, frame_dtu, frame,
@@ -240,58 +315,65 @@ static void pctt_rx_frame_ss_twr(struct pctt_local *local,
 	}
 }
 
-static void pctt_rx_frame_per_rx(struct pctt_local *local,
+static void pctt_rx_frame_per_rx(struct pctt_local *local, struct sk_buff *skb,
 				 const struct mcps802154_rx_frame_info *info,
 				 enum mcps802154_rx_error_type error)
 {
 	struct pctt_test_per_rx_results *per_rx = &local->results.tests.per_rx;
 
-	if (info) {
-		const struct pctt_session_params *p = &local->session.params;
-		bool is_rframe = p->rframe_config != PCTT_RFRAME_CONFIG_SP0;
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
+	bool has_sts = p->rframe_config != PCTT_RFRAME_CONFIG_SP0;
 
-		if (is_rframe) {
-			if (pctt_rx_sts_good(info))
-				per_rx->sts_found++;
-			else
-				local->results.status =
-					PCTT_STATUS_RANGING_RX_PHY_STS_FAILED;
+	if (info) {
+		if (info->flags & MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU) {
+			session->next_timestamp_dtu = info->timestamp_dtu;
+			session->first_rx_synchronized = true;
+		}
+		if (info->flags & MCPS802154_RX_FRAME_INFO_RSSI) {
+			if (!per_rx->rssi || per_rx->rssi > info->rssi)
+				per_rx->rssi = info->rssi;
 		}
 	}
+	session->next_timestamp_dtu +=
+		p->gap_duration_dtu - pctt_rx_margin(p->gap_duration_dtu);
 
 	switch (error) {
 	case MCPS802154_RX_ERROR_NONE:
+	case MCPS802154_RX_ERROR_BAD_CKSUM:
 		per_rx->acq_detect++;
 		per_rx->sync_cir_ready++;
 		per_rx->sfd_found++;
 		per_rx->eof++;
+		if (has_sts && pctt_rx_sts_good(info))
+			per_rx->sts_found++;
+		if (skb && (skb->len != p->data_payload_len ||
+			    (!p->randomize_psdu &&
+			     memcmp(skb->data, p->data_payload, skb->len))))
+			per_rx->psdu_bit_error++;
+		if (error == MCPS802154_RX_ERROR_BAD_CKSUM)
+			per_rx->psdu_dec_error++;
 		break;
 	case MCPS802154_RX_ERROR_SFD_TIMEOUT:
-		per_rx->acq_reject++;
-		per_rx->sfd_fail++;
-		break;
-	case MCPS802154_RX_ERROR_BAD_CKSUM:
-		per_rx->psdu_bit_error++;
-		per_rx->eof++;
-		per_rx->rx_fail++;
 		per_rx->acq_detect++;
-		per_rx->sync_cir_ready++;
-		per_rx->sfd_found++;
+		per_rx->sfd_fail++;
 		break;
 	case MCPS802154_RX_ERROR_UNCORRECTABLE:
 	case MCPS802154_RX_ERROR_FILTERED:
 	case MCPS802154_RX_ERROR_HPDWARN:
 	case MCPS802154_RX_ERROR_OTHER:
-		per_rx->rx_fail++;
+	case MCPS802154_RX_ERROR_PHR_DECODE:
 		per_rx->acq_detect++;
 		per_rx->sync_cir_ready++;
 		per_rx->sfd_found++;
 		if (error == MCPS802154_RX_ERROR_OTHER) {
-			per_rx->phr_dec_error++;
 			per_rx->psdu_dec_error++;
+		} else if (error == MCPS802154_RX_ERROR_PHR_DECODE) {
+			per_rx->phr_dec_error++;
 		}
 		break;
 	case MCPS802154_RX_ERROR_TIMEOUT:
+		per_rx->rx_fail++;
 		break;
 	}
 }
@@ -314,10 +396,14 @@ static void pctt_rx_frame_rx(struct pctt_local *local, struct sk_buff *skb,
 			rx->rx_done_ts_int = (info->timestamp_rctu >> 32) &
 					     0xfffffffe;
 			rx->rx_done_ts_frac = info->timestamp_rctu & 0xffff;
-		} else
+		} else {
 			local->results.status =
 				PCTT_STATUS_RANGING_RX_PHY_TOA_FAILED;
-	}
+		}
+		if (info->flags & MCPS802154_RX_FRAME_INFO_RSSI)
+			rx->rssi = info->rssi;
+	} else
+		local->results.status = PCTT_STATUS_RANGING_RX_TIMEOUT;
 }
 
 static void pctt_rx_frame(struct mcps802154_access *access, int frame_idx,
@@ -327,13 +413,29 @@ static void pctt_rx_frame(struct mcps802154_access *access, int frame_idx,
 {
 	struct pctt_local *local = access_to_local(access);
 	struct pctt_session *session = &local->session;
+	struct llhw_vendor_cmd_pctt_get_frame_info frame_info = {};
 
 	local->frames_remaining_nb--;
+
+	if (error == MCPS802154_RX_ERROR_BAD_CKSUM) {
+		struct mcps802154_access_frame *frame =
+			&access->frames[frame_idx];
+		int r;
+
+		frame_info.info.flags = frame->rx.frame_info_flags_request;
+		r = mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
+					  LLHW_VENDOR_CMD_PCTT_GET_FRAME_INFO,
+					  &frame_info, sizeof(frame_info));
+		if (!r) {
+			skb = frame_info.skb;
+			info = &frame_info.info;
+		}
+	}
 
 	if (session->cmd_id == PCTT_ID_ATTR_SS_TWR)
 		pctt_rx_frame_ss_twr(local, info);
 	else if (session->cmd_id == PCTT_ID_ATTR_PER_RX)
-		pctt_rx_frame_per_rx(local, info, error);
+		pctt_rx_frame_per_rx(local, skb, info, error);
 	else
 		pctt_rx_frame_rx(local, skb, info);
 
@@ -351,6 +453,7 @@ static void pctt_rx_frame(struct mcps802154_access *access, int frame_idx,
 	case MCPS802154_RX_ERROR_UNCORRECTABLE:
 	case MCPS802154_RX_ERROR_HPDWARN:
 	case MCPS802154_RX_ERROR_OTHER:
+	case MCPS802154_RX_ERROR_PHR_DECODE:
 		local->results.status = PCTT_STATUS_RANGING_RX_PHY_DEC_FAILED;
 		break;
 	}
@@ -371,6 +474,7 @@ static void pctt_access_done(struct mcps802154_access *access, bool error)
 		local->results.status = PCTT_STATUS_RANGING_INTERNAL_ERROR;
 
 	switch (session->cmd_id) {
+	case PCTT_ID_ATTR_LOOPBACK:
 	case PCTT_ID_ATTR_SS_TWR:
 	case PCTT_ID_ATTR_RX:
 		end_of_test = true;
@@ -389,7 +493,7 @@ static void pctt_access_done(struct mcps802154_access *access, bool error)
 		int r;
 
 		r = mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
-					  DW3000_VENDOR_CMD_PCTT_SETUP_HW, NULL,
+					  LLHW_VENDOR_CMD_PCTT_SETUP_HW, NULL,
 					  0);
 
 		if (r)
@@ -415,10 +519,11 @@ static struct mcps802154_access *
 pctt_get_access_periodic_tx(struct pctt_local *local, u32 next_timestamp_dtu)
 {
 	struct pctt_session *session = &local->session;
-	const struct pctt_test_params *tp = &session->test_params;
+	const struct pctt_session_params *p = &session->params;
 	struct mcps802154_access *access = &local->access;
 	struct pctt_slot *s = local->slots;
 	u32 frame_dtu;
+	access->hrp_uwb_params = &session->hrp_uwb_params;
 
 	/* Unique frame in this access. */
 	*s = (struct pctt_slot){
@@ -437,7 +542,9 @@ pctt_get_access_periodic_tx(struct pctt_local *local, u32 next_timestamp_dtu)
 	access->frames = local->frames;
 	access->timestamp_dtu = frame_dtu;
 	/* Compute next transmit date. */
-	session->next_timestamp_dtu = frame_dtu + tp->gap_duration_dtu;
+	session->next_timestamp_dtu = frame_dtu + p->gap_duration_dtu;
+
+	pctt_randomize_psdu(local);
 
 	return access;
 }
@@ -445,24 +552,123 @@ pctt_get_access_periodic_tx(struct pctt_local *local, u32 next_timestamp_dtu)
 static struct mcps802154_access *
 pctt_get_access_per_rx(struct pctt_local *local, u32 next_timestamp_dtu)
 {
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
 	struct mcps802154_access *access = &local->access;
 	struct pctt_slot *s = local->slots;
+	u32 frame_timestamp_dtu;
+	access->hrp_uwb_params = &session->hrp_uwb_params;
 
 	/* Unique frame in this access. */
 	*s = (struct pctt_slot){
-		.is_immediate = true,
-		.timeout_dtu = -1,
+		.is_immediate = !session->first_rx_synchronized,
+		.timeout_dtu = session->first_rx_synchronized ?
+				       2 * pctt_rx_margin(p->gap_duration_dtu) :
+				       -1,
 	};
 
-	pctt_access_setup_frame(local, s, next_timestamp_dtu, &local->frames[0],
-				&local->sts_params[0]);
+	frame_timestamp_dtu = session->first_rx_synchronized ?
+				      session->next_timestamp_dtu :
+				      next_timestamp_dtu;
+
+	pctt_access_setup_frame(local, s, frame_timestamp_dtu,
+				&local->frames[0], &local->sts_params[0]);
 
 	access->ops = &pctt_access_ops;
 	access->method = MCPS802154_ACCESS_METHOD_MULTI;
-	access->timestamp_dtu = next_timestamp_dtu;
-	access->duration_dtu = 0;
+	access->timestamp_dtu = frame_timestamp_dtu;
+	access->duration_dtu =
+		session->first_rx_synchronized ? p->gap_duration_dtu : 0;
 	access->n_frames = 1;
 	access->frames = local->frames;
+
+	return access;
+}
+
+static int pctt_handle_loopback(struct mcps802154_access *access)
+{
+	struct pctt_local *local = access_to_local(access);
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
+	struct llhw_vendor_cmd_pctt_handle_loopback handle_loopback = {};
+
+	handle_loopback.ant_set_id = p->tx_antenna_selection;
+	handle_loopback.data_payload = p->data_payload;
+	handle_loopback.data_payload_len = p->data_payload_len;
+
+	return mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
+				     LLHW_VENDOR_CMD_PCTT_HANDLE_LOOPBACK,
+				     &handle_loopback, sizeof(handle_loopback));
+}
+
+static int pctt_tx_done_loopback(struct mcps802154_access *access)
+{
+	struct pctt_local *local = access_to_local(access);
+	struct pctt_session *session = &local->session;
+	const struct pctt_session_params *p = &session->params;
+	struct llhw_vendor_cmd_pctt_get_loopback_info loopback_info = {};
+	int r;
+
+	r = mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
+				  LLHW_VENDOR_CMD_PCTT_GET_LOOPBACK_INFO,
+				  &loopback_info, sizeof(loopback_info));
+	if (r)
+		return r;
+
+	local->results.status = loopback_info.success ?
+					PCTT_STATUS_RANGING_SUCCESS :
+					PCTT_STATUS_RANGING_TX_FAILED;
+
+	local->results.tests.loopback.rssi = loopback_info.rssi;
+
+	if (loopback_info.success) {
+		/* Compare data received with the one sent. */
+		struct sk_buff *rx_skb = loopback_info.skb;
+		WARN_RETURN_ON(!rx_skb, -EFAULT);
+
+		if ((rx_skb->len != p->data_payload_len) ||
+		    memcmp(rx_skb->data, p->data_payload, rx_skb->len)) {
+			local->results.status = PCTT_STATUS_RANGING_TX_FAILED;
+		}
+
+		/* Free rx_frame skb. */
+		kfree_skb(rx_skb);
+	}
+
+	local->results.tests.loopback.rx_ts_int =
+		(u32)(loopback_info.rx_timestamp_rctu >> PCTT_TIMESTAMP_SHIFT);
+	local->results.tests.loopback.rx_ts_frac =
+		(u16)(loopback_info.rx_timestamp_rctu &
+		      (((unsigned long)1 << PCTT_TIMESTAMP_SHIFT) - 1));
+	local->results.tests.loopback.tx_ts_int =
+		(u32)(loopback_info.tx_timestamp_rctu >> PCTT_TIMESTAMP_SHIFT);
+	local->results.tests.loopback.tx_ts_frac =
+		(u16)(loopback_info.tx_timestamp_rctu &
+		      (((unsigned long)1 << PCTT_TIMESTAMP_SHIFT) - 1));
+
+	/* Request end of current access. */
+	return 1;
+}
+
+struct mcps802154_access_vendor_ops pctt_access_ops_loopback = {
+	.common = {
+		.access_done = pctt_access_done,
+	},
+	.handle = pctt_handle_loopback,
+	.tx_done = pctt_tx_done_loopback,
+};
+
+static struct mcps802154_access *
+pctt_get_access_loopback(struct pctt_local *local, u32 next_timestamp_dtu)
+{
+	struct mcps802154_access *access = &local->access;
+
+	access->method = MCPS802154_ACCESS_METHOD_VENDOR;
+	access->vendor_ops = &pctt_access_ops_loopback;
+	access->duration_dtu = 0;
+	access->timestamp_dtu = next_timestamp_dtu;
+	access->n_frames = 0;
+	access->frames = NULL;
 	return access;
 }
 
@@ -477,6 +683,7 @@ pctt_get_access_ss_twr(struct pctt_local *local, u32 next_timestamp_dtu)
 	int nb_frames;
 	u32 frame_dtu;
 	int i;
+	access->hrp_uwb_params = &session->hrp_uwb_params;
 
 	/* First frames. */
 	*s = (struct pctt_slot){
@@ -497,6 +704,7 @@ pctt_get_access_ss_twr(struct pctt_local *local, u32 next_timestamp_dtu)
 		ss_twr->tx_timestamps_rctu =
 			mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
 				local->llhw, next_timestamp_dtu,
+				access->hrp_uwb_params, access->channel,
 				p->tx_antenna_selection);
 	}
 
@@ -512,10 +720,6 @@ pctt_get_access_ss_twr(struct pctt_local *local, u32 next_timestamp_dtu)
 		pctt_access_setup_frame(local, s, frame_dtu, frame, sts_params);
 		frame_dtu += p->slot_duration_dtu;
 	}
-
-	if (!local->frames[0].is_tx)
-		local->frames[0].rx.frame_info_flags_request |=
-			MCPS802154_RX_FRAME_INFO_TIMESTAMP_DTU;
 
 	access->method = MCPS802154_ACCESS_METHOD_MULTI;
 	access->ops = &pctt_access_ops;
@@ -547,6 +751,9 @@ struct mcps802154_access *pctt_get_access(struct mcps802154_region *region,
 	case PCTT_ID_ATTR_RX:
 		access = pctt_get_access_per_rx(local, next_timestamp_dtu);
 		break;
+	case PCTT_ID_ATTR_LOOPBACK:
+		access = pctt_get_access_loopback(local, next_timestamp_dtu);
+		break;
 	case PCTT_ID_ATTR_SS_TWR:
 		access = pctt_get_access_ss_twr(local, next_timestamp_dtu);
 		break;
@@ -562,7 +769,7 @@ struct mcps802154_access *pctt_get_access(struct mcps802154_region *region,
 		int r;
 
 		r = mcps802154_vendor_cmd(local->llhw, VENDOR_QORVO_OUI,
-					  DW3000_VENDOR_CMD_PCTT_SETUP_HW,
+					  LLHW_VENDOR_CMD_PCTT_SETUP_HW,
 					  &session->setup_hw,
 					  sizeof(session->setup_hw));
 		if (r) {

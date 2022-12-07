@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -38,7 +38,7 @@ struct fira_round_hopping_sequence;
  * Return: 0 or error.
  */
 int fira_round_hopping_crypto_encrypt(
-	struct fira_round_hopping_sequence *round_hopping_sequence,
+	const struct fira_round_hopping_sequence *round_hopping_sequence,
 	const u8 *data, u8 *out);
 
 /**

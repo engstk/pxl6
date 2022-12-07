@@ -28,6 +28,7 @@
 #include "dw3000.h"
 
 #define TLV_MAX_NB_SLOTS 4
+#define DW3000_NFCC_COEX_SESSION_ID_DEFAULT 0
 
 /**
  * enum dw3000_nfcc_coex_tlv_type - TLVs types.
@@ -43,6 +44,8 @@
  *	Indicate error condition.
  * @DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS:
  *	Indicate the UWB clock offset in V2 protocol.
+ * @DW3000_NFCC_COEX_TLV_TYPE_STOP_SESSION:
+ *	Indicate the stop session in V3 protocol.
  */
 enum dw3000_nfcc_coex_tlv_type {
 	DW3000_NFCC_COEX_TLV_TYPE_UNSPEC,
@@ -52,6 +55,7 @@ enum dw3000_nfcc_coex_tlv_type {
 	DW3000_NFCC_COEX_TLV_TYPE_TLV_UWBCNT_OFFS,
 	DW3000_NFCC_COEX_TLV_TYPE_ERROR,
 	DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS,
+	DW3000_NFCC_COEX_TLV_TYPE_STOP_SESSION
 };
 
 /**

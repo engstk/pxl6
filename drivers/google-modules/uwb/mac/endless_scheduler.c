@@ -92,7 +92,8 @@ static int mcps802154_endless_scheduler_update_schedule(
 	/* Can not fail, only possible error is invalid parameters. */
 	WARN_RETURN(r);
 
-	r = mcps802154_schedule_add_region(schedule_update, region, 0, 0);
+	r = mcps802154_schedule_add_region(schedule_update, region, 0, 0,
+					   false);
 
 	return r;
 }
