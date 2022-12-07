@@ -1677,7 +1677,7 @@ void p9221_chip_init_params(struct p9221_charger_data *chgr, u16 chip_id)
 		chgr->reg_set_fod_addr = P9221R5_FOD_REG;
 		break;
 	case P9222_CHIP_ID:
-		chgr->reg_tx_id_addr = P9221R5_PROP_TX_ID_REG;
+		chgr->reg_tx_id_addr = P9222RE_PROP_TX_ID_REG;
 		chgr->reg_tx_mfg_code_addr = P9222RE_TX_MFG_CODE_REG;
 		chgr->reg_packet_type_addr = 0;
 		chgr->reg_set_pp_buf_addr = P9221R5_DATA_SEND_BUF_START;
@@ -1842,6 +1842,17 @@ int p9221_chip_init_funcs(struct p9221_charger_data *chgr, u16 chip_id)
 }
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
+int p9xxx_gpio_set_value(struct p9221_charger_data *chgr, unsigned gpio, int value)
+{
+	if (gpio <= 0)
+		return -EINVAL;
+
+	logbuffer_log(chgr->log, "%s: set gpio %d to %d\n", __func__, gpio, value);
+	gpio_set_value_cansleep(gpio, value);
+
+	return 0;
+}
+
 static int p9xxx_gpio_get_direction(struct gpio_chip *chip,
 				    unsigned int offset)
 {
@@ -1890,6 +1901,9 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 	case P9XXX_GPIO_CPOUT_CTL_EN:
 		if (p9221_is_epp(charger))
 			break;
+		/* No need if DD is triggered */
+		if (charger->trigger_power_mitigation)
+			break;
 		/* b/174068520: set vout to 5.2 for BPP_WLC_RX+OTG */
 		if (value)
 			ret = charger->chip_set_vout_max(charger, P9412_BPP_WLC_OTG_VOUT);
@@ -1903,9 +1917,8 @@ static void p9xxx_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 		gpio_direction_output(charger->pdata->wlc_en, value);
 		break;
 	case P9XXX_GPIO_DC_SW_EN:
-		if (charger->pdata->dc_switch_gpio < 0)
-			break;
-		gpio_set_value_cansleep(charger->pdata->dc_switch_gpio, value);
+		ret = p9xxx_gpio_set_value(charger, charger->pdata->dc_switch_gpio, value);
+		break;
 	default:
 		ret = -EINVAL;
 		break;

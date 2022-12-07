@@ -54,6 +54,8 @@
 
 #define REENABLE_RTX_DELAY	3000
 
+#define P9XXX_VOUT_5480MV	5480
+
 enum wlc_align_codes {
 	WLC_ALIGN_CHECKING = 0,
 	WLC_ALIGN_MOVE,
@@ -595,22 +597,80 @@ static int p9221_set_switch_reg(struct p9221_charger_data *charger, bool enable)
 }
 
 #define EPP_MODE_REQ_PWR		15
+#define EPP_MODE_REQ_VOUT		12000
+static int p9xxx_set_bypass_mode(struct p9221_charger_data *charger)
+{
+	const int req_pwr = EPP_MODE_REQ_PWR;
+	int i, count, ret;
+	u8 cdmode, currpwr;
+	u32 vout_mv;
+
+	/* Check it's in Cap Div mode */
+	ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
+	if (ret || (cdmode & CDMODE_BYPASS_MODE))
+		return ret;
+	dev_info(&charger->client->dev, "cdmode_reg=%02x\n", cdmode);
+
+	for (count = 0; count < 3; count++) {
+		/* Change the Requested Power to 15W */
+		ret = charger->reg_write_8(charger, P9412_PROP_REQ_PWR_REG, req_pwr * 2);
+		if (ret == 0)
+			ret = charger->chip_set_cmd(charger, PROP_REQ_PWR_CMD);
+		if (ret)
+			dev_warn(&charger->client->dev,
+				 "Fail to request Tx power(%d)\n", ret);
+
+		/* total 5 seconds wait and early exit when WLC offline */
+		for (i = 0; i < 50; i += 1) {
+			usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
+			if (!charger->online) {
+				dev_err(&charger->client->dev, "%s: WLC offline\n", __func__);
+				return -ENODEV;
+			}
+		}
+
+		/* Check PropCurrPwr and P9412 Vout */
+		vout_mv = 0;
+		currpwr = 0;
+		ret = charger->chip_get_vout(charger, &vout_mv);
+		ret |= charger->reg_read_8(charger, P9412_PROP_CURR_PWR_REG, &currpwr);
+		dev_info(&charger->client->dev, "count=%d, currpwr=%02x, vout_mv=%u\n",
+			 count, currpwr, vout_mv);
+		if (ret == 0 && currpwr == (req_pwr * 2) && vout_mv < EPP_MODE_REQ_VOUT)
+			break;
+	}
+
+	if (count == 3) {
+		dev_err(&charger->client->dev, "%s: timeout for change to bypass mode\n", __func__);
+		return -ETIMEDOUT;
+	}
+
+	/* Request Bypass mode */
+	ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
+	if (ret) {
+		u8 mode_sts = 0, err_sts = 0;
+		int rc;
+
+		rc = charger->reg_read_8(charger, P9412_PROP_MODE_STATUS_REG, &mode_sts);
+		rc |= charger->reg_read_8(charger, P9412_PROP_MODE_ERR_STS_REG, &err_sts);
+		dev_err(&charger->client->dev,
+			"Fail to change to bypass mode(%d), rc=%d sts=%02x, err=%02x\n",
+			ret, rc, mode_sts, err_sts);
+	}
+
+	return ret;
+}
+
 static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 {
 	const int dc_sw_gpio = charger->pdata->dc_switch_gpio;
 	const int extben_gpio = charger->pdata->ext_ben_gpio;
-	const int req_pwr = EPP_MODE_REQ_PWR;
-	int ret, i;
-	u8 cdmode;
-
-	if (!charger->wlc_dc_enabled)
-		return 0;
+	int ret;
 
 	charger->wlc_dc_enabled = false;
-	if (dc_sw_gpio >= 0)
-		gpio_set_value_cansleep(dc_sw_gpio, 0);
-	if (extben_gpio)
-		gpio_set_value_cansleep(extben_gpio, 0);
+
+	p9xxx_gpio_set_value(charger, dc_sw_gpio, 0);
+	p9xxx_gpio_set_value(charger, extben_gpio, 0);
 
 	p9221_set_switch_reg(charger, false);
 
@@ -620,46 +680,25 @@ static int p9221_reset_wlc_dc(struct p9221_charger_data *charger)
 
 	gvotable_cast_int_vote(charger->dc_icl_votable, P9221_HPP_VOTER, 0, false);
 
-	/* Check it's in Cap Div mode */
-	ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
-	if (ret == 0)
-		dev_info(&charger->client->dev,
-			 "p9221_reset_wlc_dc: cdmode_reg=%02x\n", cdmode);
-	if (cdmode & CDMODE_BYPASS_MODE)
-		return 0;
-
-	/* Change the Requested Power to 15W */
-	ret = charger->reg_write_8(charger, P9412_PROP_REQ_PWR_REG, req_pwr * 2);
-	if (ret == 0) {
-		ret = charger->chip_set_cmd(charger, PROP_REQ_PWR_CMD);
-		if (ret)
-			dev_err(&charger->client->dev,
-				"p9221_reset_wlc_dc: Fail to request Tx power(%d)\n", ret);
-	}
-
-	/* total 3 seconds wait and early exit when WLC offline */
-	for (i = 0; i < 30; i += 1) {
-		usleep_range(100 * USEC_PER_MSEC, 120 * USEC_PER_MSEC);
-		if (!charger->online)
-			return 0;
-	}
-
-	/* Request Bypass mode */
-	ret = charger->chip_capdiv_en(charger, CDMODE_BYPASS_MODE);
+	ret = p9xxx_set_bypass_mode(charger);
 	if (ret) {
-		dev_err(&charger->client->dev,
-			"p9221_reset_wlc_dc: Fail to change to bypass mode(%d)\n", ret);
+		/*
+		 * going to go offline and reset the state when
+		 * 1. fail to change to bypass mode
+		 * 2. WLC offline(normal)
+		 * 3. MW wcin is 0 but WLC chip Vout > 0
+		 */
+		gvotable_cast_bool_vote(charger->wlc_disable_votable,
+					P9221_HPP_VOTER, true);
+		usleep_range(200 * USEC_PER_MSEC, 220 * USEC_PER_MSEC);
+		gvotable_cast_bool_vote(charger->wlc_disable_votable,
+					P9221_HPP_VOTER, false);
 	} else {
-		ret = charger->reg_read_8(charger, P9412_CDMODE_STS_REG, &cdmode);
-		if (ret == 0) {
-			dev_info(&charger->client->dev,
-				 "p9221_reset_wlc_dc: cdmode_reg=%02x\n", cdmode);
-			charger->prop_mode_en = false;
-			p9221_write_fod(charger);
-		}
+		charger->prop_mode_en = false;
+		p9221_write_fod(charger);
 	}
 
-	return 0;
+	return ret;
 }
 
 #define CHARGE_15W_VOUT_UV	12000000
@@ -842,7 +881,8 @@ static void p9221_set_offline(struct p9221_charger_data *charger)
 	charger->sw_ramp_done = false;
 	charger->force_bpp = false;
 	charger->chg_on_rtx = false;
-	p9221_reset_wlc_dc(charger);
+	if (!charger->wait_for_online)
+		p9221_reset_wlc_dc(charger);
 	charger->prop_mode_en = false;
 	charger->hpp_hv = false;
 	charger->fod_mode = -1;
@@ -1024,7 +1064,7 @@ static void p9221_power_mitigation_work(struct work_struct *work)
 {
 	struct p9221_charger_data *charger = container_of(work,
 			struct p9221_charger_data, power_mitigation_work.work);
-	const u32 vout_5500mv = 5500;
+	int ret = 0;
 
 	charger->wait_for_online = false;
 
@@ -1039,17 +1079,19 @@ static void p9221_power_mitigation_work(struct work_struct *work)
 	}
 
 	if (!p9221_is_epp(charger)) {
-		if (charger->trigger_power_mitigation) {
-			dev_info(&charger->client->dev, "power_mitigate: change Vout to 5.5V\n");
-			charger->chip_set_vout_max(charger, vout_5500mv);
-			dev_info(&charger->client->dev, "power_mitigate: write 0 to 0xF4\n");
-			p9221_reg_write_8(charger, 0xF4, 0);
-			if (charger->ll_bpp_cep == 1)
-				p9221_ll_bpp_cep(charger, charger->last_capacity);
+		/* only for LL */
+		if (charger->trigger_power_mitigation && charger->ll_bpp_cep == 1) {
+			dev_info(&charger->client->dev,
+				 "power_mitigate: change Vout to %d mV and disable CMFET\n",
+				 P9XXX_VOUT_5480MV);
+			ret = charger->chip_set_vout_max(charger, P9XXX_VOUT_5480MV);
+			ret |= p9221_reg_write_8(charger, P9412_CMFET_L_REG, 0);
+			if (ret < 0)
+				dev_err(&charger->client->dev, "Fail to configure LL\n");
+			p9221_ll_bpp_cep(charger, charger->last_capacity);
 		}
 		charger->fod_cnt = 0;
-		dev_info(&charger->client->dev,
-			 "power_mitigate: already BPP\n");
+		dev_info(&charger->client->dev, "power_mitigate: already BPP\n");
 		return;
 	}
 
@@ -2138,7 +2180,8 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 		}
 
 		/* not there, must return not supp */
-		if (!charger->pdata->has_wlc_dc || !p9221_is_online(charger))
+		if (!charger->pdata->has_wlc_dc || !p9221_is_online(charger)
+		    || !p9221_is_epp(charger))
 			return -EOPNOTSUPP;
 
 		if (charger->last_capacity > WLC_HPP_SOC_LIMIT)
@@ -2214,7 +2257,7 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 
 		charger->wlc_dc_enabled = true;
 		if (extben_gpio)
-			gpio_set_value_cansleep(extben_gpio, 1);
+			p9xxx_gpio_set_value(charger, extben_gpio, 1);
 
 		p9221_set_switch_reg(charger, true);
 
@@ -2290,15 +2333,22 @@ static void p9221_dream_defend(struct p9221_charger_data *charger)
 
 static void p9221_ll_check_chg_term(struct p9221_charger_data *charger, int capacity)
 {
+	int ll_icl_ua;
+
+	ll_icl_ua = gvotable_get_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER);
+
 	if (capacity < 97) {
+		if (ll_icl_ua == P9221_LL_BPP_CHG_TERM_UA)
+			dev_info(&charger->client->dev, "power_mitigate: remove LL_BPP_CEP_VOTER(capacity=%d)\n",
+				 capacity);
 		gvotable_cast_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER, 0, false);
-		dev_dbg(&charger->client->dev, "power_mitigate: remove LL_BPP_CEP_VOTER\n");
 	} else if (capacity == 101) {
 		/* when gdf==100, it's chg_term and vote 200mA */
+		if (ll_icl_ua != P9221_LL_BPP_CHG_TERM_UA)
+			dev_info(&charger->client->dev, "power_mitigate: LL_BPP vote DC_ICL=%duA(capacity=%d)\n",
+				 P9221_LL_BPP_CHG_TERM_UA, capacity);
 		gvotable_cast_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER,
 				       P9221_LL_BPP_CHG_TERM_UA, true);
-		dev_dbg(&charger->client->dev, "power_mitigate: vote DC_ICL=%duA\n",
-			 P9221_LL_BPP_CHG_TERM_UA);
 	}
 }
 
@@ -2320,9 +2370,9 @@ static void p9221_ll_bpp_cep(struct p9221_charger_data *charger, int capacity)
 	p9221_ll_check_chg_term(charger, capacity);
 
 	if (icl_ua > 0)
-		dev_info(&charger->client->dev,
-			 "power_mitigate: set ICL to %duA\n",
-			 gvotable_get_current_int_vote(charger->dc_icl_votable));
+		dev_dbg(&charger->client->dev,
+			"power_mitigate: DD vote ICL = %duA\n",
+			gvotable_get_int_vote(charger->dc_icl_votable, DD_VOTER));
 }
 
 /*
@@ -2464,6 +2514,7 @@ static int p9221_set_property(struct power_supply *psy,
 		if (!charger->wlc_dc_enabled) {
 			dev_dbg(&charger->client->dev,
 				"Not WLC-DC, not allow to set dc current\n");
+			ret = -EINVAL;
 			break;
 		}
 		/* uA */
@@ -2474,6 +2525,7 @@ static int p9221_set_property(struct power_supply *psy,
 		if (!charger->wlc_dc_enabled) {
 			dev_dbg(&charger->client->dev,
 				"Not WLC-DC, not allow to set Vout\n");
+			ret = -EINVAL;
 			break;
 		}
 		/* uV */
@@ -2665,6 +2717,13 @@ static int p9221_set_dc_icl(struct p9221_charger_data *charger)
 				"Could not get votable: DC_ICL\n");
 			return -ENODEV;
 		}
+	}
+
+	if (!p9221_is_epp(charger) && charger->last_capacity == 100 && charger->ll_bpp_cep < 0) {
+		dev_info(&charger->client->dev, "vote ICL as %d for BPP mode(capacity=%d)\n",
+			 P9221_LL_BPP_CHG_TERM_UA, charger->last_capacity);
+		gvotable_cast_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER,
+				       P9221_LL_BPP_CHG_TERM_UA, true);
 	}
 
 	/* Default to BPP ICL */
@@ -2879,6 +2938,39 @@ static void p9221_icl_ramp_start(struct p9221_charger_data *charger)
 
 	alarm_start_relative(&charger->icl_ramp_alarm,
 			     ms_to_ktime(charger->pdata->icl_ramp_delay_ms));
+}
+
+static void p9xxx_check_ll_bpp_cep(struct p9221_charger_data *charger)
+{
+	int ret, ll_icl_ua;
+	u32 vout_mv = 0;
+	u8 val8 = 0;
+	bool is_ll_bpp = true;
+
+	ll_icl_ua = gvotable_get_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER);
+
+	if (ll_icl_ua <= 0 || charger->ll_bpp_cep == 1)
+		return;
+
+	if (p9221_is_epp(charger))
+		is_ll_bpp = false;
+
+	ret = charger->chip_get_vout_max(charger, &vout_mv);
+	if (ret < 0 || vout_mv != P9XXX_VOUT_5480MV)
+		is_ll_bpp = false;
+	ret = p9221_reg_read_8(charger, P9412_CMFET_L_REG, &val8);
+	if (ret < 0 || val8 != 0)
+		is_ll_bpp = false;
+
+	if (is_ll_bpp) {
+		charger->ll_bpp_cep = 1;
+		dev_info(&charger->client->dev, "ll_bpp_cep = %d\n", charger->ll_bpp_cep);
+	} else {
+		charger->ll_bpp_cep = 0;
+		dev_info(&charger->client->dev,
+			 "remove LL_BPP_CEP_VOTER(capacity=%d)\n", charger->last_capacity);
+		gvotable_cast_int_vote(charger->dc_icl_votable, LL_BPP_CEP_VOTER, 0, false);
+	}
 }
 
 static void p9221_set_online(struct p9221_charger_data *charger)
@@ -3122,6 +3214,9 @@ static void p9221_notifier_check_dc(struct p9221_charger_data *charger)
 		p9221_write_fod(charger);
 		if (!charger->dc_icl_bpp)
 			p9221_icl_ramp_start(charger);
+
+		/* Check if Tx in LL BPP mode */
+		p9xxx_check_ll_bpp_cep(charger);
 
 		ret = p9221_reg_read_16(charger, P9221_OTP_FW_MINOR_REV_REG,
 					&charger->fw_rev);
@@ -3798,6 +3893,10 @@ static ssize_t p9221_store_txlen(struct device *dev,
 	if (!charger->online)
 		return -ENODEV;
 
+	/* Don't send bidi data in cases of BPP and NOT dream-defend */
+	if (!p9221_is_epp(charger) && !charger->trigger_power_mitigation)
+		return -EINVAL;
+
 	charger->tx_len = len;
 
 	ret = set_renego_state(charger, P9XXX_SEND_DATA);
@@ -4165,6 +4264,10 @@ static ssize_t wpc_ready_show(struct device *dev,
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct p9221_charger_data *charger = i2c_get_clientdata(client);
+
+	/* Skip it on BPP */
+	if (!p9221_is_epp(charger))
+		return scnprintf(buf, PAGE_SIZE, "N\n");
 
 	return scnprintf(buf, PAGE_SIZE, "%c\n",
 			 p9412_is_calibration_done(charger) ? 'Y' : 'N');
@@ -4741,6 +4844,7 @@ static ssize_t rtx_store(struct device *dev,
 	if (buf[0] == '0') {
 		dev_info(&charger->client->dev, "battery share off\n");
 		logbuffer_log(charger->rtx_log, "battery share off");
+		cancel_delayed_work_sync(&charger->rtx_work);
 		charger->rtx_reset_cnt = 0;
 		ret = p9382_set_rtx(charger, false);
 	} else if (buf[0] == '1') {
@@ -6241,7 +6345,7 @@ static void p9221_fg_work(struct work_struct *work)
 		err = power_supply_get_by_phandle_array(charger->dev->of_node,
 							"idt,fuel-gauge",
 							psy, ARRAY_SIZE(psy));
-		if (err < 0) {
+		if (err < 0 || IS_ERR_OR_NULL(psy[0])) {
 			schedule_delayed_work(&charger->fg_work, msecs_to_jiffies(1000));
 			pr_info("%s: wait for fg err=%d\n", __func__, err);
 			return;
@@ -6730,7 +6834,6 @@ static struct i2c_driver p9221_charger_driver = {
 	.id_table	= p9221_charger_id_table,
 };
 module_i2c_driver(p9221_charger_driver);
-MODULE_SOFTDEP("pre: max1720x_battery");
 MODULE_DESCRIPTION("IDT P9221 Wireless Power Receiver Driver");
 MODULE_AUTHOR("Patrick Tjin <pattjin@google.com>");
 MODULE_LICENSE("GPL");

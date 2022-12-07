@@ -30,7 +30,10 @@
 
 #include <linux/module.h>
 
-unsigned dw3000_nfcc_coex_margin_dtu = DW3000_ANTICIP_DTU;
+/* dw3000_nfcc_coex_margin_dtu:
+ * - Can't be bigger than ANTICIP_DTU (trouble with CLOCK_SYNC).
+ * - Lower than 4ms is really dangerous. */
+unsigned dw3000_nfcc_coex_margin_dtu = US_TO_DTU(16000);
 module_param_named(nfcc_coex_margin_dtu, dw3000_nfcc_coex_margin_dtu, uint,
 		   0444);
 MODULE_PARM_DESC(
@@ -117,7 +120,7 @@ static int dw3000_nfcc_coex_disable_SPIxMAVAIL_interrupts(struct dw3000 *dw)
 static void dw3000_nfcc_coex_update_access_info(
 	struct dw3000 *dw, const struct dw3000_nfcc_coex_buffer *buffer)
 {
-	struct dw3000_vendor_cmd_nfcc_coex_get_access_info *access_info =
+	struct llhw_vendor_cmd_nfcc_coex_get_access_info *access_info =
 		&dw->nfcc_coex.access_info;
 	struct dw3000_nfcc_coex_rx_msg_info rx_msg_info = {};
 	int r;
@@ -132,9 +135,12 @@ static void dw3000_nfcc_coex_update_access_info(
 	access_info->stop = !rx_msg_info.next_slot_found;
 	access_info->watchdog_timeout = false;
 	if (rx_msg_info.next_slot_found) {
+		/* Request the handle earlier to the mac layer. */
 		access_info->next_timestamp_dtu =
-			rx_msg_info.next_timestamp_dtu;
-		access_info->next_duration_dtu = rx_msg_info.next_duration_dtu;
+			rx_msg_info.next_timestamp_dtu -
+			dw3000_nfcc_coex_margin_dtu;
+		access_info->next_duration_dtu = rx_msg_info.next_duration_dtu +
+						 dw3000_nfcc_coex_margin_dtu;
 	}
 	return;
 
@@ -168,11 +174,13 @@ int dw3000_nfcc_coex_configure(struct dw3000 *dw)
 			return r;
 		}
 	}
-	r = dw3000_rx_disable(dw);
+	r = dw3000_nfcc_coex_prepare_config(dw);
 	if (r) {
-		trace_dw3000_nfcc_coex_warn(dw, "rx disable failed");
+		trace_dw3000_nfcc_coex_warn(dw,
+					    "prepare the configuration fails");
 		return r;
 	}
+
 	r = dw3000_nfcc_coex_enable_SPIxMAVAIL_interrupts(dw);
 	if (r) {
 		trace_dw3000_nfcc_coex_err(
@@ -334,12 +342,10 @@ void dw3000_nfcc_coex_init(struct dw3000 *dw)
  * dw3000_nfcc_coex_enable() - Enable NFCC coexistence.
  * @dw: Driver context.
  * @channel: Channel number (5 or 9).
- * @sync_time_needed: True when it's the first access.
  *
  * Return: 0 on success, else an error.
  */
-int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel,
-			    bool sync_time_needed)
+int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel)
 {
 	struct dw3000_nfcc_coex *nfcc_coex = &dw->nfcc_coex;
 
@@ -349,7 +355,6 @@ int dw3000_nfcc_coex_enable(struct dw3000 *dw, u8 channel,
 
 	/* Save current channel. */
 	nfcc_coex->original_channel = dw->config.chan;
-	nfcc_coex->sync_time_needed = sync_time_needed;
 	nfcc_coex->configured = false;
 	nfcc_coex->enabled = true;
 	/* Set the new channel. */
@@ -385,7 +390,9 @@ int dw3000_nfcc_coex_disable(struct dw3000 *dw)
 			if (r)
 				return r;
 		}
-		dw->nfcc_coex.configured = false;
+		r = dw3000_nfcc_coex_restore_config(dw);
+		if (r)
+			return r;
 	}
 	return 0;
 }

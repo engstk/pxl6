@@ -3292,7 +3292,11 @@ int aoc_compr_offload_setup(struct aoc_alsa_stream *alsa_stream, int type)
 	struct CMD_AUDIO_OUTPUT_DECODER_CFG cmd;
 
 	/* TODO: refactor may be needed for passing codec info from HAL to AoC */
-	AocCmdHdrSet(&(cmd.parent), CMD_AUDIO_OUTPUT_DECODER_CFG_ID, sizeof(cmd));
+	AocCmdHdrSet(&(cmd.parent),
+		alsa_stream->gapless_offload_enable?
+			CMD_AUDIO_OUTPUT_DECODER_CFG_GAPLESS_ID:
+			CMD_AUDIO_OUTPUT_DECODER_CFG_ID,
+		sizeof(cmd));
 
 	/* TODO: HAL only passes MP3 or AAC, need to consider/test other AAC options */
 	cmd.cfg.format = (type == SND_AUDIOCODEC_MP3) ? AUDIO_OUTPUT_DECODER_MP3 :
@@ -3309,6 +3313,78 @@ int aoc_compr_offload_setup(struct aoc_alsa_stream *alsa_stream, int type)
 				alsa_stream->chip);
 	if (err < 0) {
 		pr_err("ERR:%d in set compress offload codec\n", err);
+		return err;
+	}
+
+	return 0;
+}
+
+int aoc_compr_offload_send_metadata(struct aoc_alsa_stream *alsa_stream)
+{
+	int err;
+	struct CMD_AUDIO_OUTPUT_DECODER_GAPLESS_METADATA cmd;
+
+	if (!alsa_stream->gapless_offload_enable)
+		return 0;
+
+	if (!alsa_stream->send_metadata)
+		return 0;
+
+	if (alsa_stream->compr_padding == COMPR_INVALID_METADATA ||
+	    alsa_stream->compr_delay == COMPR_INVALID_METADATA) {
+		pr_warn("invalid metadata\n");
+		return 0;
+	}
+
+	AocCmdHdrSet(&(cmd.parent), CMD_AUDIO_OUTPUT_DECODER_GAPLESS_METADATA_ID, sizeof(cmd));
+	cmd.curr_track_padding_frames = alsa_stream->compr_padding;
+	cmd.curr_track_delay_frames = alsa_stream->compr_delay;
+
+	pr_info("send metadata, padding %d, delay %d\n", cmd.curr_track_padding_frames,
+		cmd.curr_track_delay_frames);
+
+	err = aoc_audio_control(CMD_OUTPUT_CHANNEL, (uint8_t *)&cmd, sizeof(cmd), NULL,
+				alsa_stream->chip);
+
+	if (err < 0) {
+		pr_err("ERR:%d in set aoc compress offload in partial drain state\n", err);
+		return err;
+	}
+
+	alsa_stream->send_metadata = 0;
+	return 0;
+}
+
+int aoc_compr_offload_partial_drain(struct aoc_alsa_stream *alsa_stream)
+{
+	int err;
+
+	if (!alsa_stream->gapless_offload_enable)
+		return 0;
+
+	pr_info("compress offload partial drain\n");
+
+	err = aoc_audio_control_simple_cmd(CMD_OUTPUT_CHANNEL,
+		CMD_AUDIO_OUTPUT_DECODER_GAPLESS_PARTIAL_DRAIN_ID, alsa_stream->chip);
+	if (err < 0)
+		pr_err("ERR:%d compress offload partial drain!\n", err);
+
+	return err;
+}
+
+int aoc_compr_offload_close(struct aoc_alsa_stream *alsa_stream)
+{
+	int err;
+
+	if (!alsa_stream->gapless_offload_enable)
+		return 0;
+
+	pr_info("compress offload decoder de-inited\n");
+
+	err = aoc_audio_control_simple_cmd(CMD_OUTPUT_CHANNEL,
+		CMD_AUDIO_OUTPUT_DECODER_GAPLESS_DEINIT_ID, alsa_stream->chip);
+	if (err < 0) {
+		pr_err("ERR:%d in compress offload close\n", err);
 		return err;
 	}
 
@@ -3339,12 +3415,10 @@ int aoc_compr_offload_get_io_samples(struct aoc_alsa_stream *alsa_stream, uint64
 int aoc_compr_offload_flush_buffer(struct aoc_alsa_stream *alsa_stream)
 {
 	int err;
-	struct CMD_HDR cmd;
 
-	AocCmdHdrSet(&cmd, CMD_AUDIO_OUTPUT_DECODE_FLUSH_RB_ID, sizeof(cmd));
+	err = aoc_audio_control_simple_cmd(CMD_OUTPUT_CHANNEL,
+		CMD_AUDIO_OUTPUT_DECODE_FLUSH_RB_ID, alsa_stream->chip);
 
-	err = aoc_audio_control(CMD_OUTPUT_CHANNEL, (uint8_t *)&cmd,
-				sizeof(cmd), NULL, alsa_stream->chip);
 	if (err < 0)
 		pr_err("ERR:%d flush compress offload buffer fail!\n", err);
 

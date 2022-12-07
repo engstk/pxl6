@@ -300,7 +300,11 @@ extern void * osl_virt_to_phys(void * va);
 /* API for DMA addressing capability */
 #define OSL_DMADDRWIDTH(osh, addrwidth) ({BCM_REFERENCE(osh); BCM_REFERENCE(addrwidth);})
 
-#define OSL_SMP_WMB()	smp_wmb()
+#define OSL_MB()		mb()
+#define OSL_WMB()		wmb()
+#define OSL_RMB()		rmb()
+#define OSL_SMP_WMB()		smp_wmb()
+#define OSL_SMP_RMB()		smp_rmb()
 
 #if defined(__aarch64__)
 #define OSL_ISB()	isb()
@@ -318,7 +322,6 @@ extern void osl_preempt_enable(osl_t *osh);
 #define OSL_ENABLE_PREEMPTION(osh)	osl_preempt_enable(osh)
 
 #if (!defined(DHD_USE_COHERENT_MEM_FOR_RING) && defined(__ARM_ARCH_7A__))
-
 	extern void osl_cache_flush(void *va, uint size);
 	extern void osl_cache_inv(void *va, uint size);
 	extern void osl_prefetch(const void *ptr);

@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -21,10 +21,13 @@
  * Qorvo. Please contact Qorvo to inquire about licensing terms.
  */
 
-#ifndef NET_MCPS802154_PING_PONG_REGION_H
-#define NET_MCPS802154_PING_PONG_REGION_H
+#include <linux/skbuff.h>
+#include <linux/module.h>
+#include <linux/errno.h>
 
-int ping_pong_region_init(void);
-void ping_pong_region_exit(void);
-
-#endif /* NET_MCPS802154_PING_PONG_REGION_H */
+int mcps_skb_frags_len(struct sk_buff *skb)
+{
+	/* No fragmentation on Linux. */
+	return 0;
+}
+EXPORT_SYMBOL(mcps_skb_frags_len);

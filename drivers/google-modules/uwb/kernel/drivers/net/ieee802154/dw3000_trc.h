@@ -201,29 +201,30 @@ TRACE_DEFINE_ENUM(DW3000_PWR_TX);
 #define DW_SYS_STATUS_FLAGS_PR_ARG __entry->status
 #endif
 
-#define RX_INFO_FLAGS_ENTRY __field(u8, flags)
-#define RX_INFO_FLAGS_ASSIGN entry->flags = flags
-#define RX_INFO_FLAGS_PR_FMT "flags: %s"
+#define RX_FRAME_CONFIG_FLAGS_ENTRY __field(u8, flags)
+#define RX_FRAME_CONFIG_FLAGS_ASSIGN entry->flags = flags
+#define RX_FRAME_CONFIG_FLAGS_PR_FMT "flags: %s"
 
-#define mcps802154_rx_info_name(name)            \
-	{                                        \
-		MCPS802154_RX_INFO_##name, #name \
+#define mcps802154_rx_frame_config_name(name)            \
+	{                                                \
+		MCPS802154_RX_FRAME_CONFIG_##name, #name \
 	}
 
 /* clang-format off */
-#define RX_INFO_FLAGS                                \
-	mcps802154_rx_info_name(TIMESTAMP_DTU),      \
-	mcps802154_rx_info_name(AACK),               \
-	mcps802154_rx_info_name(RANGING),            \
-	mcps802154_rx_info_name(KEEP_RANGING_CLOCK), \
-	mcps802154_rx_info_name(RANGING_PDOA),       \
-	mcps802154_rx_info_name(SP3),                \
-	mcps802154_rx_info_name(SP2),                \
-	mcps802154_rx_info_name(SP1),                \
-	mcps802154_rx_info_name(STS_MODE_MASK)
+#define RX_FRAME_CONFIG_FLAGS                                \
+	mcps802154_rx_frame_config_name(TIMESTAMP_DTU),      \
+	mcps802154_rx_frame_config_name(AACK),               \
+	mcps802154_rx_frame_config_name(RANGING),            \
+	mcps802154_rx_frame_config_name(KEEP_RANGING_CLOCK), \
+	mcps802154_rx_frame_config_name(RANGING_PDOA),       \
+	mcps802154_rx_frame_config_name(SP3),                \
+	mcps802154_rx_frame_config_name(SP2),                \
+	mcps802154_rx_frame_config_name(SP1),                \
+	mcps802154_rx_frame_config_name(STS_MODE_MASK)
 /* clang-format on */
 
-#define RX_INFO_FLAGS_PR_ARG __print_flags(__entry->flags, "|", RX_INFO_FLAGS)
+#define RX_FRAME_CONFIG_FLAGS_PR_ARG \
+	__print_flags(__entry->flags, "|", RX_FRAME_CONFIG_FLAGS)
 
 #define RX_FRAME_INFO_FLAGS_ENTRY __field(u16, flags)
 #define RX_FRAME_INFO_FLAGS_ASSIGN entry->flags = flags
@@ -252,29 +253,29 @@ TRACE_DEFINE_ENUM(DW3000_PWR_TX);
 #define RX_FRAME_INFO_FLAGS_PR_ARG \
 	__print_flags(__entry->flags, "|", RX_FRAME_INFO_FLAGS)
 
-#define TX_FRAME_INFO_FLAGS_ENTRY __field(u8, flags)
-#define TX_FRAME_INFO_FLAGS_ASSIGN entry->flags = flags
-#define TX_FRAME_INFO_FLAGS_PR_FMT "flags: %s"
+#define TX_FRAME_CONFIG_FLAGS_ENTRY __field(u8, flags)
+#define TX_FRAME_CONFIG_FLAGS_ASSIGN entry->flags = flags
+#define TX_FRAME_CONFIG_FLAGS_PR_FMT "flags: %s"
 
-#define mcps802154_tx_frame_info_name(name)       \
-	{                                         \
-		MCPS802154_TX_FRAME_##name, #name \
+#define mcps802154_tx_frame_config_name(name)            \
+	{                                                \
+		MCPS802154_TX_FRAME_CONFIG_##name, #name \
 	}
 
 /* clang-format off */
-#define TX_FRAME_INFO_FLAGS						\
-	mcps802154_tx_frame_info_name(TIMESTAMP_DTU),			\
-	mcps802154_tx_frame_info_name(CCA),				\
-	mcps802154_tx_frame_info_name(RANGING),				\
-	mcps802154_tx_frame_info_name(KEEP_RANGING_CLOCK),		\
-	mcps802154_tx_frame_info_name(SP3),				\
-	mcps802154_tx_frame_info_name(SP2),				\
-	mcps802154_tx_frame_info_name(SP1),				\
-	mcps802154_tx_frame_info_name(STS_MODE_MASK)
+#define TX_FRAME_CONFIG_FLAGS						\
+	mcps802154_tx_frame_config_name(TIMESTAMP_DTU),			\
+	mcps802154_tx_frame_config_name(CCA),				\
+	mcps802154_tx_frame_config_name(RANGING),				\
+	mcps802154_tx_frame_config_name(KEEP_RANGING_CLOCK),		\
+	mcps802154_tx_frame_config_name(SP3),				\
+	mcps802154_tx_frame_config_name(SP2),				\
+	mcps802154_tx_frame_config_name(SP1),				\
+	mcps802154_tx_frame_config_name(STS_MODE_MASK)
 /* clang-format on */
 
-#define TX_FRAME_INFO_FLAGS_PR_ARG \
-	__print_flags(__entry->flags, "|", TX_FRAME_INFO_FLAGS)
+#define TX_FRAME_CONFIG_FLAGS_PR_ARG \
+	__print_flags(__entry->flags, "|", TX_FRAME_CONFIG_FLAGS)
 
 #define dw3000_nfcc_coex_tlv_type_name(name)            \
 	{                                               \
@@ -314,6 +315,26 @@ TRACE_DEFINE_ENUM(DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS);
 /* clang-format on */
 TRACE_DEFINE_ENUM(DW3000_DSS_STAT_SPI1_AVAIL_BIT_MASK);
 TRACE_DEFINE_ENUM(DW3000_DSS_STAT_SPI2_AVAIL_BIT_MASK);
+
+#define dw3000_nfcc_coex_send_name(name)            \
+	{                                           \
+		DW3000_NFCC_COEX_SEND_##name, #name \
+	}
+
+#define DW3000_NFCC_COEX_SEND_ENTRY __field(enum dw3000_nfcc_coex_send, send)
+#define DW3000_NFCC_COEX_SEND_ASSIGN __entry->send = send
+#define DW3000_NFCC_COEX_SEND_PR_FMT "send: %s"
+/* clang-format off */
+#define DW3000_NFCC_COEX_SEND                \
+	dw3000_nfcc_coex_send_name(CLK_SYNC),   \
+	dw3000_nfcc_coex_send_name(CLK_OFFSET), \
+	dw3000_nfcc_coex_send_name(STOP)
+/* clang-format on */
+TRACE_DEFINE_ENUM(DW3000_NFCC_COEX_SEND_CLK_SYNC);
+TRACE_DEFINE_ENUM(DW3000_NFCC_COEX_SEND_CLK_OFFSET);
+TRACE_DEFINE_ENUM(DW3000_NFCC_COEX_SEND_STOP);
+#define DW3000_NFCC_COEX_SEND_ARG \
+	__print_symbolic(__entry->send, DW3000_NFCC_COEX_SEND)
 
 /* We don't want clang-format to modify the following events definition!
    Look at net/wireless/trace.h for the required format. */
@@ -407,16 +428,16 @@ TRACE_EVENT(dw3000_mcps_tx_frame,
 	TP_ARGS(dw, flags, len),
 	TP_STRUCT__entry(
 		DW_ENTRY
-		TX_FRAME_INFO_FLAGS_ENTRY
+		TX_FRAME_CONFIG_FLAGS_ENTRY
 		__field(u16, len)
 	),
 	TP_fast_assign(
 		DW_ASSIGN;
-		TX_FRAME_INFO_FLAGS_ASSIGN;
+		TX_FRAME_CONFIG_FLAGS_ASSIGN;
 		__entry->len = len;
 	),
-	TP_printk(DW_PR_FMT ", " TX_FRAME_INFO_FLAGS_PR_FMT ", skb->len: %d",
-		  DW_PR_ARG, TX_FRAME_INFO_FLAGS_PR_ARG,__entry->len)
+	TP_printk(DW_PR_FMT ", " TX_FRAME_CONFIG_FLAGS_PR_FMT ", skb->len: %d",
+		  DW_PR_ARG, TX_FRAME_CONFIG_FLAGS_PR_ARG,__entry->len)
 );
 
 TRACE_EVENT(dw3000_mcps_tx_frame_too_late,
@@ -442,16 +463,16 @@ TRACE_EVENT(dw3000_mcps_rx_enable,
 	TP_ARGS(dw, flags, timeout),
 	TP_STRUCT__entry(
 		DW_ENTRY
-		RX_INFO_FLAGS_ENTRY
+		RX_FRAME_CONFIG_FLAGS_ENTRY
 		__field(int, timeout)
 	),
 	TP_fast_assign(
 		DW_ASSIGN;
-		RX_INFO_FLAGS_ASSIGN;
+		RX_FRAME_CONFIG_FLAGS_ASSIGN;
 		__entry->timeout = timeout;
 	),
-	TP_printk(DW_PR_FMT ", " RX_INFO_FLAGS_PR_FMT ", timeout: %d",
-		  DW_PR_ARG, RX_INFO_FLAGS_PR_ARG, __entry->timeout)
+	TP_printk(DW_PR_FMT ", " RX_FRAME_CONFIG_FLAGS_PR_FMT ", timeout: %d",
+		  DW_PR_ARG, RX_FRAME_CONFIG_FLAGS_PR_ARG, __entry->timeout)
 );
 
 TRACE_EVENT(dw3000_mcps_rx_enable_too_late,
@@ -517,6 +538,11 @@ DEFINE_EVENT(dw_only_evt, dw3000_wakeup_done_to_rx,
 );
 
 DEFINE_EVENT(dw_only_evt, dw3000_wakeup_done_to_idle,
+	TP_PROTO(struct dw3000 *dw),
+	TP_ARGS(dw)
+);
+
+DEFINE_EVENT(dw_only_evt, dw3000_wakeup_done_to_idle_late,
 	TP_PROTO(struct dw3000 *dw),
 	TP_ARGS(dw)
 );
@@ -1172,6 +1198,21 @@ TRACE_EVENT(dw3000_nfcc_coex_clock_offset_payload_put,
 		  __entry->clock_offset_sys_time)
 );
 
+TRACE_EVENT(dw3000_nfcc_coex_stop_session_payload_put,
+	TP_PROTO(struct dw3000 *dw, u32 session_id),
+	TP_ARGS(dw, session_id),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		__field(u32, session_id)
+	),
+	TP_fast_assign(
+		DW_ASSIGN;
+		__entry->session_id = session_id;
+	),
+	TP_printk(DW_PR_FMT ", session_id %d", DW_PR_ARG,
+		  __entry->session_id)
+);
+
 TRACE_EVENT(dw3000_nfcc_coex_rx_msg_info,
 	TP_PROTO(struct dw3000 *dw, u32 next_timestamp_dtu,
 		 int next_duration_dtu),
@@ -1238,7 +1279,7 @@ TRACE_EVENT(dw3000_nfcc_coex_tlv_check,
 );
 
 TRACE_EVENT(dw3000_nfcc_coex_handle_access,
-	TP_PROTO(struct dw3000 *dw, const struct dw3000_vendor_cmd_nfcc_coex_handle_access *info,
+	TP_PROTO(struct dw3000 *dw, const struct llhw_vendor_cmd_nfcc_coex_handle_access *info,
 		 s32 idle_duration_dtu),
 	TP_ARGS(dw, info, idle_duration_dtu),
 	TP_STRUCT__entry(
@@ -1264,6 +1305,30 @@ TRACE_EVENT(dw3000_nfcc_coex_handle_access,
 		  __entry->idle_duration_dtu,
 		  __entry->timestamp_dtu,
 		  __entry->duration_dtu, __entry->chan)
+);
+
+TRACE_EVENT(dw3000_nfcc_coex_wakeup_and_send,
+	TP_PROTO(struct dw3000 *dw, enum dw3000_nfcc_coex_send send,
+		 s32 idle_duration_dtu, u32 send_timestamp_dtu),
+	TP_ARGS(dw, send, idle_duration_dtu, send_timestamp_dtu),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		DW3000_NFCC_COEX_SEND_ENTRY
+		__field(s32, idle_duration_dtu)
+		__field(u32, send_timestamp_dtu)
+	),
+	TP_fast_assign(
+		DW_ASSIGN;
+		DW3000_NFCC_COEX_SEND_ASSIGN,
+		__entry->idle_duration_dtu = idle_duration_dtu;
+		__entry->send_timestamp_dtu = send_timestamp_dtu;
+	),
+	TP_printk(DW_PR_FMT ", " DW3000_NFCC_COEX_SEND_PR_FMT
+		  ", idle_duration_dtu: %d, send_timestamp_dtu: 0x%08x",
+		  DW_PR_ARG,
+		  DW3000_NFCC_COEX_SEND_ARG,
+		  __entry->idle_duration_dtu,
+		  __entry->send_timestamp_dtu)
 );
 
 TRACE_EVENT(dw3000_nfcc_coex_err,
@@ -1434,6 +1499,30 @@ TRACE_EVENT(dw3000_read_clockoffset,
 		),
 	TP_printk(DW_PR_FMT ", clockoffset: %d", DW_PR_ARG,
 		  __entry->cfo)
+	);
+
+TRACE_EVENT(dw3000_nfcc_coex_prepare_config,
+	TP_PROTO(struct dw3000 *dw),
+	TP_ARGS(dw),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		),
+	TP_fast_assign(
+		DW_ASSIGN;
+		),
+	TP_printk(DW_PR_FMT, DW_PR_ARG)
+	);
+
+TRACE_EVENT(dw3000_nfcc_coex_restore_config,
+	TP_PROTO(struct dw3000 *dw),
+	TP_ARGS(dw),
+	TP_STRUCT__entry(
+		DW_ENTRY
+		),
+	TP_fast_assign(
+		DW_ASSIGN;
+		),
+	TP_printk(DW_PR_FMT, DW_PR_ARG)
 	);
 
 /* clang-format on */

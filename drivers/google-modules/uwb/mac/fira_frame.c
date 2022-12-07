@@ -1,7 +1,7 @@
 /*
  * This file is part of the UWB stack for linux.
  *
- * Copyright (c) 2020-2021 Qorvo US, Inc.
+ * Copyright (c) 2020-2022 Qorvo US, Inc.
  *
  * This software is provided under the GNU General Public License, version 2
  * (GPLv2), as well as under a Qorvo commercial license.
@@ -23,6 +23,7 @@
 
 #include "fira_frame.h"
 #include "fira_session.h"
+#include "fira_crypto.h"
 #include "fira_trace.h"
 
 #include <asm/unaligned.h>
@@ -35,78 +36,26 @@
 
 #include "warn_return.h"
 
-#define FIRA_IE_VENDOR_OUI_LEN 3
-#define FIRA_IE_HEADER_PADDING_LEN 8
-#define FIRA_IE_HEADER_SESSION_ID_LEN 4
-#define FIRA_IE_HEADER_STS_INDEX_LEN 4
-#define FIRA_IE_HEADER_LEN                                     \
-	(FIRA_IE_VENDOR_OUI_LEN + FIRA_IE_HEADER_PADDING_LEN + \
-	 FIRA_IE_HEADER_SESSION_ID_LEN + FIRA_IE_HEADER_STS_INDEX_LEN)
-
-#define FIRA_IE_PAYLOAD_CONTROL_LEN(n_mngt) \
-	(FIRA_IE_VENDOR_OUI_LEN + 4 + 4 * (n_mngt))
-#define FIRA_IE_PAYLOAD_MEASUREMENT_REPORT_TYPE1_LEN(round_index_present, \
-						     n_reply_time)        \
-	(FIRA_IE_VENDOR_OUI_LEN + 2 + 2 * (round_index_present) + 4 +     \
-	 6 * (n_reply_time))
-#define FIRA_IE_PAYLOAD_MEASUREMENT_REPORT_TYPE2_LEN(             \
-	round_index_present, reply_time_present, n_reply_time)    \
-	(FIRA_IE_VENDOR_OUI_LEN + 3 + 2 * (round_index_present) + \
-	 4 * (reply_time_present) + 6 * (n_reply_time))
-#define FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(tof_present, aoa_azimuth_present, \
-					  aoa_elevation_present,            \
-					  aoa_fom_present)                  \
-	(FIRA_IE_VENDOR_OUI_LEN + 2 + 4 * (tof_present) +                   \
-	 2 * (aoa_azimuth_present) + 2 * (aoa_elevation_present) +          \
-	 (aoa_fom_present) *                                                \
-		 (1 * (aoa_azimuth_present) + 1 * (aoa_elevation_present)))
-
-#define FIRA_MIC_LEVEL 64
-#define FIRA_MIC_LEN (FIRA_MIC_LEVEL / 8)
-
-/* 3 IE headers in the frame : vendor IE, header terminator and payload */
-#define FIRA_FRAME_WITHOUT_PAYLOAD_LEN                                        \
-	(IEEE802154_FC_LEN + IEEE802154_SCF_LEN + IEEE802154_SHORT_ADDR_LEN + \
-	 3 * IEEE802154_IE_HEADER_LEN + FIRA_IE_HEADER_LEN + FIRA_MIC_LEN +   \
-	 IEEE802154_FCS_LEN)
-
-#define FIRA_IE_VENDOR_OUI 0x5a18ff
-#define FIRA_IE_HEADER_PADDING 0x08
-
-#define FIRA_MNGT_RANGING_ROLE (1 << 0)
-#define FIRA_MNGT_SLOT_INDEX (0xff << 1)
-#define FIRA_MNGT_SHORT_ADDR (0xffff << 9)
-#define FIRA_MNGT_MESSAGE_ID (0xf << 25)
-#define FIRA_MNGT_STOP (1 << 29)
-#define FIRA_MNGT_RESERVED (0x3U << 30)
-
-#define FIRA_MEASUREMENT_REPORT_CONTROL_HOPPING_MODE (1 << 0)
-#define FIRA_MEASUREMENT_REPORT_CONTROL_ROUND_INDEX_PRESENT (1 << 1)
-#define FIRA_MEASUREMENT_REPORT_CONTROL_N_REPLY_TIME (0x3f << 2)
-
-#define FIRA_MEASUREMENT_REPORT_CONTROL_REPLY_TIME_PRESENT (1 << 0)
-
-#define FIRA_RESULT_REPORT_CONTROL_TOF_PRESENT (1 << 0)
-#define FIRA_RESULT_REPORT_CONTROL_AOA_AZIMUTH_PRESENT (1 << 1)
-#define FIRA_RESULT_REPORT_CONTROL_AOA_ELEVATION_PRESENT (1 << 2)
-#define FIRA_RESULT_REPORT_CONTROL_AOA_FOM_PRESENT (1 << 3)
-
-bool fira_frame_check_n_controlees(struct fira_session *session,
+bool fira_frame_check_n_controlees(const struct fira_session *session,
 				   size_t n_controlees, bool active)
 {
-	/* TODO: use more parameters (embedded mode, ranging mode, device
+	/*
+	 * TODO: use more parameters (embedded mode, ranging mode, device
 	 * type...) to calculate the size of frames.
 	 * Currently only SS-TWR vs DS-TWR mode is considered.
 	 * The computation MUST stay "pessimistic" (aka strict).
-	 * E.g.: for RCM each new controlee consumes 8 bytes so we need
-	 * AT LEAST 8 * n_controlee bytes of "free space". */
-	struct fira_session_params *params = &session->params;
+	 * E.g.: for control frame, each new controlee consumes 8 bytes so
+	 * we need AT LEAST 8 * n_controlee bytes of "free space".
+	 */
+	const struct fira_session_params *params = &session->params;
 	size_t mrm_size, rcm_size;
 	size_t n_msg_controller;
 	size_t n_msg_controlee = 2;
 
+	if (n_controlees > FIRA_CONTROLEES_MAX)
+		return false;
 	if (!active)
-		return n_controlees <= FIRA_CONTROLEES_MAX;
+		return true;
 
 	if (params->ranging_round_usage == FIRA_RANGING_ROUND_USAGE_DSTWR) {
 		mrm_size = FIRA_FRAME_WITHOUT_PAYLOAD_LEN +
@@ -138,6 +87,7 @@ void fira_frame_header_put(const struct fira_local *local,
 		  (IEEE802154_ADDR_NONE << IEEE802154_FC_SAMODE_SHIFT));
 	u8 *p;
 	int i;
+	u8 *p_hie;
 
 	p = skb_put(skb, IEEE802154_FC_LEN + IEEE802154_SHORT_ADDR_LEN +
 				 IEEE802154_SCF_LEN);
@@ -147,6 +97,7 @@ void fira_frame_header_put(const struct fira_local *local,
 	p += IEEE802154_SHORT_ADDR_LEN;
 	*p = IEEE802154_SCF_NO_FRAME_COUNTER;
 
+	p_hie = skb->data + skb->len;
 	mcps802154_ie_put_begin(skb);
 	p = mcps802154_ie_put_header_ie(skb, IEEE802154_IE_HEADER_VENDOR_ID,
 					FIRA_IE_HEADER_LEN);
@@ -156,8 +107,9 @@ void fira_frame_header_put(const struct fira_local *local,
 		*p++ = FIRA_IE_HEADER_PADDING;
 	put_unaligned_le32(session->id, p);
 	p += FIRA_IE_HEADER_SESSION_ID_LEN;
-	put_unaligned_le32(
-		fira_session_get_round_sts_index(session) + slot->index, p);
+	put_unaligned_le32(fira_sts_get_phy_sts_index(session, slot->index), p);
+	fira_sts_encrypt_hie(local->current_session, skb, p_hie - skb->data,
+			     FIRA_IE_HEADER_LEN + IEEE802154_IE_HEADER_LEN);
 }
 
 static u8 *fira_frame_common_payload_put(struct sk_buff *skb, unsigned int len,
@@ -185,8 +137,7 @@ void fira_frame_control_payload_put(const struct fira_local *local,
 	u8 *p;
 	int i;
 
-	n_mngt = local->access.n_frames - 1 +
-		 local->n_stopped_controlees_short_addr;
+	n_mngt = local->access.n_frames - 1 + local->n_stopped_controlees;
 
 	p = fira_frame_common_payload_put(skb,
 					  FIRA_IE_PAYLOAD_CONTROL_LEN(n_mngt),
@@ -194,18 +145,15 @@ void fira_frame_control_payload_put(const struct fira_local *local,
 
 	*p++ = n_mngt;
 	*p++ = 0;
-	*p++ = session->next_block_stride_len;
+	*p++ = session->block_stride_len;
 
 	for (i = 0; i < local->access.n_frames - 1; i++) {
 		const struct fira_slot *slot = &local->slots[i + 1];
-		int initiator = slot->tx_controlee_index == -1;
+		int initiator = slot->controller_tx;
 		int slot_index = slot->index;
-		__le16 short_addr =
-			slot->tx_controlee_index == -1 ?
-				local->src_short_addr :
-				session->current_controlees
-					.data[slot->tx_controlee_index]
-					.short_addr;
+		__le16 short_addr = slot->controller_tx ?
+					    local->src_short_addr :
+					    slot->controlee->short_addr;
 		int message_id = slot->message_id;
 		u32 mngt = FIELD_PREP(FIRA_MNGT_RANGING_ROLE, initiator) |
 			   FIELD_PREP(FIRA_MNGT_SLOT_INDEX, slot_index) |
@@ -215,8 +163,8 @@ void fira_frame_control_payload_put(const struct fira_local *local,
 		p += sizeof(u32);
 	}
 
-	for (i = 0; i < local->n_stopped_controlees_short_addr; i++) {
-		__le16 short_addr = local->stopped_controlees_short_addr[i];
+	for (i = 0; i < local->n_stopped_controlees; i++) {
+		__le16 short_addr = local->stopped_controlees[i];
 		u32 mngt = FIELD_PREP(FIRA_MNGT_SHORT_ADDR, short_addr) |
 			   FIELD_PREP(FIRA_MNGT_STOP, 1);
 		put_unaligned_le32(mngt, p);
@@ -229,10 +177,11 @@ void fira_frame_measurement_report_payload_put(const struct fira_local *local,
 					       struct sk_buff *skb)
 {
 	const struct fira_session *session = local->current_session;
+	const struct fira_session_params *params = &session->params;
 	const struct fira_ranging_info *ranging_info =
 		&local->ranging_info[slot->ranging_index];
 	u8 *p;
-	int hopping_mode = session->params.round_hopping;
+	int hopping_mode = params->round_hopping;
 	int round_index_present = 1;
 	int reply_time_present = 0; /* for initiator */
 	int n_reply_time = local->n_ranging_valid;
@@ -240,8 +189,8 @@ void fira_frame_measurement_report_payload_put(const struct fira_local *local,
 	u32 first_round_trip_time;
 	u32 reply_time;
 	u64 initiation_rctu, response_rctu, final_rctu;
-	bool double_sided = (session->params.ranging_round_usage ==
-			     FIRA_RANGING_ROUND_USAGE_DSTWR);
+	bool double_sided = params->ranging_round_usage ==
+			    FIRA_RANGING_ROUND_USAGE_DSTWR;
 
 	p = fira_frame_common_payload_put(
 		skb,
@@ -267,10 +216,12 @@ void fira_frame_measurement_report_payload_put(const struct fira_local *local,
 	put_unaligned_le16(session->next_round_index, p);
 	p += sizeof(u16);
 
-	/* No handling for failed measurement, as there is only one, a failed
+	/*
+	 * No handling for failed measurement, as there is only one, a failed
 	 * measurement will cancel the ranging round.
 	 * With several measurements, make sure a later measurement can still be
-	 * done if an earlier one is failed. */
+	 * done if an earlier one is failed.
+	 */
 	initiation_rctu =
 		ranging_info
 			->timestamps_rctu[FIRA_MESSAGE_ID_RANGING_INITIATION];
@@ -378,35 +329,38 @@ void fira_frame_rframe_payload_put(struct fira_local *local,
 				   struct sk_buff *skb)
 {
 	struct fira_session *session = local->current_session;
-	struct fira_session_params *params = &local->current_session->params;
+	const struct fira_session_params *params = &session->params;
 	u8 *p;
 
-	if (params->data_payload_len == 0)
+	if (session->data_payload.seq == params->data_payload_seq)
 		return;
 
 	p = mcps802154_ie_put_payload_ie(skb, IEEE802154_IE_PAYLOAD_VENDOR_GID,
 					 FIRA_IE_VENDOR_OUI_LEN +
 						 params->data_payload_len);
 	WARN_RETURN_VOID_ON(!p);
-
 	put_unaligned_le24(params->data_vendor_oui, p);
 	p += FIRA_IE_VENDOR_OUI_LEN;
 	memcpy(p, params->data_payload, params->data_payload_len);
-	params->data_payload_len = 0;
-	session->data_payload_seq_sent = params->data_payload_seq;
+	session->data_payload.seq = params->data_payload_seq;
+	session->data_payload.sent = true;
 }
 
 bool fira_frame_header_check(const struct fira_local *local,
 			     struct sk_buff *skb,
 			     struct mcps802154_ie_get_context *ie_get,
-			     u32 *sts_index, u32 *session_id)
+			     u32 *phy_sts_index, u32 *session_id)
 {
+	struct fira_session *session = local->current_session;
 	u16 fc = (IEEE802154_FC_TYPE_DATA | IEEE802154_FC_SECEN |
 		  IEEE802154_FC_INTRA_PAN | IEEE802154_FC_NO_SEQ |
 		  IEEE802154_FC_IE_PRESENT |
 		  (IEEE802154_ADDR_SHORT << IEEE802154_FC_DAMODE_SHIFT) |
 		  (2 << IEEE802154_FC_VERSION_SHIFT) |
 		  (IEEE802154_ADDR_NONE << IEEE802154_FC_SAMODE_SHIFT));
+	u8 ciphered_hie[FIRA_IE_HEADER_PADDING_LEN +
+			FIRA_IE_HEADER_SESSION_ID_LEN +
+			FIRA_IE_HEADER_STS_INDEX_LEN] = { 0 };
 	bool fira_header_seen = false;
 	int r;
 	u8 *p;
@@ -414,18 +368,15 @@ bool fira_frame_header_check(const struct fira_local *local,
 	p = skb->data;
 	if (!skb_pull(skb, IEEE802154_FC_LEN + IEEE802154_SHORT_ADDR_LEN +
 				   IEEE802154_SCF_LEN) ||
-	    get_unaligned_le16(p) != fc ||
-	    !fira_aead_decrypt_scf_check(
-		    p[IEEE802154_FC_LEN + IEEE802154_SHORT_ADDR_LEN]))
+	    get_unaligned_le16(p) != fc)
 		return false;
 
-	if (fira_aead_decrypt_prepare(skb))
+	if (fira_sts_prepare_decrypt(session, skb))
 		return false;
 
 	for (r = mcps802154_ie_get(skb, ie_get); r == 0 && !ie_get->in_payload;
 	     r = mcps802154_ie_get(skb, ie_get)) {
 		p = skb->data;
-		skb_pull(skb, ie_get->len);
 		ie_get->mlme_len = 0;
 
 		if (ie_get->id == IEEE802154_IE_HEADER_VENDOR_ID &&
@@ -435,21 +386,37 @@ bool fira_frame_header_check(const struct fira_local *local,
 			vendor = get_unaligned_le24(p);
 			p += FIRA_IE_VENDOR_OUI_LEN;
 			if (vendor != FIRA_IE_VENDOR_OUI)
-				continue;
+				goto next;
 			if (fira_header_seen)
-				return false;
+				goto hie_error;
 			if (ie_get->len != FIRA_IE_HEADER_LEN)
-				return false;
+				goto hie_error;
+
+			memcpy(ciphered_hie, skb->data + FIRA_IE_VENDOR_OUI_LEN,
+			       sizeof(ciphered_hie));
+			if (fira_sts_decrypt_hie(
+				    session, skb, FIRA_IE_VENDOR_OUI_LEN,
+				    ie_get->len - FIRA_IE_VENDOR_OUI_LEN))
+				goto hie_error;
 			p += FIRA_IE_HEADER_PADDING_LEN;
 			*session_id = get_unaligned_le32(p);
 			p += FIRA_IE_HEADER_SESSION_ID_LEN;
-			*sts_index = get_unaligned_le32(p);
+			*phy_sts_index = get_unaligned_le32(p);
 			p += FIRA_IE_HEADER_STS_INDEX_LEN;
 			fira_header_seen = true;
+			memcpy(skb->data + FIRA_IE_VENDOR_OUI_LEN, ciphered_hie,
+			       ie_get->len - FIRA_IE_VENDOR_OUI_LEN);
+			memzero_explicit(ciphered_hie, sizeof(ciphered_hie));
 		}
+	next:
+		skb_pull(skb, ie_get->len);
 	}
 
 	return r >= 0 && fira_header_seen;
+
+hie_error:
+	skb_pull(skb, ie_get->len);
+	return false;
 }
 
 static bool fira_frame_control_read(struct fira_local *local, u8 *p,
@@ -461,8 +428,8 @@ static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 	int n_mngt, i;
 	u16 msg_ids = 0;
 	bool stop_found = false;
-	const struct fira_measurement_sequence_step *current_ms_step =
-		fira_session_get_current_meas_seq_step(session);
+	const struct fira_measurement_sequence_step *step =
+		fira_session_get_meas_seq_step(session);
 
 	n_mngt = *p++;
 	if (ie_len < FIRA_IE_PAYLOAD_CONTROL_LEN(n_mngt))
@@ -517,19 +484,13 @@ static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 			msg_ids |= msg_id;
 			if (slot == local->slots + FIRA_CONTROLEE_FRAMES_MAX)
 				return false;
-			if (!initiator)
-				last.tx_controlee_index = 0;
-			else
-				last.tx_controlee_index = -1;
+			last.controller_tx = initiator;
 			last.ranging_index = 0;
 			last.message_id = message_id;
 			if (!initiator) {
 				last.tx_ant_set =
-					is_rframe ?
-						current_ms_step
-							->tx_ant_set_ranging :
-						current_ms_step
-							->tx_ant_set_nonranging;
+					is_rframe ? step->tx_ant_set_ranging :
+						    step->tx_ant_set_nonranging;
 			} else {
 				last.rx_ant_set = fira_session_get_rx_ant_set(
 					session, message_id);
@@ -604,13 +565,13 @@ fira_frame_measurement_report_fill_ranging_info(struct fira_local *local,
 	u64 rx_initiation_rctu, tx_response_rctu, rx_final_rctu;
 	u32 local_round_trip_rctu, local_reply_rctu;
 	int tof_rctu, i;
-	bool double_sided = (session->params.ranging_round_usage ==
-			     FIRA_RANGING_ROUND_USAGE_DSTWR);
+	bool double_sided = session->params.ranging_round_usage ==
+			    FIRA_RANGING_ROUND_USAGE_DSTWR;
 	control = *p++;
-	hopping_mode =
-		!!(control & FIRA_MEASUREMENT_REPORT_CONTROL_HOPPING_MODE);
-	round_index_present = !!(
-		control & FIRA_MEASUREMENT_REPORT_CONTROL_ROUND_INDEX_PRESENT);
+	hopping_mode = FIELD_GET(FIRA_MEASUREMENT_REPORT_CONTROL_HOPPING_MODE,
+				 control);
+	round_index_present = FIELD_GET(
+		FIRA_MEASUREMENT_REPORT_CONTROL_ROUND_INDEX_PRESENT, control);
 	n_reply_time = FIELD_GET(FIRA_MEASUREMENT_REPORT_CONTROL_N_REPLY_TIME,
 				 control);
 
@@ -634,13 +595,13 @@ fira_frame_measurement_report_fill_ranging_info(struct fira_local *local,
 				      n_reply_time)))
 		return false;
 
-	session->hopping_sequence_generation = hopping_mode &&
-					       !round_index_present;
 	if (round_index_present) {
 		int next_round_index;
 
 		next_round_index = get_unaligned_le16(p);
 		p += sizeof(u16);
+
+		session->controlee.next_round_index_valid = true;
 		session->next_round_index = next_round_index;
 	}
 
@@ -702,6 +663,7 @@ fira_frame_measurement_report_fill_ranging_info(struct fira_local *local,
 	ranging_info->tof_rctu = tof_rctu > 0 ? tof_rctu : 0;
 	ranging_info->tof_present = true;
 
+	session->controlee.hopping_mode = hopping_mode;
 	return true;
 }
 
@@ -709,13 +671,14 @@ bool fira_frame_measurement_report_payload_check(
 	struct fira_local *local, const struct fira_slot *slot,
 	struct sk_buff *skb, struct mcps802154_ie_get_context *ie_get)
 {
+	const struct fira_session *session = local->current_session;
+	const struct fira_session_params *params = &session->params;
 	bool fira_payload_seen = false;
 	unsigned int minimum_payload_len;
 	int r;
 	u8 *p;
 
-	if (local->current_session->params.ranging_round_usage ==
-	    FIRA_RANGING_ROUND_USAGE_DSTWR)
+	if (params->ranging_round_usage == FIRA_RANGING_ROUND_USAGE_DSTWR)
 		minimum_payload_len =
 			FIRA_IE_PAYLOAD_MEASUREMENT_REPORT_TYPE1_LEN(false, 0);
 	else
@@ -857,9 +820,10 @@ bool fira_frame_rframe_payload_check(struct fira_local *local,
 				     struct sk_buff *skb,
 				     struct mcps802154_ie_get_context *ie_get)
 {
+	const struct fira_session *session = local->current_session;
+	const struct fira_session_params *params = &session->params;
 	struct fira_ranging_info *ranging_info =
 		&local->ranging_info[slot->ranging_index];
-	struct fira_session_params *params = &local->current_session->params;
 	bool rframe_payload_seen = false;
 	int r;
 	u8 *p;
@@ -870,7 +834,8 @@ bool fira_frame_rframe_payload_check(struct fira_local *local,
 		skb_pull(skb, ie_get->len);
 
 		if (ie_get->id == IEEE802154_IE_PAYLOAD_VENDOR_GID &&
-		    ie_get->len >= FIRA_IE_VENDOR_OUI_LEN) {
+		    ie_get->len >= FIRA_IE_VENDOR_OUI_LEN &&
+		    ie_get->len <= FIRA_IE_VENDOR_OUI_LEN + FIRA_DATA_PAYLOAD_SIZE_MAX) {
 			u32 vendor;
 			unsigned int data_len;
 
@@ -896,76 +861,77 @@ bool fira_frame_rframe_payload_check(struct fira_local *local,
 	return r >= 0;
 }
 
-int fira_frame_encrypt(struct fira_local *local, const struct fira_slot *slot,
-		       struct sk_buff *skb)
+struct fira_session *fira_rx_frame_control_header_check(
+	struct fira_local *local, const struct fira_slot *slot,
+	struct sk_buff *skb, struct mcps802154_ie_get_context *ie_get,
+	u32 *phy_sts_index)
 {
-	struct fira_session *session = local->current_session;
-	int header_len;
+	const struct fira_session *session = local->current_session;
+	struct fira_session *session_found = NULL;
+	u32 session_id;
 
-	/* No payload, can not fail. */
-	header_len = mcps802154_ie_put_end(skb, false);
-	WARN_RETURN_ON(header_len < 0, header_len);
-
-	return fira_aead_encrypt(&session->crypto.aead, skb, header_len,
-				 local->src_short_addr, slot->index);
-}
-
-int fira_frame_decrypt(struct fira_local *local, struct fira_session *session,
-		       const struct fira_slot *slot, struct sk_buff *skb,
-		       unsigned int header_len)
-{
-	__le16 src_short_addr;
-
-	if (slot->tx_controlee_index == -1)
-		src_short_addr = local->dst_short_addr;
-	else
-		src_short_addr = session->current_controlees
-					 .data[slot->tx_controlee_index]
-					 .short_addr;
-
-	return fira_aead_decrypt(&session->crypto.aead, skb, header_len,
-				 src_short_addr, slot->index);
+	if (!fira_frame_header_check(local, skb, ie_get, phy_sts_index,
+				     &session_id))
+		return NULL;
+	if (session->id == session_id) {
+		session_found = local->current_session;
+	} else if (session->controlee.synchronised) {
+		return NULL;
+	} else {
+		session_found =
+			fira_get_session_by_session_id(local, session_id);
+		if (!session_found ||
+		    session_found->params.device_type !=
+			    FIRA_DEVICE_TYPE_CONTROLEE ||
+		    !fira_session_is_active(session_found))
+			return NULL;
+		/*
+		 * FIXME: The previous session will not sent a ranging round
+		 * report failure.
+		 *
+		 * The most simple is probably to remove a round ranging?
+		 * or keep somewhere, previous value.
+		 * or choice number 3.
+		 * ```
+		 * int remove_blocks = session->block_stride_len + 1;
+		 *
+		 * session->block_start_dtu -= remove_blocks *
+		 *     params->block_duration_dtu;
+		 * session->block_index -= remove_blocks;
+		 * ```
+		 */
+	}
+	/* Update current and allow content of session to be updated. */
+	local->current_session = session_found;
+	return session_found;
 }
 
 int fira_frame_header_check_decrypt(struct fira_local *local,
 				    const struct fira_slot *slot,
 				    struct sk_buff *skb,
-				    struct mcps802154_ie_get_context *ie_get,
-				    u32 *allow_resync_sts_index,
-				    struct fira_session **allow_resync_session)
+				    struct mcps802154_ie_get_context *ie_get)
 {
 	struct fira_session *session = local->current_session;
-	u32 sts_index;
+	int header_len;
+	__le16 src_short_addr;
+	u32 phy_sts_index;
 	u32 session_id;
 	u8 *header;
-	unsigned int header_len;
-	bool active;
 
 	header = skb->data;
 
-	if (!fira_frame_header_check(local, skb, ie_get, &sts_index,
+	if (!fira_frame_header_check(local, skb, ie_get, &phy_sts_index,
 				     &session_id))
 		return -EBADMSG;
-
-	if (allow_resync_session && session_id != session->id) {
-		session = fira_session_get(local, session_id, &active);
-		if (!session ||
-		    session->params.device_type != FIRA_DEVICE_TYPE_CONTROLEE ||
-		    !active || session->synchronised)
-			return -EBADMSG;
-		*allow_resync_session = session;
-	} else if (session_id != session->id) {
+	if (session_id != session->id)
 		return -EBADMSG;
-	}
 
-	if (allow_resync_sts_index) {
-		*allow_resync_sts_index = sts_index - slot->index;
-	} else if (sts_index !=
-		   fira_session_get_round_sts_index(session) + slot->index) {
+	if (phy_sts_index != fira_sts_get_phy_sts_index(session, slot->index))
 		return -EBADMSG;
-	}
 
 	header_len = skb->data - header;
-
-	return fira_frame_decrypt(local, session, slot, skb, header_len);
+	src_short_addr = slot->controller_tx ? local->dst_short_addr :
+					       slot->controlee->short_addr;
+	return fira_sts_decrypt_frame(session, skb, header_len, src_short_addr,
+				      slot->index);
 }

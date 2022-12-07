@@ -259,6 +259,61 @@ static int dw3000_d0_pll_calibration_from_scratch(struct dw3000 *dw)
 	return rc;
 }
 
+/**
+ * dw3000_d0_compute_rssi() - Compute RSSI from its composites
+ * @dw: the DW device
+ * @rssi: RSSI composites
+ * @rx_tune: state of RX_TUNE_EN bit leads to use dgc_dec value or not
+ * @sts: current sts mode
+ *
+ * Because RSSI cannot be positive in our case (would mean that signals have
+ * been amplified) we return an unsigned integer considered as always negative.
+ *
+ * Return: 0 on error, else the RSSI in absolute value and as an integer.
+ * expressed in dBm, Q32.0.
+ */
+u32 dw3000_d0_compute_rssi(struct dw3000 *dw, struct dw3000_rssi *rssi,
+			   bool rx_tune, u8 sts)
+{
+	/* Details are logged into UWB-3455
+	 * DW3700 User Manual v0.4 section 4.7.2 gives that RSSI
+	 * can be computed using this formula:
+	 * rssi = 10 * log10 ((cir_pwr * 2^17) / pacc_cnt ^ 2) + 6D - A(prf)
+	 * But log10 isn't implemented ; let's use ilog2 instead, because it is
+	 * easy to do on binary numbers. Thus, formula becomes:
+	 * rssi = 3*log2(cir_pwr) - 6*log2(pacc_cnt) + 3*log2(2^17) + 6*D - A(prf)
+	 * Notice that 3*log2(2^17) +6*D - A(prf) can be pre-computed.
+	 * Factor 3 comes from ln(2) / ln(10) almost equal to 3 / 10 ; this is an
+	 * approximation done in equation turning log10 into log2 to avoid floating point
+	 */
+
+	/* u32 is used because ilog2 macro cannot work on bitfield */
+	u32 pwr = rssi->cir_pwr;
+	u32 cnt = rssi->pacc_cnt;
+	s32 r, rssi_constant;
+
+	/* Do not consider bad packets */
+	if (unlikely(!pwr || !cnt))
+		return 0;
+
+	rssi_constant = DW3000_RSSI_CONSTANT + 6 * rx_tune * rssi->dgc_dec;
+
+	if (!rssi->prf_64mhz) {
+		rssi_constant -= DW3000_RSSI_OFFSET_PRF16;
+	} else
+		rssi_constant -= ((sts == DW3000_STS_MODE_OFF) ?
+					  DW3000_RSSI_OFFSET_PRF64_IPATOV :
+					  DW3000_RSSI_OFFSET_PRF64_STS);
+
+	r = 3 * ilog2(pwr) - 6 * ilog2(cnt) + rssi_constant;
+	if (unlikely(r > 0)) {
+		dev_err(dw->dev, "bad rssi value. Forced to 0\n");
+		r = 0;
+	}
+
+	return (u32)-r;
+}
+
 const struct dw3000_chip_ops dw3000_chip_d0_ops = {
 	.softreset = dw3000_d0_softreset,
 	.init = dw3000_d0_init,
@@ -272,4 +327,5 @@ const struct dw3000_chip_ops dw3000_chip_d0_ops = {
 	.prog_pll_coarse_code = dw3000_c0_prog_pll_coarse_code,
 	.set_mrxlut = dw3000_c0_set_mrxlut,
 	.get_registers = dw3000_d0_get_registers,
+	.compute_rssi = dw3000_d0_compute_rssi,
 };

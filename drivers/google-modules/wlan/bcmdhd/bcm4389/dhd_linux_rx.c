@@ -905,6 +905,15 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 			}
 		} else {
 			tout_rx = DHD_PACKET_TIMEOUT_MS;
+			/* Override rx wakelock timeout to give hostapd enough time
+			 * to process retry or error handling for handshake
+			 */
+			if (DHD_IF_ROLE_AP(dhdp, ifidx) &&
+				ntoh16(skb->protocol) == ETHER_TYPE_802_1X) {
+				if (dhd_is_4way_msg(dump_data) == EAPOL_4WAY_M2) {
+					tout_rx = DHD_HANDSHAKE_TIMEOUT_MS;
+				}
+			}
 
 #ifdef PROP_TXSTATUS
 			dhd_wlfc_save_rxpath_ac_time(dhdp, (uint8)PKTPRIO(skb));
