@@ -2431,7 +2431,12 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 
 	ch = cl_dsp_memchunk_create((void *) in_data, in_data_bytes);
 	cl_dsp_memchunk_read(&ch, 8); /* Skip padding */
-	nsections = cl_dsp_memchunk_read(&ch, 8);
+	ret = cl_dsp_memchunk_read(&ch, 8);
+	if (ret < 0)
+		return ret;
+
+	nsections = ret;
+
 	global_rep = cl_dsp_memchunk_read(&ch, 8);
 
 	sections = kcalloc(nsections, sizeof(struct cs40l26_owt_section),
@@ -2972,17 +2977,17 @@ static void cs40l26_erase_worker(struct work_struct *work)
 	effect_id = cs40l26->erase_effect->id;
 	index = cs40l26->trigger_indices[effect_id];
 	duration = (cs40l26->erase_effect->replay.length == 0) ?
-		CS40L26_OWT_DURATION_MS : cs40l26->erase_effect->replay.length;
+		CS40L26_MAX_WAIT_VIBE_COMPLETE_MS :
+		cs40l26->erase_effect->replay.length + CS40L26_ERASE_BUFFER_MS;
 
-	/* Check if effect playing is the one to be deleted. */
-	if (cs40l26->vibe_state == CS40L26_VIBE_STATE_HAPTIC &&
-			cs40l26->trigger_effect->id == effect_id) {
+	/* Check for ongoing effect playback. */
+	if (cs40l26->vibe_state == CS40L26_VIBE_STATE_HAPTIC) {
 		/* Wait for effect to complete. */
 		mutex_unlock(&cs40l26->lock);
 		if (!wait_for_completion_timeout(&cs40l26->erase_cont,
-				msecs_to_jiffies(duration + CS40L26_ERASE_WAIT_MS))) {
-			dev_err(cs40l26->dev, "Failed to erase effect in-flight\n");
+				msecs_to_jiffies(duration))) {
 			ret = -ETIME;
+			dev_err(cs40l26->dev, "Failed to erase effect: %d", ret);
 			goto pm_err;
 		}
 		mutex_lock(&cs40l26->lock);

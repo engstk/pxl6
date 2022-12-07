@@ -8,6 +8,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -57,6 +58,29 @@ static void aoc_compr_reset_handler(aoc_aud_service_event_t evnt, void *cookies)
 	}
 }
 
+static void aoc_compr_reset_pointer(struct aoc_alsa_stream *alsa_stream)
+{
+	struct snd_compr_stream *cstream = alsa_stream->cstream;
+	struct aoc_service_dev *dev = alsa_stream->dev;
+
+	if (aoc_compr_offload_get_io_samples(alsa_stream,
+		&alsa_stream->compr_pcm_io_sample_base) < 0) {
+		pr_err("ERR: fail to get audio playback samples\n");
+		return;
+	}
+
+	alsa_stream->hw_ptr_base = (cstream->direction == SND_COMPRESS_PLAYBACK) ?
+						 aoc_ring_bytes_read(dev->service, AOC_DOWN) :
+						 aoc_ring_bytes_written(dev->service, AOC_UP);
+	alsa_stream->prev_consumed = alsa_stream->hw_ptr_base;
+	alsa_stream->n_overflow = 0;
+	cstream->runtime->total_bytes_available = 0;
+
+	pr_debug("%s hw_ptr_base = %lu compr_pcm_io_sample_base = %llu\n",
+		__func__, alsa_stream->hw_ptr_base, alsa_stream->compr_pcm_io_sample_base);
+
+}
+
 void aoc_compr_offload_isr(struct aoc_service_dev *dev)
 {
 	struct aoc_alsa_stream *alsa_stream;
@@ -85,13 +109,25 @@ void aoc_compr_offload_isr(struct aoc_service_dev *dev)
 
 	/* Check EOF (n>0), and then flush the buffer for next EOF */
 	n = aoc_ring_bytes_available_to_read(alsa_stream->dev_eof->service, AOC_UP);
-	if (n > 0 && !aoc_ring_flush_read_data(alsa_stream->dev_eof->service, AOC_UP, 0)) {
-		pr_err("ERR: decoder_eof ring buffer flush fail\n");
+	if (n > 0) {
+		if (!aoc_ring_flush_read_data(alsa_stream->dev_eof->service, AOC_UP, 0))
+			pr_err("ERR: decoder_eof ring buffer flush fail\n");
+
+		/*
+		 * When enabling gapless offload, AOC might early send EOF
+		 */
+		if (alsa_stream->gapless_offload_enable) {
+			pr_info("compress offload gapless ring buffer is depleted\n");
+			snd_compr_drain_notify(alsa_stream->cstream);
+			alsa_stream->eof_reach = 1;
+			return;
+		}
 	}
 
 	if (aoc_ring_bytes_available_to_read(dev->service, AOC_DOWN) == 0) {
 		pr_info("compress offload ring buffer is depleted\n");
 		snd_compr_drain_notify(alsa_stream->cstream);
+		alsa_stream->eof_reach = 1;
 		return;
 	}
 
@@ -321,6 +357,11 @@ static int aoc_compr_playback_open(struct snd_compr_stream *cstream)
 	alsa_stream->dev = dev;
 	alsa_stream->dev_eof = dev_eof;
 	alsa_stream->idx = idx;
+	alsa_stream->compr_padding = COMPR_INVALID_METADATA;
+	alsa_stream->compr_delay = COMPR_INVALID_METADATA;
+	alsa_stream->send_metadata = 1;
+	alsa_stream->eof_reach = 0;
+	alsa_stream->gapless_offload_enable = chip->gapless_offload_enable;
 
 	err = aoc_audio_open(alsa_stream);
 	if (err != 0) {
@@ -403,6 +444,7 @@ static int aoc_compr_playback_free(struct snd_compr_stream *cstream)
 		alsa_stream->running = 0;
 		if (err != 0)
 			pr_err("ERR: failed to stop the stream\n");
+		aoc_compr_offload_close(alsa_stream);
 	}
 
 	if (alsa_stream->open) {
@@ -489,6 +531,7 @@ static int aoc_compr_trigger(struct snd_soc_component *component, struct snd_com
 		}
 
 		aoc_timer_stop(alsa_stream);
+		aoc_compr_offload_close(alsa_stream);
 		aoc_compr_prepare(alsa_stream);
 		break;
 
@@ -498,10 +541,14 @@ static int aoc_compr_trigger(struct snd_soc_component *component, struct snd_com
 
 	case SND_COMPR_TRIGGER_PARTIAL_DRAIN:
 		pr_debug("%s: SNDRV_PCM_TRIGGER_PARTIAL_DRAIN\n", __func__);
+		aoc_compr_offload_partial_drain(alsa_stream);
 		break;
 
 	case SND_COMPR_TRIGGER_NEXT_TRACK:
 		pr_debug("%s: SND_COMPR_TRIGGER_NEXT_TRACK\n", __func__);
+		alsa_stream->compr_padding = COMPR_INVALID_METADATA;
+		alsa_stream->compr_delay = COMPR_INVALID_METADATA;
+		alsa_stream->send_metadata = 1;
 		break;
 
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
@@ -537,8 +584,6 @@ static int aoc_compr_pointer(struct snd_soc_component *component, struct snd_com
 	struct snd_compr_runtime *runtime = cstream->runtime;
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
 	uint64_t current_sample = 0;
-
-	pr_debug("%s, %pK, %pK\n", __func__, runtime, arg);
 
 	arg->byte_offset = alsa_stream->pos;
 	arg->copied_total = alsa_stream->prev_consumed - alsa_stream->hw_ptr_base;
@@ -578,12 +623,17 @@ static int aoc_compr_playback_copy(struct snd_compr_stream *cstream,
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
 	int err = 0;
 
+	err = aoc_compr_offload_send_metadata(alsa_stream);
+	if (err < 0)
+		pr_err("ERR: %d failed to send metadata\n", err);
+
 	err = aoc_audio_write(alsa_stream, buf, count);
 	if (err < 0) {
 		pr_err("ERR:%d failed to write to buffer\n", err);
 		return err;
 	}
 
+	pr_debug("%s: count %lu\n", __func__, count);
 	return count;
 }
 
@@ -634,10 +684,29 @@ static int aoc_compr_set_metadata(struct snd_soc_component *component,
 				  struct snd_compr_metadata *metadata)
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
+	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
 	int ret = 0;
 
 	pr_debug("%s %pK, %pK\n", __func__, runtime, metadata);
+	/* clear pointer for gapless offload playback, call sequence should be:
+	 * receive EOF -> notify EOF to ap -> ap set_metadata for next track
+	 * -> ap write buffer for next track -> write metadata to aoc ->
+	 * write next track buffer to aoc.
+	 * Reset buffer pointer when ap set_metadata for next track.
+	 */
+	if (alsa_stream->eof_reach) {
+		alsa_stream->eof_reach = 0;
+		aoc_compr_reset_pointer(alsa_stream);
+	}
 
+	if (metadata->key == SNDRV_COMPRESS_ENCODER_PADDING) {
+		alsa_stream->compr_padding = metadata->value[0];
+	} else if (metadata->key == SNDRV_COMPRESS_ENCODER_DELAY) {
+		alsa_stream->compr_delay = metadata->value[0];
+	} else {
+		pr_warn("invalid key %d\n", metadata->key);
+		ret = -EINVAL;
+	}
 	return ret;
 }
 
@@ -646,9 +715,18 @@ static int aoc_compr_get_metadata(struct snd_soc_component *component,
 				  struct snd_compr_metadata *metadata)
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
+	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
 	int ret = 0;
 
 	pr_debug("%s %pK, %pK\n", __func__, runtime, metadata);
+	if (metadata->key == SNDRV_COMPRESS_ENCODER_PADDING) {
+		metadata->value[0] = alsa_stream->compr_padding;
+	} else if (metadata->key == SNDRV_COMPRESS_ENCODER_DELAY) {
+		metadata->value[0] = alsa_stream->compr_delay;
+	} else {
+		pr_warn("invalid key %d\n", metadata->key);
+		ret = -EINVAL;
+	}
 
 	return ret;
 }

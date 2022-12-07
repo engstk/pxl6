@@ -150,14 +150,14 @@ dbg_ring_poll_worker(struct work_struct *work)
 	}
 
 	if (!CAN_SLEEP()) {
-		DHD_ERROR(("this context should be sleepable\n"));
+		DHD_CONS_ONLY(("this context should be sleepable\n"));
 		sched = FALSE;
 		goto exit;
 	}
 
 	buf = VMALLOCZ(dhdp->osh, buflen);
 	if (!buf) {
-		DHD_ERROR(("%s failed to allocate read buf\n", __FUNCTION__));
+		DHD_CONS_ONLY(("%s failed to allocate read buf\n", __FUNCTION__));
 		sched = FALSE;
 		goto exit;
 	}
@@ -182,7 +182,7 @@ dbg_ring_poll_worker(struct work_struct *work)
 				DHD_DBGIF(("%s READ/WRITE counter mismatched!\n", __FUNCTION__));
 				ring->stat.read_bytes = ring->stat.written_bytes;
 			}
-			DHD_INFO(("%s RING%d[%s]read_bytes %d, written_bytes %d, "
+			DHD_DBGIF(("%s RING%d[%s]read_bytes %d, written_bytes %d, "
 				"writen_records %d\n", __FUNCTION__, ring->id, ring->name,
 				ring->stat.read_bytes, ring->stat.written_bytes,
 				ring->stat.written_records));
@@ -301,8 +301,6 @@ dhd_os_reset_logging(dhd_pub_t *dhdp)
 		DHD_INFO(("%s: Stop ring buffer %d\n", __FUNCTION__, ring_id));
 
 		ring_info = &os_priv[ring_id];
-		/* cancel any pending work */
-		cancel_delayed_work_sync(&ring_info->work);
 		/* log level zero makes stop logging on that ring */
 		ring_info->log_level = 0;
 		ring_info->interval = 0;
@@ -312,6 +310,8 @@ dhd_os_reset_logging(dhd_pub_t *dhdp)
 			DHD_ERROR(("dhd_set_configuration is failed : %d\n", ret));
 			return ret;
 		}
+		/* cancel any pending work */
+		cancel_delayed_work_sync(&ring_info->work);
 	}
 	return ret;
 }

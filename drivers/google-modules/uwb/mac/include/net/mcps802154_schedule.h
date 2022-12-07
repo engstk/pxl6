@@ -44,6 +44,9 @@ struct mcps802154_nl_ranging_request;
  * @MCPS802154_ACCESS_METHOD_NOTHING:
  *      Nothing to do, wait for end of region, or a schedule change. Internal,
  *      region handlers must return a NULL access if no access is possible.
+ * @MCPS802154_ACCESS_METHOD_IDLE:
+ * 	Nothing to do, wait for end of region, or a schedule change.
+ * 	Trust the access duration to not get the current time.
  * @MCPS802154_ACCESS_METHOD_IMMEDIATE_RX:
  *	RX as soon as possible, without timeout, with auto-ack.
  * @MCPS802154_ACCESS_METHOD_IMMEDIATE_TX:
@@ -55,6 +58,7 @@ struct mcps802154_nl_ranging_request;
  */
 enum mcps802154_access_method {
 	MCPS802154_ACCESS_METHOD_NOTHING,
+	MCPS802154_ACCESS_METHOD_IDLE,
 	MCPS802154_ACCESS_METHOD_IMMEDIATE_RX,
 	MCPS802154_ACCESS_METHOD_IMMEDIATE_TX,
 	MCPS802154_ACCESS_METHOD_MULTI,
@@ -89,18 +93,19 @@ struct mcps802154_access_frame {
 	bool is_tx;
 	union {
 		/**
-		 * @tx_frame_info: Information for transmitting a frame. Should
+		 * @tx_frame_config: Information for transmitting a frame. Should
 		 * have rx_enable_after_tx_dtu == 0.
 		 */
-		struct mcps802154_tx_frame_info tx_frame_info;
+		struct mcps802154_tx_frame_config tx_frame_config;
 		/**
 		 * @rx: Information for receiving a frame.
 		 */
 		struct {
 			/**
-			 * @rx.info: Information for enabling the receiver.
+			 * @rx.frame_config: Information for enabling the
+			 * receiver.
 			 */
-			struct mcps802154_rx_info info;
+			struct mcps802154_rx_frame_config frame_config;
 			/**
 			 * @rx.frame_info_flags_request: Information to request
 			 * when a frame is received, see
@@ -208,6 +213,15 @@ struct mcps802154_access {
 	 * ieee802154 interface.
 	 */
 	const struct mcps802154_channel *channel;
+	/**
+	 * @hrp_uwb_params: If not NULL, parameters for a HRP UWB Phy set at the
+	 * start of a multiple frames access.
+	 */
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params;
+	/**
+	 * @error: contain the error from the llhw in order to propagate it to upper regions.
+	 */
+	int error;
 };
 
 /**
@@ -252,6 +266,10 @@ struct mcps802154_access_ops {
 	/**
 	 * @tx_get_frame: Return a frame to send, the buffer is lend to caller
 	 * and should be returned with &mcps802154_access_ops.tx_return().
+	 *
+	 * The return value can be NULL for frames without data. In this case,
+	 * &mcps802154_access_ops.tx_return() will be called anyway, with a NULL
+	 * pointer.
 	 */
 	struct sk_buff *(*tx_get_frame)(struct mcps802154_access *access,
 					int frame_idx);
@@ -409,6 +427,11 @@ struct mcps802154_region_ops {
 	 * Return 1 if the region accepted to transmit the buffer, 0 otherwise.
 	 */
 	int (*xmit_skb)(struct mcps802154_region *region, struct sk_buff *skb);
+	/**
+	 * @deferred: Called at the end of event processing on request. See
+	 * mcps802154_region_deferred.
+	 */
+	void (*deferred)(struct mcps802154_region *region);
 };
 
 /**
@@ -511,6 +534,15 @@ struct mcps802154_scheduler_ops {
 		struct mcps802154_scheduler *scheduler,
 		const struct mcps802154_nl_ranging_request *requests,
 		unsigned int n_requests);
+	/**
+	 * @get_next_demands: Called to get an aggregated demand for the specified
+	 * region.
+	 */
+	int (*get_next_demands)(struct mcps802154_scheduler *scheduler,
+				const struct mcps802154_region *region,
+				u32 timestamp_dtu, int duration_dtu,
+				int delta_dtu,
+				struct mcps802154_region_demand *demands);
 };
 
 /**
@@ -693,6 +725,22 @@ void mcps802154_region_rx_skb(struct mcps802154_llhw *llhw,
 			      struct sk_buff *skb, u8 lqi);
 
 /**
+ * mcps802154_region_deferred() - Request to call the deferred callback at the
+ * end of event processing.
+ * @llhw: Low-level device pointer.
+ * @region: Pointer to the open region.
+ *
+ * Event is coming from the low-level device. The region must be the one which
+ * triggered the event (region must not call this after a get_access). If this
+ * is not respected, this call can return -EINVAL in case two regions request
+ * the deferred callback at the same time.
+ *
+ * Return: 0 or -EINVAL.
+ */
+int mcps802154_region_deferred(struct mcps802154_llhw *llhw,
+			       struct mcps802154_region *region);
+
+/**
  * mcps802154_scheduler_register() - Register a scheduler, to be called when
  * your module is loaded.
  * @scheduler_ops: Scheduler to register.
@@ -743,12 +791,14 @@ int mcps802154_schedule_recycle(
  * @region: Region to add.
  * @start_dtu: Region start from the start of the schedule.
  * @duration_dtu: Region duration, or 0 for endless region.
+ * @once: Schedule the region once, ignoring the remaining region duration.
  *
  * Return: 0 or error.
  */
 int mcps802154_schedule_add_region(
 	const struct mcps802154_schedule_update *schedule_update,
-	struct mcps802154_region *region, int start_dtu, int duration_dtu);
+	struct mcps802154_region *region, int start_dtu, int duration_dtu,
+	bool once);
 
 /**
  * mcps802154_reschedule() - Request to change access as possible.
@@ -788,5 +838,22 @@ void mcps802154_schedule_invalidate(struct mcps802154_llhw *llhw);
  */
 int mcps802154_schedule_get_regions(struct mcps802154_llhw *llhw,
 				    struct list_head **regions);
+
+/**
+ * mcps802154_schedule_get_next_demands() - Get an aggregated demand for the
+ * specified region.
+ * @llhw: Low-level device pointer.
+ * @region: Region.
+ * @timestamp_dtu: Timestamp from which demands must be computed.
+ * @duration_dtu: Duration for which demands are considered.
+ * @delta_dtu: Maximum gap between two demands.
+ * @demands: Aggregated demand.
+ *
+ * Return: 1 if demand is returned, 0 if no demand or error.
+ */
+int mcps802154_schedule_get_next_demands(
+	struct mcps802154_llhw *llhw, const struct mcps802154_region *region,
+	u32 timestamp_dtu, int duration_dtu, int delta_dtu,
+	struct mcps802154_region_demand *demands);
 
 #endif /* NET_MCPS802154_SCHEDULE_H */

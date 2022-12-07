@@ -25,6 +25,7 @@
 
 /* Forward declaration */
 struct dw3000;
+struct dw3000_rssi;
 
 /**
  * enum dw3000_chip_register_flags - flags for the register declaration
@@ -117,6 +118,7 @@ struct dw3000_chip_register_priv {
  * @kick_ops_table_on_wakeup: kick the desired operating parameter set table
  * @kick_dgc_on_wakeup: kick the DGC upon wakeup from sleep
  * @get_registers: Return known registers table and it's size
+ * @compute_rssi: Uses the parameters to compute RSSI of current frame
  */
 struct dw3000_chip_ops {
 	int (*softreset)(struct dw3000 *dw);
@@ -137,6 +139,8 @@ struct dw3000_chip_ops {
 	int (*kick_dgc_on_wakeup)(struct dw3000 *dw);
 	const struct dw3000_chip_register *(*get_registers)(struct dw3000 *dw,
 							    size_t *count);
+	u32 (*compute_rssi)(struct dw3000 *dw, struct dw3000_rssi *rssi,
+			    bool rx_tune, u8 sts);
 };
 
 /**

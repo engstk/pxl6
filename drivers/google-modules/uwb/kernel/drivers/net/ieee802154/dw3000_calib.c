@@ -26,7 +26,7 @@
 /* clang-format off */
 #define CHAN_PRF_PARAMS (4 * DW3000_CALIBRATION_PRF_MAX)
 #define ANT_CHAN_PARAMS (CHAN_PRF_PARAMS * DW3000_CALIBRATION_CHANNEL_MAX)
-#define ANT_OTHER_PARAMS (3) /* port, selector_gpio... */
+#define ANT_OTHER_PARAMS (4) /* port, selector_gpio... */
 #define ANTPAIR_CHAN_PARAMS (2 * DW3000_CALIBRATION_CHANNEL_MAX + 1)
 
 #define OTHER_PARAMS (13) /* xtal_trim, temperature_reference,
@@ -38,7 +38,7 @@
 
 #define MAX_CALIB_KEYS ((ANTMAX * (ANT_CHAN_PARAMS + ANT_OTHER_PARAMS)) + \
 			(ANTPAIR_MAX * ANTPAIR_CHAN_PARAMS) +		\
-			(DW3000_CALIBRATION_CHANNEL_MAX) +		\
+			(DW3000_CALIBRATION_CHANNEL_MAX * 2) +		\
 			OTHER_PARAMS)
 
 #define DW_OFFSET(m) offsetof(struct dw3000, m)
@@ -61,7 +61,8 @@
 	PRF_CAL_INFO(ant[x].ch[1], 1),		\
 	CAL_INFO(ant[x].port),			\
 	CAL_INFO(ant[x].selector_gpio),		\
-	CAL_INFO(ant[x].selector_gpio_value)
+	CAL_INFO(ant[x].selector_gpio_value),	\
+	CAL_INFO(ant[x].caps)
 
 #define ANTPAIR_CAL_INFO(x,y)					\
 	CAL_INFO(antpair[ANTPAIR_IDX(x, y)].ch[0].pdoa_offset),	\
@@ -90,7 +91,9 @@ static const struct {
 	ANTPAIR_CAL_INFO(2,3),
 	/* chY.* */
 	CAL_INFO(ch[0].pll_locking_code),
+	CAL_INFO(ch[0].wifi_coex_enabled),
 	CAL_INFO(ch[1].pll_locking_code),
+	CAL_INFO(ch[1].wifi_coex_enabled),
 	/* other with direct access in struct dw3000 */
 	DW_INFO(txconfig.smart),
 	DW_INFO(auto_sleep_margin_us),
@@ -122,7 +125,8 @@ static const struct {
 	PRF_CAL_LABEL(x, 9, 64),		\
 	"ant" #x ".port",			\
 	"ant" #x ".selector_gpio",		\
-	"ant" #x ".selector_gpio_value"
+	"ant" #x ".selector_gpio_value",	\
+	"ant" #x ".caps"
 
 #define PDOA_CAL_LABEL(a, b, c)				\
 	"ant" #a ".ant" #b ".ch" #c ".pdoa_offset",	\
@@ -150,7 +154,9 @@ static const char *const dw3000_calib_keys[MAX_CALIB_KEYS + 1] = {
 	ANTPAIR_CAL_LABEL(2,3),
 	/* chY.* */
 	"ch5.pll_locking_code",
+	"ch5.wifi_coex-enabled",
 	"ch9.pll_locking_code",
+	"ch9.wifi_coex-enabled",
 	/* other */
 	"smart_tx_power",
 	"auto_sleep_margin",
@@ -322,6 +328,9 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 
 	/* Shortcut pointers to reduce line length. */
 	ant_calib_prf = &ant_calib->ch[chanidx].prf[prfidx];
+
+	/* WiFi coexistence according to current channel */
+	dw->coex_enabled = dw->calib_data.ch[chanidx].wifi_coex_enabled;
 
 	/* Update TX configuration */
 	txconfig->power = ant_calib_prf->tx_power ? ant_calib_prf->tx_power :

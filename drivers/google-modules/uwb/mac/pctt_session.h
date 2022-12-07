@@ -30,6 +30,8 @@
 #include <net/pctt_region_params.h>
 #include <net/pctt_region_nl.h>
 
+#define PCTT_PAYLOAD_MAX_LEN 4096
+
 struct pctt_session_params {
 	enum pctt_device_role device_role;
 	__le16 short_addr;
@@ -40,17 +42,17 @@ struct pctt_session_params {
 	int channel_number;
 	int preamble_code_index;
 	enum pctt_rframe_config rframe_config;
-	enum pctt_prf_mode prf_mode;
 	enum pctt_preamble_duration preamble_duration;
 	enum pctt_sfd_id sfd_id;
 	enum pctt_number_of_sts_segments number_of_sts_segments;
 	enum pctt_psdu_data_rate psdu_data_rate;
 	enum pctt_mac_fcs_type mac_fcs_type;
+	enum pctt_prf_mode prf_mode;
+	enum pctt_phr_data_rate phr_data_rate;
 	u8 tx_adaptive_payload_power;
 	u32 sts_index;
-};
-
-struct pctt_test_params {
+	enum pctt_sts_length sts_length;
+	/* Test specific parameters */
 	u32 num_packets;
 	int gap_duration_dtu;
 	u32 t_start;
@@ -60,6 +62,9 @@ struct pctt_test_params {
 	u32 rmarker_tx_start;
 	u32 rmarker_rx_start;
 	u8 sts_index_auto_incr;
+	/* Data payload to put in TX test frame */
+	u8 data_payload[PCTT_PAYLOAD_MAX_LEN];
+	int data_payload_len;
 };
 
 /**
@@ -72,9 +77,10 @@ struct pctt_session {
 	 */
 	struct pctt_session_params params;
 	/**
-	 * @test_params: test parameters provided with the test id.
+	 * @hrp_uwb_params: HRP UWB parameters, read only while the session is
+	 * active.
 	 */
-	struct pctt_test_params test_params;
+	struct mcps802154_hrp_uwb_params hrp_uwb_params;
 	/**
 	 * @event_portid: Port identifier to use for notifications.
 	 */
@@ -90,17 +96,21 @@ struct pctt_session {
 	 */
 	bool first_access;
 	/**
+	 * @first_rx_synchronized: True after the first successful reception.
+	 */
+	bool first_rx_synchronized;
+	/**
 	 * @stop_request: True to not start an another access.
 	 */
 	bool stop_request;
 	/**
-	 * @next_timestamp_dtu: next date for PERIODIC_TX test.
+	 * @next_timestamp_dtu: next date for next frame.
 	 */
 	u32 next_timestamp_dtu;
 	/**
 	 * @setup_hw: setup hardware through a vendor command.
 	 */
-	struct dw3000_vendor_cmd_pctt_setup_hw setup_hw;
+	struct llhw_vendor_cmd_pctt_setup_hw setup_hw;
 	/**
 	 * @state: UWB session state.
 	 */

@@ -883,6 +883,18 @@ struct sec_ts_coordinate {
 	ktime_t ktime_released;
 };
 
+struct sec_ts_health_check {
+	ktime_t int_ktime;
+	u64 int_idx;
+	u64 coord_idx;
+	u64 status_idx;
+	/* Slot active bit from FW. */
+	unsigned long active_bit;
+	/* Check whether have coord, status or unknown event. */
+	bool coord_updated;
+	bool status_updated;
+};
+
 struct sec_ts_data {
 	u32 isr_pin;
 
@@ -1135,6 +1147,10 @@ struct sec_ts_data {
 	ktime_t wlc_changed_ktime;
 
 	ktime_t bugreport_ktime_start;
+	ktime_t ktime_resume;
+	u64 int_cnt;
+	u64 coord_event_cnt;
+	u64 status_event_cnt;
 
 	int (*sec_ts_write)(struct sec_ts_data *ts, u8 reg,
 				u8 *data, int len);
@@ -1222,6 +1238,7 @@ struct sec_ts_plat_data {
 	u8 mm2px;
 };
 
+void sec_ts_hc_dump(struct sec_ts_data *ts);
 void sec_ts_debug_dump(struct sec_ts_data *ts);
 int sec_ts_stop_device(struct sec_ts_data *ts);
 int sec_ts_start_device(struct sec_ts_data *ts);

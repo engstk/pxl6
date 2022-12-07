@@ -221,9 +221,15 @@ struct msgbuf_ring; /* ring context for common and flow rings */
  * Dongle advertizes host side sync mechanism requirements.
  */
 
+#ifdef PCIE_D2H_SYNC_RETRY_CNT_ONE
+#define PCIE_D2H_SYNC_WAIT_TRIES    (1U)
+#define PCIE_D2H_SYNC_NUM_OF_STEPS  (1U)
+#define PCIE_D2H_SYNC_DELAY         (1UL)	/* in terms of usecs */
+#else
 #define PCIE_D2H_SYNC_WAIT_TRIES    (512U)
 #define PCIE_D2H_SYNC_NUM_OF_STEPS  (5U)
 #define PCIE_D2H_SYNC_DELAY         (100UL)	/* in terms of usecs */
+#endif
 
 /**
  * Custom callback attached based upon D2H DMA Sync mode advertized by dongle.
@@ -11746,12 +11752,12 @@ dhd_prot_dma_indx_set(dhd_pub_t *dhd, uint16 new_index, uint8 type, uint16 ringi
 	dhd_prot_t *prot = dhd->prot;
 	uint16 max_h2d_rings = dhd->bus->max_submission_rings;
 
-	/* This is to ensure that memory operation of
-	 * ring are excuted prior to DMA Indices.
+	/* Ensure that instruction operates on workitem are
+	 * completed before dma indices are updated.
 	 * For non-dma indices case, this is handled
 	 * using W_REG() which inturn has wmb().
 	 */
-	OSL_SMP_WMB();
+	OSL_MB();
 	switch (type) {
 		case H2D_DMA_INDX_WR_UPD:
 			ptr = (uint8 *)(prot->h2d_dma_indx_wr_buf.va);
@@ -11782,6 +11788,11 @@ dhd_prot_dma_indx_set(dhd_pub_t *dhd, uint16 new_index, uint8 type, uint16 ringi
 
 	OSL_CACHE_FLUSH((void *)ptr, prot->rw_index_sz);
 
+	/* Ensure that instruction operates on workitem are
+	 * performed after dma indices are updated.
+	 */
+	OSL_MB();
+
 	DHD_TRACE(("%s: data %d type %d ringid %d ptr 0x%p offset %d\n",
 		__FUNCTION__, new_index, type, ringid, ptr, offset));
 
@@ -11801,6 +11812,11 @@ dhd_prot_dma_indx_get(dhd_pub_t *dhd, uint8 type, uint16 ringid)
 	uint16 offset;
 	dhd_prot_t *prot = dhd->prot;
 	uint16 max_h2d_rings = dhd->bus->max_submission_rings;
+
+	/* Ensure that instruction operates on workitem are
+	 * completed before dma indices are read.
+	 */
+	OSL_MB();
 
 	switch (type) {
 		case H2D_DMA_INDX_WR_UPD:
@@ -11854,10 +11870,10 @@ dhd_prot_dma_indx_get(dhd_pub_t *dhd, uint8 type, uint16 ringid)
 	DHD_TRACE(("%s: data %d type %d ringid %d ptr 0x%p offset %d\n",
 		__FUNCTION__, data, type, ringid, ptr, offset));
 
-	/* Memory barrier to ensure that ring operations are
-	 * performed after dma indices is synced.
+	/* Ensure that instruction operates on workitem are
+	 * performed after dma indices are read.
 	 */
-	OSL_SMP_WMB();
+	OSL_MB();
 	return (data);
 
 } /* dhd_prot_dma_indx_get */

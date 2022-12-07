@@ -91,8 +91,14 @@ dhd_ring_proc_read(struct file *file, char __user *buffer, size_t tt, loff_t *lo
 	trace_buf_info = (trace_buf_info_t *)MALLOCZ(g_dhd_pub->osh, sizeof(trace_buf_info_t));
 	if (trace_buf_info) {
 		dhd_dbg_read_ring_into_trace_buf(ring, trace_buf_info);
-		if (copy_to_user(buffer, (void*)trace_buf_info->buf, MIN(trace_buf_info->size, tt)))
-		{
+		if (!buffer || (MIN(trace_buf_info->size, tt) > TRACE_LOG_BUF_MAX_SIZE)) {
+			DHD_ERROR(("%s: size %lu tt %lu trace_buf_sz %d\n", __FUNCTION__,
+				MIN(trace_buf_info->size, tt), tt, trace_buf_info->size));
+			ret = -ENOMEM;
+			goto exit;
+		}
+		if (copy_to_user(buffer, (void*)trace_buf_info->buf,
+				MIN(trace_buf_info->size, tt))) {
 			ret = -EFAULT;
 			goto exit;
 		}
@@ -101,7 +107,7 @@ dhd_ring_proc_read(struct file *file, char __user *buffer, size_t tt, loff_t *lo
 		else
 			ret = trace_buf_info->size;
 	} else
-		DHD_ERROR(("Memory allocation Failed\n"));
+		DHD_ERROR(("%s: Memory allocation Failed\n", __FUNCTION__));
 
 exit:
 	if (trace_buf_info) {
@@ -2164,6 +2170,10 @@ trigger_dhd_dump_start_command(struct dhd_info *dhd, char *buf)
 	unsigned long flags = 0;
 
 	dhdp = &dhd->pub;
+	if (dhd->pub.up == 0) {
+		DHD_ERROR(("%s: Not up\n", __FUNCTION__));
+		return -EINVAL;
+	}
 
 	DHD_ERROR(("%s: dump_start command delivered.\n", __FUNCTION__));
 	DHD_GENERAL_LOCK(dhdp, flags);

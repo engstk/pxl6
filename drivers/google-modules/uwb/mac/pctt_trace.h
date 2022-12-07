@@ -66,11 +66,13 @@ TRACE_DEFINE_ENUM(PCTT_RFRAME_CONFIG_SP3);
 
 #define pctt_prf_mode_name(name)         \
 	{ PCTT_PRF_MODE_##name, #name }
-#define PCTT_PRF_MODE_SYMBOLS            \
-	pctt_prf_mode_name(BPRF),        \
-	pctt_prf_mode_name(HPRF)
+#define PCTT_PRF_MODE_SYMBOLS              \
+	pctt_prf_mode_name(BPRF),          \
+	pctt_prf_mode_name(HPRF),          \
+	pctt_prf_mode_name(HPRF_HIGH_RATE)
 TRACE_DEFINE_ENUM(PCTT_PRF_MODE_BPRF);
 TRACE_DEFINE_ENUM(PCTT_PRF_MODE_HPRF);
+TRACE_DEFINE_ENUM(PCTT_PRF_MODE_HPRF_HIGH_RATE);
 #define PCTT_PRF_MODE_ENTRY __field(enum pctt_prf_mode, prf_mode)
 #define PCTT_PRF_MODE_ASSIGN __entry->prf_mode = params->prf_mode
 #define PCTT_PRF_MODE_PR_FMT "prf_mode=%s"
@@ -117,10 +119,14 @@ TRACE_DEFINE_ENUM(PCTT_SFD_ID_4);
 #define PCTT_NUMBER_OF_STS_SEGMENTS_SYMBOLS            \
 	pctt_number_of_sts_segments_name(NONE),        \
 	pctt_number_of_sts_segments_name(1_SEGMENT),   \
-	pctt_number_of_sts_segments_name(2_SEGMENTS)
+	pctt_number_of_sts_segments_name(2_SEGMENTS),  \
+	pctt_number_of_sts_segments_name(3_SEGMENTS),  \
+	pctt_number_of_sts_segments_name(4_SEGMENTS)
 TRACE_DEFINE_ENUM(PCTT_NUMBER_OF_STS_SEGMENTS_NONE);
 TRACE_DEFINE_ENUM(PCTT_NUMBER_OF_STS_SEGMENTS_1_SEGMENT);
 TRACE_DEFINE_ENUM(PCTT_NUMBER_OF_STS_SEGMENTS_2_SEGMENTS);
+TRACE_DEFINE_ENUM(PCTT_NUMBER_OF_STS_SEGMENTS_3_SEGMENTS);
+TRACE_DEFINE_ENUM(PCTT_NUMBER_OF_STS_SEGMENTS_4_SEGMENTS);
 #define PCTT_NUMBER_OF_STS_SEGMENTS_ENTRY \
 	__field(enum pctt_number_of_sts_segments, number_of_sts_segments)
 #define PCTT_NUMBER_OF_STS_SEGMENTS_ASSIGN \
@@ -148,6 +154,21 @@ TRACE_DEFINE_ENUM(PCTT_PSDU_DATA_RATE_31M2);
 #define PCTT_PSDU_DATA_RATE_PR_FMT "psdu_data_rate=%s"
 #define PCTT_PSDU_DATA_RATE_PR_ARG \
 	__print_symbolic(__entry->psdu_data_rate, PCTT_PSDU_DATA_RATE_SYMBOLS)
+
+#define pctt_phr_data_rate_name(name)         \
+	{ PCTT_PHR_DATA_RATE##name, #name }
+#define PCTT_PHR_DATA_RATE_SYMBOLS            \
+	pctt_phr_data_rate_name(850k),        \
+	pctt_phr_data_rate_name(6M81),        \
+TRACE_DEFINE_ENUM(PCTT_PHR_DATA_RATE_850k);
+TRACE_DEFINE_ENUM(PCTT_PHR_DATA_RATE_6M81);
+#define PCTT_PHR_DATA_RATE_ENTRY \
+	__field(enum pctt_phr_data_rate, phr_data_rate)
+#define PCTT_PHR_DATA_RATE_ASSIGN \
+	__entry->phr_data_rate = params->phr_data_rate
+#define PCTT_PHR_DATA_RATE_PR_FMT "phr_data_rate=%s"
+#define PCTT_PHR_DATA_RATE_PR_ARG \
+	__print_symbolic(__entry->phr_data_rate, PCTT_PHR_DATA_RATE_SYMBOLS)
 
 #define pctt_mac_fcs_type_name(name)         \
 	{ PCTT_MAC_FCS_TYPE_##name, #name }
@@ -356,6 +377,7 @@ TRACE_EVENT(region_pctt_report_per_rx,
 		__field(u32, psdu_bit_error)
 		__field(u32, sts_found)
 		__field(u32, eof)
+		__field(u8, rssi)
 	    ),
 	    TP_fast_assign(
 		PCTT_STATUS_RANGING_ASSIGN;
@@ -372,20 +394,21 @@ TRACE_EVENT(region_pctt_report_per_rx,
 		__entry->psdu_bit_error = per_rx->psdu_bit_error;
 		__entry->sts_found = per_rx->sts_found;
 		__entry->eof = per_rx->eof;
+		__entry->rssi = per_rx->rssi;
 	    ),
 	    TP_printk(PCTT_STATUS_RANGING_PR_FMT " "
 		      "attempts=%u acq_detect=%u acq_reject=%u "
 		      "rx_fail=%u sync_cir_ready=%u sfd_fail=%u "
 		      "sfd_found=%u phr_dec_error=%u phr_bit_error=%u "
 		      "psdu_dec_error=%u psdu_bit_error=%u sts_found=%u "
-		      "eof=%u",
+		      "eof=%u rssi=%u ",
 		      PCTT_STATUS_RANGING_PR_ARG, __entry->attempts,
 		      __entry->acq_detect, __entry->acq_reject,
 		      __entry->rx_fail, __entry->sync_cir_ready,
 		      __entry->sfd_fail, __entry->sfd_found,
 		      __entry->phr_dec_error, __entry->phr_bit_error,
 		      __entry->psdu_dec_error, __entry->psdu_bit_error,
-		      __entry->sts_found, __entry->eof)
+		      __entry->sts_found, __entry->eof, __entry->rssi)
 );
 
 TRACE_EVENT(region_pctt_report_rx,
@@ -400,6 +423,7 @@ TRACE_EVENT(region_pctt_report_rx,
 		__field(s16, aoa_elevation)
 		__field(u8, toa_gap)
 		__field(u16, phr)
+		__field(u8, rssi)
 		__field(u16, psdu_data_len)
 		__dynamic_array(u8, psdu_data, rx->psdu_data_len)
 	    ),
@@ -411,6 +435,7 @@ TRACE_EVENT(region_pctt_report_rx,
 		__entry->aoa_elevation = rx->aoa_elevation;
 		__entry->toa_gap = rx->toa_gap;
 		__entry->phr = rx->phr;
+		__entry->rssi = rx->rssi;
 		__entry->psdu_data_len = rx->psdu_data_len;
 		memcpy(__get_dynamic_array(psdu_data), rx->psdu_data,
 		       __get_dynamic_array_len(psdu_data));
@@ -419,13 +444,26 @@ TRACE_EVENT(region_pctt_report_rx,
 	    TP_printk(PCTT_STATUS_RANGING_PR_FMT " "
 		      "rx_done_ts_int=%u rx_done_ts_frac=%u "
 		      "aoa_azimuth=%d aoa_elevation=%d toa_gap=%u "
-		      "phr=%u psdu_data_len=%u psdu_data=%s",
+		      "phr=%u rssi=%u  psdu_data_len=%u psdu_data=%s",
 		      PCTT_STATUS_RANGING_PR_ARG, __entry->rx_done_ts_int,
 		      __entry->rx_done_ts_frac, __entry->aoa_azimuth,
 		      __entry->aoa_elevation, __entry->toa_gap, __entry->phr,
-		      __entry->psdu_data_len,
+		      __entry->rssi, __entry->psdu_data_len,
 		      __print_hex(__get_dynamic_array(psdu_data),
 				  __get_dynamic_array_len(psdu_data)))
+);
+
+TRACE_EVENT(region_pctt_report_loopback,
+	    TP_PROTO(enum pctt_status_ranging status_ranging),
+	    TP_ARGS(status_ranging),
+	    TP_STRUCT__entry(
+		PCTT_STATUS_RANGING_ENTRY
+	    ),
+	    TP_fast_assign(
+		PCTT_STATUS_RANGING_ASSIGN;
+	    ),
+	    TP_printk(PCTT_STATUS_RANGING_PR_FMT,
+		      PCTT_STATUS_RANGING_PR_ARG)
 );
 
 TRACE_EVENT(region_pctt_report_ss_twr,
@@ -435,13 +473,27 @@ TRACE_EVENT(region_pctt_report_ss_twr,
 	    TP_STRUCT__entry(
 		PCTT_STATUS_RANGING_ENTRY
 		__field(u32, measurement_rctu)
+		__field(s16, pdoa_azimuth_deg_q7)
+		__field(s16, pdoa_elevation_deg_q7)
+		__field(u8, rssi)
+		__field(s16, aoa_azimuth_deg_q7)
+		__field(s16, aoa_elevation_deg_q7)
 	    ),
 	    TP_fast_assign(
 		PCTT_STATUS_RANGING_ASSIGN;
 		__entry->measurement_rctu = ss_twr->measurement_rctu;
+		__entry->pdoa_azimuth_deg_q7 = ss_twr->pdoa_azimuth_deg_q7;
+		__entry->pdoa_elevation_deg_q7 = ss_twr->pdoa_elevation_deg_q7;
+		__entry->rssi = ss_twr->rssi;
+		__entry->aoa_azimuth_deg_q7 = ss_twr->aoa_azimuth_deg_q7;
+		__entry->aoa_elevation_deg_q7 = ss_twr->aoa_elevation_deg_q7;
 	    ),
-	    TP_printk(PCTT_STATUS_RANGING_PR_FMT " measurement_rctu=%u",
-		      PCTT_STATUS_RANGING_PR_ARG, __entry->measurement_rctu)
+	    TP_printk(PCTT_STATUS_RANGING_PR_FMT " measurement_rctu=%u "
+				  "pdoa_azimuth_deg_q7=%u  pdoa_elevation_deg_q7=%u "
+				  "rssi=%u aoa_azimuth_deg_q7=%u aoa_elevation_deg_q7=%u",
+		      PCTT_STATUS_RANGING_PR_ARG, __entry->measurement_rctu,
+			  __entry->pdoa_azimuth_deg_q7, __entry->pdoa_elevation_deg_q7,
+			  __entry->rssi, __entry->aoa_azimuth_deg_q7, __entry->aoa_elevation_deg_q7)
 );
 
 TRACE_EVENT(region_pctt_report_nla_put_failure,

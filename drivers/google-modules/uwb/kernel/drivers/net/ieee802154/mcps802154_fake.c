@@ -75,8 +75,8 @@ static void stop(struct mcps802154_llhw *llhw)
 }
 
 static int tx_frame(struct mcps802154_llhw *llhw, struct sk_buff *skb,
-		    const struct mcps802154_tx_frame_info *info, int frame_idx,
-		    int next_delay_dtu)
+		    const struct mcps802154_tx_frame_config *config,
+		    int frame_idx, int next_delay_dtu)
 {
 	if (!started) {
 		pr_err("fake_mcps: %s called and not started\n", __func__);
@@ -90,8 +90,8 @@ static int tx_frame(struct mcps802154_llhw *llhw, struct sk_buff *skb,
 }
 
 static int rx_enable(struct mcps802154_llhw *llhw,
-		     const struct mcps802154_rx_info *info, int frame_idx,
-		     int next_delay_dtu)
+		     const struct mcps802154_rx_frame_config *info,
+		     int frame_idx, int next_delay_dtu)
 {
 	if (!started) {
 		pr_err("fake_mcps: %s called and not started\n", __func__);
@@ -238,9 +238,10 @@ static int get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
 	return 0;
 }
 
-static u64 tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
-					    u32 tx_timestamp_dtu,
-					    int ant_set_id)
+static u64 tx_timestamp_dtu_to_rmarker_rctu(
+	struct mcps802154_llhw *llhw, u32 tx_timestamp_dtu,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+	const struct mcps802154_channel *channel_params, int ant_set_id)
 {
 	if (!started) {
 		pr_err("fake_mcps: %s called and not started\n", __func__);
@@ -281,8 +282,8 @@ static int set_channel(struct mcps802154_llhw *llhw, u8 page, u8 channel,
 	return 0;
 }
 
-static int set_hrp_uwb_params(struct mcps802154_llhw *llhw, int prf, int psr,
-			      int sfd_selector, int phr_rate, int data_rate)
+static int set_hrp_uwb_params(struct mcps802154_llhw *llhw,
+			      const struct mcps802154_hrp_uwb_params *params)
 {
 	if (!started) {
 		pr_err("fake_mcps: %s called and not started\n", __func__);
@@ -434,6 +435,17 @@ static int __init fake_init(void)
 	driver_llhw->hw->flags =
 		(IEEE802154_HW_TX_OMIT_CKSUM | IEEE802154_HW_AFILT |
 		 IEEE802154_HW_PROMISCUOUS | IEEE802154_HW_RX_OMIT_CKSUM);
+	driver_llhw->flags =
+		(MCPS802154_LLHW_BPRF | MCPS802154_LLHW_DATA_RATE_6M81 |
+		 MCPS802154_LLHW_PHR_DATA_RATE_850K |
+		 MCPS802154_LLHW_PHR_DATA_RATE_6M81 | MCPS802154_LLHW_PRF_16 |
+		 MCPS802154_LLHW_PRF_64 | MCPS802154_LLHW_PSR_32 |
+		 MCPS802154_LLHW_PSR_64 | MCPS802154_LLHW_PSR_128 |
+		 MCPS802154_LLHW_PSR_256 | MCPS802154_LLHW_PSR_1024 |
+		 MCPS802154_LLHW_PSR_4096 | MCPS802154_LLHW_SFD_4A |
+		 MCPS802154_LLHW_SFD_4Z_8 | MCPS802154_LLHW_STS_SEGMENT_1 |
+		 MCPS802154_LLHW_AOA_AZIMUTH | MCPS802154_LLHW_AOA_ELEVATION |
+		 MCPS802154_LLHW_AOA_FOM);
 	/* UWB High band 802.15.4a-2007. */
 	driver_llhw->hw->phy->supported.channels[4] |= 0xffe0;
 

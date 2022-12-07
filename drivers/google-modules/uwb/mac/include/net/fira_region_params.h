@@ -27,15 +27,19 @@
 #include <linux/types.h>
 
 #define FIRA_VUPPER64_SIZE 8
+#define FIRA_STS_VUPPER64_OFFSET 8
 #define FIRA_KEY_SIZE_MAX 32
 #define FIRA_KEY_SIZE_MIN 16
-#define FIRA_CONTROLEES_MAX 16
+#define FIRA_CONTROLEES_MAX 8
 #define FIRA_RX_ANTENNA_PAIR_INVALID 0xff
 /*
  * In BPRF, frame is at most 127
  * 127 - (MHR + HIE + HT + PIE_Header + V_OUI + MIC + CRC)
  */
 #define FIRA_DATA_PAYLOAD_SIZE_MAX 84
+
+/* From UCI spec v1.1.0 (converted to mm) */
+#define FIRA_RANGE_DATA_NTF_PROXIMITY_FAR_DEFAULT 200000
 
 /**
  * enum fira_device_type - Type of a device.
@@ -138,16 +142,18 @@ enum fira_rframe_config {
 };
 
 /**
- * enum fira_prf_mode - **[NOT IMPLEMENTED]** Pulse Repetition Frequency
- * mode.
+ * enum fira_prf_mode - Pulse Repetition Frequency mode
  * @FIRA_PRF_MODE_BPRF: Base Pulse Repetition Frequency.
  * @FIRA_PRF_MODE_HPRF: Higher Pulse Repetition Frequency.
+ * @FIRA_PRF_MODE_HPRF_HIGH_RATE: Higher Pulse Repetition Frequency allows
+ * high data rate (27.2 Mbps and 31.2 Mbps).
  *
  * This enum is not used in the current implementation.
  */
 enum fira_prf_mode {
 	FIRA_PRF_MODE_BPRF,
 	FIRA_PRF_MODE_HPRF,
+	FIRA_PRF_MODE_HPRF_HIGH_RATE,
 };
 
 /**
@@ -180,17 +186,19 @@ enum fira_sfd_id {
 };
 
 /**
- * enum fira_sts_segments - **[NOT IMPLEMENTED]** RFU.
- * @FIRA_STS_SEGMENTS_0: RFU.
- * @FIRA_STS_SEGMENTS_1: RFU.
- * @FIRA_STS_SEGMENTS_2: RFU.
- *
- * This enum is not used in the current implementation.
+ * enum fira_sts_segments - Number of STS segments.
+ * @FIRA_STS_SEGMENTS_0: No STS Segment (Rframe config SP0).
+ * @FIRA_STS_SEGMENTS_1: 1 STS Segment.
+ * @FIRA_STS_SEGMENTS_2: 2 STS Segments.
+ * @FIRA_STS_SEGMENTS_3: 3 STS Segments.
+ * @FIRA_STS_SEGMENTS_4: 4 STS Segments.
  */
 enum fira_sts_segments {
 	FIRA_STS_SEGMENTS_0,
 	FIRA_STS_SEGMENTS_1,
 	FIRA_STS_SEGMENTS_2,
+	FIRA_STS_SEGMENTS_3,
+	FIRA_STS_SEGMENTS_4,
 };
 
 /**
@@ -208,15 +216,14 @@ enum fira_psdu_data_rate {
 };
 
 /**
- * enum fira_phr_data_rate - **[NOT IMPLEMENTED]**
- * Data rate used to exchange PHR.
- * @FIRA_PHR_DATA_RATE_850k: 850kb/s rate.
+ * enum fira_phr_data_rate - Data rate used to exchange PHR.
+ * @FIRA_PHR_DATA_RATE_850K: 850kb/s rate.
  * @FIRA_PHR_DATA_RATE_6M81: 6.8Mb/s rate.
  *
  * This enum is not used in the current implementation.
  */
 enum fira_phr_data_rate {
-	FIRA_PHR_DATA_RATE_850k,
+	FIRA_PHR_DATA_RATE_850K,
 	FIRA_PHR_DATA_RATE_6M81,
 };
 
@@ -231,17 +238,41 @@ enum fira_mac_fcs_type {
 };
 
 /**
- * enum fira_sts_config - Scrambled Timestamp Sequence configuration.
- * @FIRA_STS_CONFIG_STATIC: Use a static STS configuration.
- * @FIRA_STS_CONFIG_DYNAMIC: Use a dynamic STS configuration.
- * @FIRA_STS_CONFIG_DYNAMIC_INDIVIDUAL_KEY: Use a dynamic STS configuration
- * with an individual key.
+ * enum fira_rssi_report_type - Mode used to sum up individual frames RSSI
+ * in report.
+ * @FIRA_RSSI_REPORT_NONE: No RSSI value in report.
+ * @FIRA_RSSI_REPORT_MINIMUM: Report minimum RSSI
+ * @FIRA_RSSI_REPORT_AVERAGE: Report average RSSI
  */
-enum fira_sts_config {
-	FIRA_STS_CONFIG_STATIC,
-	FIRA_STS_CONFIG_DYNAMIC,
-	FIRA_STS_CONFIG_DYNAMIC_INDIVIDUAL_KEY,
+enum fira_rssi_report_type {
+	FIRA_RSSI_REPORT_NONE,
+	FIRA_RSSI_REPORT_MINIMUM,
+	FIRA_RSSI_REPORT_AVERAGE,
 };
+
+/**
+ * enum fira_sts_mode - Scrambled Timestamp Sequence modes.
+ *
+ * @FIRA_STS_MODE_STATIC: Static STS mode.
+ * @FIRA_STS_MODE_DYNAMIC: Use a dynamic STS mode.
+ * @FIRA_STS_MODE_DYNAMIC_INDIVIDUAL_KEY: Use a dynamic STS mode
+ * with individual controlee key.
+ * @FIRA_STS_MODE_PROVISIONED: Use a provisioned STS mode.
+ * @FIRA_STS_MODE_PROVISIONED_INDIVIDUAL_KEY: Use a provisioned STS
+ * mode with individual controlee key.
+ */
+enum fira_sts_mode {
+	FIRA_STS_MODE_STATIC = 0,
+	FIRA_STS_MODE_DYNAMIC = 1,
+	FIRA_STS_MODE_DYNAMIC_INDIVIDUAL_KEY = 2,
+	FIRA_STS_MODE_PROVISIONED = 3,
+	FIRA_STS_MODE_PROVISIONED_INDIVIDUAL_KEY = 4,
+};
+
+/*
+ * Get the capabilities bitfield value corresponding to given STS mode.
+ */
+#define STS_CAP(mode) (1 << (FIRA_STS_MODE_##mode))
 
 /**
  * enum fira_ranging_status - The ranging status.
@@ -306,6 +337,47 @@ enum fira_measurement_type {
 	FIRA_MEASUREMENT_TYPE_AOA_ELEVATION,
 	FIRA_MEASUREMENT_TYPE_AOA_AZIMUTH_ELEVATION,
 	__FIRA_MEASUREMENT_TYPE_AFTER_LAST,
+};
+
+/**
+ * enum fira_ranging_diagnostics_frame_report_flags - Activation flags for different frame diagnostics information.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_NONE: No specific frame diagnostic report requested.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_RSSIS: Report RSSI in frame diagnostics.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_AOAS: Report AOA in frame diagnostics.
+ * @FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_CIRS: Report CIR in frame diagnostics.
+ * @__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_AFTER_LAST: Internal use.
+ */
+enum fira_ranging_diagnostics_frame_report_flags {
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_NONE = 0,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_RSSIS = 1 << 0,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_AOAS = 1 << 1,
+	FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_CIRS = 1 << 2,
+	__FIRA_RANGING_DIAGNOSTICS_FRAME_REPORT_AFTER_LAST = 1 << 31,
+};
+
+/**
+ * enum fira_sts_length - Number of symbols in a STS segment.
+ * @FIRA_STS_LENGTH_32: The STS length is 32 symbols.
+ * @FIRA_STS_LENGTH_64: The STS length is 64 symbols.
+ * @FIRA_STS_LENGTH_128: The STS length is 128 symbols.
+ */
+enum fira_sts_length {
+	FIRA_STS_LENGTH_32 = 0,
+	FIRA_STS_LENGTH_64 = 1,
+	FIRA_STS_LENGTH_128 = 2,
+};
+
+/**
+ * enum fira_range_data_ntf_config - Configure range data notification.
+ * @FIRA_RANGE_DATA_NTF_DISABLED: Do not report range data.
+ * @FIRA_RANGE_DATA_NTF_ALWAYS: Report range data.
+ * @FIRA_RANGE_DATA_NTF_PROXIMITY: Report range data if it is within range
+ * defined by proximity parameters (RANGE_DATA_NTF_PROXIMITY_NEAR/FAR).
+ */
+enum fira_range_data_ntf_config {
+	FIRA_RANGE_DATA_NTF_DISABLED = 0,
+	FIRA_RANGE_DATA_NTF_ALWAYS = 1,
+	FIRA_RANGE_DATA_NTF_PROXIMITY = 2
 };
 
 #endif /* NET_FIRA_REGION_PARAMS_H */

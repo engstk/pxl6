@@ -27,7 +27,7 @@
 #include <linux/scatterlist.h>
 
 int fira_round_hopping_crypto_encrypt(
-	struct fira_round_hopping_sequence *round_hopping_sequence,
+	const struct fira_round_hopping_sequence *round_hopping_sequence,
 	const u8 *data, u8 *out)
 {
 	struct scatterlist sg;

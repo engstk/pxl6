@@ -556,6 +556,8 @@ int gs101_to_standby(struct max77759_usecase_data *uc_data, int use_case)
 
 	/* from WLC-DC to STBY */
 	if (from_uc == GSU_MODE_WLC_DC) {
+		if (uc_data->dc_sw_gpio > 0)
+			gpio_set_value_cansleep(uc_data->dc_sw_gpio, 0);
 		ret = gs101_ext_mode(uc_data, EXT_MODE_OFF);
 		if (ret < 0) {
 			pr_debug("%s: cannot change extmode ret:%d\n",
@@ -992,10 +994,13 @@ static int gs101_to_otg_usecase(struct max77759_usecase_data *uc_data, int use_c
 	case GSU_MODE_WLC_RX:
 	case GSU_MODE_DOCK:
 		if (use_case == GSU_MODE_USB_OTG_WLC_RX) {
-			if (uc_data->rx_otg_en)
-				ret = gs101_standby_to_otg(uc_data, use_case);
-			else
+			if (uc_data->rx_otg_en) {
+				ret = gs101_cpout_mode(uc_data, GS101_WLCRX_CPOUT_5_2V);
+				if (ret == 0)
+					ret = gs101_standby_to_otg(uc_data, use_case);
+			} else {
 				ret = gs101_wlcrx_to_wlcrx_otg(uc_data);
+			}
 		}
 	break;
 
@@ -1023,9 +1028,10 @@ static int gs101_to_otg_usecase(struct max77759_usecase_data *uc_data, int use_c
 	break;
 	case GSU_MODE_USB_OTG_WLC_RX:
 		/* b/179816224: WLC_RX + OTG -> OTG */
-		if (use_case == GSU_MODE_USB_OTG && !uc_data->ext_otg_only) {
+		if (use_case == GSU_MODE_USB_OTG) {
 			/* it's in STBY, no need to reset gs101_otg_mode()  */
-			ret = gs101_ext_bst_mode(uc_data, 0);
+			if (!uc_data->ext_otg_only)
+				ret = gs101_ext_bst_mode(uc_data, 0);
 			if (ret == 0)
 				ret = gs101_cpout_mode(uc_data, GS101_WLCRX_CPOUT_DFLT);
 		}
@@ -1090,6 +1096,8 @@ int gs101_to_usecase(struct max77759_usecase_data *uc_data, int use_case)
 					ret = gs101_ls_mode(uc_data, 0);
 				if (ret == 0)
 					ret = gs101_ext_mode(uc_data, 0);
+				if (ret == 0)
+					ret = gs101_cpout_mode(uc_data, GS101_WLCRX_CPOUT_DFLT);
 			} else {
 				if (ret == 0)
 					ret = gs101_cpout_mode(uc_data, GS101_WLCRX_CPOUT_DFLT);
@@ -1111,9 +1119,12 @@ int gs101_to_usecase(struct max77759_usecase_data *uc_data, int use_case)
 		if (from_uc == GSU_MODE_WLC_TX || from_uc == GSU_MODE_USB_CHG_WLC_TX) {
 			ret = gs101_wlc_tx_enable(uc_data, false);
 		}
-		/* b/202767016: charge over USB-C, set to low */
+		/* b/232723240: charge over USB-C
+		 *              set to 0 for POGO_OVP_EN
+		 *              set to 1 for POGO_OVP_EN_L
+		 */
 		if (uc_data->pogo_ovp_en > 0)
-			gpio_set_value_cansleep(uc_data->pogo_ovp_en, 0);
+			gpio_set_value_cansleep(uc_data->pogo_ovp_en, uc_data->pogo_ovp_en_act_low);
 		break;
 	case GSU_MODE_USB_WLC_RX:
 	case GSU_RAW_MODE:
@@ -1243,6 +1254,8 @@ static void gs101_setup_default_usecase(struct max77759_usecase_data *uc_data)
 bool gs101_setup_usecases(struct max77759_usecase_data *uc_data,
 			  struct device_node *node)
 {
+	enum of_gpio_flags flags = 0;
+
 	if (!node) {
 		gs101_setup_default_usecase(uc_data);
 		return false;
@@ -1257,8 +1270,12 @@ bool gs101_setup_usecases(struct max77759_usecase_data *uc_data,
 		uc_data->ext_bst_ctl = of_get_named_gpio(node, "max77759,extbst-ctl", 0);
 
 	/* for enabling charging over pogo */
-	if (uc_data->pogo_ovp_en == -EPROBE_DEFER)
-		uc_data->pogo_ovp_en = of_get_named_gpio(node, "max77759,pogo-ovp-en", 0);
+	if (uc_data->pogo_ovp_en == -EPROBE_DEFER) {
+		uc_data->pogo_ovp_en = of_get_named_gpio_flags(node, "max77759,pogo-ovp-en", 0,
+							       &flags);
+		if (uc_data->pogo_ovp_en >= 0)
+			uc_data->pogo_ovp_en_act_low = (flags & OF_GPIO_ACTIVE_LOW) ? 1 : 0;
+	}
 
 	/* NBC workaround */
 	if (uc_data->vin_is_valid == -EPROBE_DEFER)

@@ -29,7 +29,7 @@
 int dw3000_pctt_vendor_cmd(struct dw3000 *dw, u32 vendor_id, u32 subcmd,
 			   void *data, size_t data_len)
 {
-	struct dw3000_vendor_cmd_pctt_setup_hw *info = data;
+	struct llhw_vendor_cmd_pctt_setup_hw *info = data;
 	struct dw3000_config *config = &dw->config;
 	int rc;
 
@@ -62,5 +62,5 @@ int dw3000_pctt_vendor_cmd(struct dw3000 *dw, u32 vendor_id, u32 subcmd,
 			return rc;
 	}
 	dw->pctt.enabled = !!info;
-	return 0;
+	return dw3000_enable_auto_fcs(dw, !dw->pctt.enabled);
 }

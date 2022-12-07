@@ -25,6 +25,7 @@
 #define NET_MCPS802154_FRAME_H
 
 #include <linux/skbuff.h>
+#include "mcps802154.h"
 
 #define IEEE802154_FC_NO_SEQ_SHIFT 8
 #define IEEE802154_FC_NO_SEQ (1 << IEEE802154_FC_NO_SEQ_SHIFT)
@@ -270,13 +271,16 @@ int mcps802154_get_current_timestamp_dtu(struct mcps802154_llhw *llhw,
  * device time unit (RDEV only).
  * @llhw: Low-level device pointer.
  * @tx_timestamp_dtu: TX timestamp in device time unit.
+ * @hrp_uwb_params: HRP UWB parameters.
+ * @channel_params: Channel parameters.
  * @ant_set_id: Antennas set id used to transmit.
  *
  * Return: RMARKER timestamp in ranging count time unit.
  */
-u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(struct mcps802154_llhw *llhw,
-						u32 tx_timestamp_dtu,
-						int ant_set_id);
+u64 mcps802154_tx_timestamp_dtu_to_rmarker_rctu(
+	struct mcps802154_llhw *llhw, u32 tx_timestamp_dtu,
+	const struct mcps802154_hrp_uwb_params *hrp_uwb_params,
+	const struct mcps802154_channel *channel_params, int ant_set_id);
 
 /**
  * mcps802154_difference_timestamp_rctu() - Compute the difference between two
@@ -315,5 +319,16 @@ int mcps802154_compute_frame_duration_dtu(struct mcps802154_llhw *llhw,
  */
 int mcps802154_vendor_cmd(struct mcps802154_llhw *llhw, u32 vendor_id,
 			  u32 subcmd, void *data, size_t data_len);
+
+/**
+ * mcps802154_rx_get_measurement() - Get measurement.
+ * @llhw: Low-level device pointer.
+ * @rx_ctx: Rx context (can be NULL).
+ * @info: Measurements updated by the llhw.
+ *
+ * Return: 0 or error.
+ */
+int mcps802154_rx_get_measurement(struct mcps802154_llhw *llhw, void *rx_ctx,
+				  struct mcps802154_rx_measurement_info *info);
 
 #endif /* NET_MCPS802154_FRAME_H */

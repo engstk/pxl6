@@ -29,7 +29,8 @@ enum aoc_usb_msg {
 	GET_ISOC_TR_INFO,
 	SET_ISOC_TR_INFO,
 	SYNC_CONN_STAT,
-	SET_OFFLOAD_STATE
+	SET_OFFLOAD_STATE,
+	SEND_FB_EP_INFO
 };
 
 enum aoc_usb_state {
@@ -67,6 +68,9 @@ struct xhci_vendor_data {
 	bool usb_audio_offload;
 	bool dt_direct_usb_access;
 	bool offload_state;
+
+	/* count how many usb audio devices are connected */
+	int usb_audio_count;
 
 	enum usb_offload_op_mode op_mode;
 
@@ -112,6 +116,17 @@ struct get_isoc_tr_info_args {
 	u32 num_trbs_free;
 };
 
+struct feedback_ep_info_args {
+	bool enabled;
+	u16 bus_id;
+	u16 dev_num;
+	u16 slot_id;
+	u16 ep_num;
+	u32 max_packet;
+	u16 binterval;
+	u16 brefresh;
+};
+
 int xhci_vendor_helper_init(void);
 int usb_vendor_helper_init(void);
 int snd_usb_audio_vendor_helper_init(void);
@@ -120,6 +135,8 @@ extern int xhci_handle_event(struct xhci_hcd *xhci);
 extern void xhci_update_erst_dequeue(struct xhci_hcd *xhci,
 				     union xhci_trb *event_ring_deq);
 extern int xhci_exynos_register_vendor_ops(struct xhci_vendor_ops *vendor_ops);
+int xhci_send_feedback_ep_info(struct xhci_hcd *xhci, struct feedback_ep_info_args *cmd_args);
+int xhci_get_usb_audio_count(struct xhci_hcd *xhci);
 int xhci_set_offload_state(struct xhci_hcd *xhci, bool enabled);
 struct xhci_hcd *get_xhci_hcd_by_udev(struct usb_device *udev);
 

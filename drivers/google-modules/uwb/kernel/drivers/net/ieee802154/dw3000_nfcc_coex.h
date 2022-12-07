@@ -27,7 +27,6 @@
 #include <net/vendor_cmd.h>
 
 /* Main defines */
-#define DW3000_NFCC_COEX_VER_ID 2
 #define DW3000_NFCC_COEX_SIGNATURE_STR "QORVO"
 #define DW3000_NFCC_COEX_SIGNATURE_LEN 5
 #define DW3000_NFCC_COEX_MAX_NB_TLV 12
@@ -49,6 +48,19 @@
 
 #define DW3000_NFCC_COEX_UUS_PER_SYS_POWER 8 /* To use with right shift. */
 #define DW3000_NFCC_COEX_DTU_PER_UUS_POWER 4 /* To use with left shift. */
+
+/**
+ * enum dw3000_nfcc_coex_send - Type of message to send.
+ *
+ * @DW3000_NFCC_COEX_SEND_CLK_SYNC: Clock sync message.
+ * @DW3000_NFCC_COEX_SEND_CLK_OFFSET: Clock offset message.
+ * @DW3000_NFCC_COEX_SEND_STOP: Stop message.
+ */
+enum dw3000_nfcc_coex_send {
+	DW3000_NFCC_COEX_SEND_CLK_SYNC,
+	DW3000_NFCC_COEX_SEND_CLK_OFFSET,
+	DW3000_NFCC_COEX_SEND_STOP,
+};
 
 /**
  * struct dw3000_nfcc_coex_msg - Message read/write from/to scratch memory.
@@ -122,7 +134,7 @@ struct dw3000_nfcc_coex {
 	/**
 	 * @access_info: Access information to provide to upper layer.
 	 */
-	struct dw3000_vendor_cmd_nfcc_coex_get_access_info access_info;
+	struct llhw_vendor_cmd_nfcc_coex_get_access_info access_info;
 	/**
 	 * @session_time0_dtu: Timestamp used as reference between NFCC and AP.
 	 */
@@ -156,9 +168,9 @@ struct dw3000_nfcc_coex {
 	 */
 	bool configured;
 	/**
-	 * @sync_time_needed: True when clock_sync frame must be send.
+	 * @send: Type of message to send.
 	 */
-	bool sync_time_needed;
+	enum dw3000_nfcc_coex_send send;
 	/**
 	 * @first_rx_message: False after the first valid msg received.
 	 */
@@ -167,6 +179,10 @@ struct dw3000_nfcc_coex {
 	 * @watchdog_timer: Watchdog timer to detect spi not bring back.
 	 */
 	struct timer_list watchdog_timer;
+	/**
+	 * @version: Protocol version to use.
+	 */
+	u8 version;
 };
 
 #endif /* __DW3000_NFCC_COEX_H */

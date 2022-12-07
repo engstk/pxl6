@@ -40,6 +40,7 @@ mcps802154_fproc_vendor_handle_callback_return(struct mcps802154_local *local,
 	if (!r)
 		return;
 
+	access->error = r;
 	mcps802154_fproc_access_done(local, error);
 	if (error) {
 		mcps802154_fproc_broken_handle(local);

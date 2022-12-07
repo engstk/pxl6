@@ -38,6 +38,7 @@ module_param(sent_msg_count, long, S_IRUGO);
 struct chan_prvdata {
 	struct wakeup_source *queue_wakelock;
 	struct wakeup_source *user_wakelock;
+	struct task_struct *demux_task;
 };
 
 struct aocc_device_entry {
@@ -64,8 +65,15 @@ static atomic_t channel_index_counter = ATOMIC_INIT(1);
 static int aocc_probe(struct aoc_service_dev *dev);
 static int aocc_remove(struct aoc_service_dev *dev);
 
+static const char * const wakelock_names[] = {
+	"usf_queue",
+	"usf_queue_non_wake_up",
+	NULL,
+};
+
 static const char * const channel_service_names[] = {
 	"com.google.usf",
+	"com.google.usf.non_wake_up",
 	"usf_sh_mem_doorbell",
 	NULL,
 };
@@ -134,7 +142,6 @@ struct file_prvdata {
 /* Globals */
 /* TODO(b/141396548): Move these to drv_data. */
 static LIST_HEAD(s_open_files);
-static struct task_struct *s_demux_task;
 
 /* Shared memory transport doorbell globals. */
 /* TODO (b/184637825): Use mailbox device for AoC shared memory transport. */
@@ -152,7 +159,7 @@ static int aocc_demux_kthread(void *data)
 	struct aoc_service_dev *service = (struct aoc_service_dev *)data;
 	struct chan_prvdata *service_prvdata = service->prvdata;
 
-	pr_info("Demux handler started!");
+	dev_info(&(service->dev), "Demux handler started!");
 
 	while (!kthread_should_stop()) {
 		int handler_found = 0;
@@ -440,7 +447,7 @@ static int aocc_open(struct inode *inode, struct file *file)
 
 	/* Allocate a unique index to represent this open file. */
 	prvdata->channel_index = atomic_inc_return(&channel_index_counter);
-	pr_info("New client with channel ID %d", prvdata->channel_index);
+	dev_info(&(entry->service->dev), "New client with channel ID %d", prvdata->channel_index);
 
 	/* Start a new empty message list for this channel's message queue. */
 	INIT_LIST_HEAD(&prvdata->pending_aoc_messages);
@@ -762,7 +769,8 @@ static void aocc_sh_mem_doorbell_probe(struct aoc_service_dev *dev)
 static int aocc_probe(struct aoc_service_dev *dev)
 {
 	struct chan_prvdata *prvdata;
-	int ret = 0;
+	int ret = 0, i = 0;
+	bool service_found = false;
 	struct sched_param param = {
 		.sched_priority = 10,
 	};
@@ -774,19 +782,25 @@ static int aocc_probe(struct aoc_service_dev *dev)
 		return -ENOMEM;
 
 	if (strcmp(dev_name(&dev->dev), "usf_sh_mem_doorbell") != 0) {
-		prvdata->user_wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
-		prvdata->queue_wakelock = wakeup_source_register(&dev->dev, "usf_queue");
-		dev->prvdata = prvdata;
-
 		ret = create_character_device(dev);
-
-		s_demux_task = kthread_run(&aocc_demux_kthread, dev,
-					   "aocc_demux");
-
-		sched_setscheduler(s_demux_task, SCHED_FIFO, &param);
-
-		if (IS_ERR(s_demux_task))
-			ret = PTR_ERR(s_demux_task);
+		if (ret)
+			return ret;
+		prvdata->user_wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
+		for (i = 0; i < ARRAY_SIZE(wakelock_names); i++) {
+			if (strcmp(dev_name(&dev->dev), channel_service_names[i]) == 0) {
+				prvdata->queue_wakelock = wakeup_source_register(&dev->dev,
+										 wakelock_names[i]);
+				service_found = true;
+				break;
+			}
+		}
+		if (!service_found)
+			return -EINVAL;
+		dev->prvdata = prvdata;
+		prvdata->demux_task =  kthread_run(&aocc_demux_kthread, dev, dev_name(&dev->dev));
+		sched_setscheduler(prvdata->demux_task, SCHED_FIFO, &param);
+		if (IS_ERR(prvdata->demux_task))
+			ret = PTR_ERR(prvdata->demux_task);
 	}
 
 	aocc_sh_mem_doorbell_probe(dev);
@@ -800,16 +814,13 @@ static int aocc_remove(struct aoc_service_dev *dev)
 	struct aocc_device_entry *tmp;
 	struct chan_prvdata *prvdata;
 
-	if (dev != sh_mem_doorbell_service_dev) {
-		kthread_stop(s_demux_task);
-	}
-
 	/* Uninstall the shared memory doorbell service. */
 	if (dev == sh_mem_doorbell_service_dev) {
 		sh_mem_doorbell_service_dev->handler = NULL;
 		sh_mem_doorbell_service_dev = NULL;
 	} else {
 		prvdata = dev->prvdata;
+		kthread_stop(prvdata->demux_task);
 		if (prvdata->queue_wakelock) {
 			wakeup_source_unregister(prvdata->queue_wakelock);
 			prvdata->queue_wakelock = NULL;

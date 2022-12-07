@@ -38,8 +38,9 @@ static int adc_gain[16] = { 0,  1,  2,  3,  4,  5,  6,  7,
 #define PCA9468_CCMODE_CHECK1_T	5000	/* 10000ms -> 500ms */
 #define PCA9468_CCMODE_CHECK2_T	5000	/* 5000ms */
 #define PCA9468_CVMODE_CHECK_T 	10000	/* 10000ms */
-#define PCA4968_ENABLE_DELAY_T	150	/* 150ms */
+#define PCA9468_ENABLE_DELAY_T	150	/* 150ms */
 #define PCA9468_CVMODE_CHECK2_T	1000	/* 1000ms */
+#define PCA9468_ENABLE_WLC_DELAY_T	300	/* 300ms */
 
 /* Battery Threshold */
 #define PCA9468_DC_VBAT_MIN		3400000 /* uV */
@@ -3414,9 +3415,12 @@ static int pca9468_preset_config(struct pca9468_charger *pca9468)
 	pca9468->prev_iin = 0;
 	pca9468->prev_inc = INC_NONE;
 
-	/* Go to CHECK_ACTIVE state after 150ms*/
+	/* Go to CHECK_ACTIVE state after 150ms, 300ms for wireless */
 	pca9468->timer_id = TIMER_CHECK_ACTIVE;
-	pca9468->timer_period = PCA4968_ENABLE_DELAY_T;
+	if (pca9468->ta_type == TA_TYPE_WIRELESS)
+		pca9468->timer_period = PCA9468_ENABLE_WLC_DELAY_T;
+	else
+		pca9468->timer_period = PCA9468_ENABLE_DELAY_T;
 	mod_delayed_work(pca9468->dc_wq, &pca9468->timer_work,
 			   msecs_to_jiffies(pca9468->timer_period));
 error:
