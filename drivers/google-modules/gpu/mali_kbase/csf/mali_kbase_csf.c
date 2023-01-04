@@ -1591,24 +1591,28 @@ void kbase_csf_queue_group_terminate(struct kbase_context *kctx,
 	group = find_queue_group(kctx, group_handle);
 
 	if (group) {
-		remove_pending_group_fatal_error(group);
+		/* Stop the running of the given group */
 		term_queue_group(group);
 		kctx->csf.queue_groups[group_handle] = NULL;
+		rt_mutex_unlock(&kctx->csf.lock);
+
+		/* Cancel any pending event callbacks. If one is in progress
+		 * then this thread waits synchronously for it to complete (which
+		 * is why we must unlock the context first). We already ensured
+		 * that no more callbacks can be enqueued by terminating the group.
+		 */
+		cancel_queue_group_events(group);
+
+		rt_mutex_lock(&kctx->csf.lock);
+
+		/* Clean up after the termination */
+		remove_pending_group_fatal_error(group);
 	}
 
 	mutex_unlock(&kctx->csf.lock);
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kbdev);
 
-	if (!group)
-		return;
-
-	/* Cancel any pending event callbacks. If one is in progress
-	 * then this thread waits synchronously for it to complete (which
-	 * is why we must unlock the context first). We already ensured
-	 * that no more callbacks can be enqueued by terminating the group.
-	 */
-	cancel_queue_group_events(group);
 	kfree(group);
 }
 
