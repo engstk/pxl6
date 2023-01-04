@@ -563,6 +563,32 @@ static u64 mgm_update_gpu_pte(
 	return pte;
 }
 
+static u64 mgm_pte_to_original_pte(struct memory_group_manager_device *mgm_dev, int group_id,
+				   int mmu_level, u64 pte)
+{
+	struct mgm_groups *const data = mgm_dev->data;
+	u64 old_pte;
+
+	if (INVALID_GROUP_ID(group_id))
+		return pte;
+
+	switch (group_id) {
+	case MGM_RESERVED_GROUP_ID:
+	case MGM_IMPORTED_MEMORY_GROUP_ID:
+		/* The reserved group doesn't set PBHA bits */
+		/* TODO: Determine what to do with imported memory */
+		break;
+	default:
+		/* All other groups will have PBHA bits, so clear them */
+		old_pte = pte;
+		pte &= ~((u64)PBHA_BIT_MASK << PBHA_BIT_POS);
+		dev_dbg(data->dev, "%s: group_id=%d pte=0x%llx -> 0x%llx\n", __func__, group_id,
+			old_pte, pte);
+	}
+
+	return pte;
+}
+
 static vm_fault_t mgm_vmf_insert_pfn_prot(
 	struct memory_group_manager_device *const mgm_dev, int const group_id,
 	struct vm_area_struct *const vma, unsigned long const addr,
@@ -710,6 +736,7 @@ static int memory_group_manager_probe(struct platform_device *pdev)
 			mgm_get_import_memory_id;
 	mgm_dev->ops.mgm_vmf_insert_pfn_prot = mgm_vmf_insert_pfn_prot;
 	mgm_dev->ops.mgm_update_gpu_pte = mgm_update_gpu_pte;
+	mgm_dev->ops.mgm_pte_to_original_pte = mgm_pte_to_original_pte;
 
 	mgm_data = kzalloc(sizeof(*mgm_data), GFP_KERNEL);
 	if (!mgm_data) {

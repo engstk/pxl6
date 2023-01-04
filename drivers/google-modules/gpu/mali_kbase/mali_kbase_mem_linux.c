@@ -714,6 +714,9 @@ unsigned long kbase_mem_evictable_reclaim_scan_objects(struct shrinker *s,
 	list_for_each_entry_safe(alloc, tmp, &kctx->evict_list, evict_node) {
 		int err;
 
+		if (!alloc->reg)
+			continue;
+
 		err = kbase_mem_shrink_gpu_mapping(kctx, alloc->reg,
 				0, alloc->nents);
 		if (err != 0) {
@@ -946,6 +949,15 @@ int kbase_mem_flags_change(struct kbase_context *kctx, u64 gpu_addr, unsigned in
 	/* Validate the region */
 	reg = kbase_region_tracker_find_region_base_address(kctx, gpu_addr);
 	if (kbase_is_region_invalid_or_free(reg))
+		goto out_unlock;
+
+	/* There is no use case to support MEM_FLAGS_CHANGE ioctl for allocations
+	 * that have NO_USER_FREE flag set, to mark them as evictable/reclaimable.
+	 * This would usually include JIT allocations, Tiler heap related allocations
+	 * & GPU queue ringbuffer and none of them needs to be explicitly marked
+	 * as evictable by Userspace.
+	 */
+	if (reg->flags & KBASE_REG_NO_USER_FREE)
 		goto out_unlock;
 
 	/* Is the region being transitioning between not needed and needed? */
@@ -1746,6 +1758,10 @@ unwind_dma_map:
 	}
 fault_mismatch:
 	if (pages) {
+		/* In this case, the region was not yet in the region tracker,
+		 * and so there are no CPU mappings to remove before we unpin
+		 * the page
+		 */
 		for (i = 0; i < faulted_pages; i++)
 			kbase_unpin_user_buf_page(pages[i]);
 	}
@@ -1802,7 +1818,10 @@ u64 kbase_mem_alias(struct kbase_context *kctx, u64 *flags, u64 stride,
 	if (!nents)
 		goto bad_nents;
 
-	if (nents > (U64_MAX / PAGE_SIZE) / stride)
+	if (stride > U64_MAX / nents)
+		goto bad_size;
+
+	if ((nents * stride) > (U64_MAX / PAGE_SIZE))
 		/* 64-bit address range is the max */
 		goto bad_size;
 
@@ -2673,7 +2692,6 @@ static void kbase_free_unused_jit_allocations(struct kbase_context *kctx)
 	while (kbase_jit_evict(kctx))
 		;
 }
-#endif
 
 static int kbase_mmu_dump_mmap(struct kbase_context *kctx,
 			struct vm_area_struct *vma,
@@ -2690,9 +2708,7 @@ static int kbase_mmu_dump_mmap(struct kbase_context *kctx,
 	size = (vma->vm_end - vma->vm_start);
 	nr_pages = size >> PAGE_SHIFT;
 
-#ifdef CONFIG_MALI_VECTOR_DUMP
 	kbase_free_unused_jit_allocations(kctx);
-#endif
 
 	kaddr = kbase_mmu_dump(kctx, nr_pages);
 
@@ -2740,7 +2756,7 @@ out_va_region:
 out:
 	return err;
 }
-
+#endif
 
 void kbase_os_mem_map_lock(struct kbase_context *kctx)
 {
@@ -2881,6 +2897,7 @@ int kbase_context_mmap(struct kbase_context *const kctx,
 		err = -EINVAL;
 		goto out_unlock;
 	case PFN_DOWN(BASE_MEM_MMU_DUMP_HANDLE):
+#if defined(CONFIG_MALI_VECTOR_DUMP)
 		/* MMU dump */
 		err = kbase_mmu_dump_mmap(kctx, vma, &reg, &kaddr);
 		if (err != 0)
@@ -2888,6 +2905,11 @@ int kbase_context_mmap(struct kbase_context *const kctx,
 		/* free the region on munmap */
 		free_on_close = 1;
 		break;
+#else
+		/* Illegal handle for direct map */
+		err = -EINVAL;
+		goto out_unlock;
+#endif /* defined(CONFIG_MALI_VECTOR_DUMP) */
 #if MALI_USE_CSF
 	case PFN_DOWN(BASEP_MEM_CSF_USER_REG_PAGE_HANDLE):
 		kbase_gpu_vm_unlock(kctx);
@@ -2975,7 +2997,7 @@ int kbase_context_mmap(struct kbase_context *const kctx,
 
 	err = kbase_cpu_mmap(kctx, reg, vma, kaddr, nr_pages, aligned_offset,
 			free_on_close);
-
+#if defined(CONFIG_MALI_VECTOR_DUMP)
 	if (vma->vm_pgoff == PFN_DOWN(BASE_MEM_MMU_DUMP_HANDLE)) {
 		/* MMU dump - userspace should now have a reference on
 		 * the pages, so we can now free the kernel mapping
@@ -2994,7 +3016,7 @@ int kbase_context_mmap(struct kbase_context *const kctx,
 		 */
 		vma->vm_pgoff = PFN_DOWN(vma->vm_start);
 	}
-
+#endif /* defined(CONFIG_MALI_VECTOR_DUMP) */
 out_unlock:
 	kbase_gpu_vm_unlock(kctx);
 out:
@@ -3311,9 +3333,27 @@ static unsigned long get_queue_doorbell_pfn(struct kbase_device *kbdev,
 			 (u64)queue->doorbell_nr * CSF_HW_DOORBELL_PAGE_SIZE));
 }
 
+static int
+#if (KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || \
+	KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE)
+kbase_csf_user_io_pages_vm_mremap(struct vm_area_struct *vma)
+#else
+kbase_csf_user_io_pages_vm_mremap(struct vm_area_struct *vma, unsigned long flags)
+#endif
+{
+	pr_debug("Unexpected call to mremap method for User IO pages mapping vma\n");
+	return -EINVAL;
+}
+
+static int kbase_csf_user_io_pages_vm_split(struct vm_area_struct *vma, unsigned long addr)
+{
+	pr_debug("Unexpected call to split method for User IO pages mapping vma\n");
+	return -EINVAL;
+}
+
 static void kbase_csf_user_io_pages_vm_open(struct vm_area_struct *vma)
 {
-	WARN(1, "Unexpected attempt to clone private vma\n");
+	pr_debug("Unexpected call to the open method for User IO pages mapping vma\n");
 	vma->vm_private_data = NULL;
 }
 
@@ -3325,8 +3365,10 @@ static void kbase_csf_user_io_pages_vm_close(struct vm_area_struct *vma)
 	int err;
 	bool reset_prevented = false;
 
-	if (WARN_ON(!queue))
+	if (!queue) {
+		pr_debug("Close method called for the new User IO pages mapping vma\n");
 		return;
+	}
 
 	kctx = queue->kctx;
 	kbdev = kctx->kbdev;
@@ -3370,9 +3412,12 @@ static vm_fault_t kbase_csf_user_io_pages_vm_fault(struct vm_fault *vmf)
 	struct memory_group_manager_device *mgm_dev;
 
 	/* Few sanity checks up front */
-	if ((nr_pages != BASEP_QUEUE_NR_MMAP_USER_PAGES) ||
-	    (vma->vm_pgoff != queue->db_file_offset))
+	if (!queue || (nr_pages != BASEP_QUEUE_NR_MMAP_USER_PAGES) ||
+	    (vma->vm_pgoff != queue->db_file_offset)) {
+		pr_warn("Unexpected CPU page fault on User IO pages mapping for process %s tgid %d pid %d\n",
+			current->comm, current->tgid, current->pid);
 		return VM_FAULT_SIGBUS;
+	}
 
 	kbdev = queue->kctx->kbdev;
 	mgm_dev = kbdev->mgm_dev;
@@ -3435,6 +3480,12 @@ exit:
 static const struct vm_operations_struct kbase_csf_user_io_pages_vm_ops = {
 	.open = kbase_csf_user_io_pages_vm_open,
 	.close = kbase_csf_user_io_pages_vm_close,
+#if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE
+	.may_split = kbase_csf_user_io_pages_vm_split,
+#else
+	.split = kbase_csf_user_io_pages_vm_split,
+#endif
+	.mremap = kbase_csf_user_io_pages_vm_mremap,
 	.fault = kbase_csf_user_io_pages_vm_fault
 };
 
