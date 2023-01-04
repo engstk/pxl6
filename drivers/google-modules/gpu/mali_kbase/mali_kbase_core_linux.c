@@ -2170,6 +2170,9 @@ static ssize_t kbase_read(struct file *filp, char __user *buf, size_t count, lof
 	if (unlikely(!kctx))
 		return -EPERM;
 
+	if (count < data_size)
+		return -ENOBUFS;
+
 	if (atomic_read(&kctx->event_count))
 		read_event = true;
 	else
