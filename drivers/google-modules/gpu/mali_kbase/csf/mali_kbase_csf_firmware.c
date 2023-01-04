@@ -722,8 +722,9 @@ static int parse_memory_setup_entry(struct kbase_device *kbdev,
 
 	if (!reuse_pages) {
 		ret = kbase_mmu_insert_pages_no_flush(kbdev, &kbdev->csf.mcu_mmu,
-				virtual_start >> PAGE_SHIFT, phys, num_pages_aligned, mem_flags,
-				KBASE_MEM_GROUP_CSF_FW);
+						      virtual_start >> PAGE_SHIFT, phys,
+						      num_pages_aligned, mem_flags,
+						      KBASE_MEM_GROUP_CSF_FW, NULL);
 
 		if (ret != 0) {
 			dev_err(kbdev->dev, "Failed to insert firmware pages\n");
@@ -2526,9 +2527,9 @@ int kbase_csf_firmware_mcu_shared_mapping_init(
 	gpu_map_properties &= (KBASE_REG_GPU_RD | KBASE_REG_GPU_WR);
 	gpu_map_properties |= gpu_map_prot;
 
-	ret = kbase_mmu_insert_pages_no_flush(kbdev, &kbdev->csf.mcu_mmu,
-			va_reg->start_pfn, &phys[0], num_pages,
-			gpu_map_properties, KBASE_MEM_GROUP_CSF_FW);
+	ret = kbase_mmu_insert_pages_no_flush(kbdev, &kbdev->csf.mcu_mmu, va_reg->start_pfn,
+					      &phys[0], num_pages, gpu_map_properties,
+					      KBASE_MEM_GROUP_CSF_FW, NULL);
 	if (ret)
 		goto mmu_insert_pages_error;
 
