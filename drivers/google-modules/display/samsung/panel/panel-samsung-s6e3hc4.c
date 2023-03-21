@@ -98,7 +98,6 @@ static const unsigned char FHD_PPS_SETTING[DSC_PPS_SIZE] = {
 };
 
 
-#define S6E3HC4_WRCTRLD_DIMMING_BIT    0x08
 #define S6E3HC4_WRCTRLD_BCTRL_BIT      0x20
 #define S6E3HC4_WRCTRLD_HBM_BIT        0xC0
 #define S6E3HC4_WRCTRLD_LOCAL_HBM_BIT  0x10
@@ -275,8 +274,8 @@ static void s6e3hc4_update_te2(struct exynos_panel *ctx)
 
 static inline bool is_auto_mode_allowed(struct exynos_panel *ctx)
 {
-	/* don't want to enable auto mode/early exit during hbm or dimming on */
-	if (IS_HBM_ON(ctx->hbm_mode) || ctx->dimming_on)
+	/* don't want to enable auto mode/early exit during hbm mode */
+	if (IS_HBM_ON(ctx->hbm_mode))
 		return false;
 
 	if (ctx->idle_delay_ms) {
@@ -384,17 +383,17 @@ static void s6e3hc4_update_panel_feat(struct exynos_panel *ctx,
 		EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x01, 0x9B, 0x92);
 		if (test_bit(FEAT_IRC_OFF, spanel->feat)) {
 			EXYNOS_DCS_BUF_ADD(ctx, 0x92, 0x01);
-			if (ctx->panel_rev >= PANEL_REV_EVT1_1) {
+			if (ctx->panel_rev >= PANEL_REV_DVT1) {
 				/* IR compensation SP setting */
 				EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x02, 0xF3, 0x68);
 				EXYNOS_DCS_BUF_ADD(ctx, 0x68, 0x20, 0x1E, 0x0C, 0x82, 0x82, 0x78);
 			}
 		} else {
 			EXYNOS_DCS_BUF_ADD(ctx, 0x92, 0x21);
-			if (ctx->panel_rev >= PANEL_REV_EVT1_1) {
+			if (ctx->panel_rev >= PANEL_REV_DVT1) {
 				/* IR compensation SP setting */
 				EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x02, 0xF3, 0x68);
-				EXYNOS_DCS_BUF_ADD(ctx, 0x68, 0x0A, 0x0F, 0x0A, 0x0A, 0x0A, 0x0A);
+				EXYNOS_DCS_BUF_ADD(ctx, 0x68, 0x09, 0x09, 0x09, 0x0A, 0x0A, 0x0A);
 			}
 		}
 	}
@@ -558,7 +557,7 @@ static void s6e3hc4_update_refresh_mode(struct exynos_panel *ctx,
 	 * Note: when mode is explicitly set, panel performs early exit to get out
 	 * of idle at next vsync, and will not back to idle until not seeing new
 	 * frame traffic for a while. If idle_vrefresh != 0, try best to guess what
-	 * panel_idle_vrefresh will be soon, and s6e3hc3_c10_update_idle_state() in
+	 * panel_idle_vrefresh will be soon, and s6e3hc4_update_idle_state() in
 	 * new frame commit will correct it if the guess is wrong.
 	 */
 	ctx->panel_idle_vrefresh = idle_vrefresh;
@@ -594,6 +593,9 @@ static void s6e3hc4_panel_idle_notification(struct exynos_panel *ctx,
 	char event_string[64];
 	char *envp[] = { event_string, NULL };
 	struct drm_device *dev = ctx->bridge.dev;
+
+	if (vrefresh == idle_te_vrefresh)
+		return;
 
 	if (!dev) {
 		dev_warn(ctx->dev, "%s: drm_device is null\n", __func__);
@@ -732,13 +734,9 @@ static void s6e3hc4_write_display_mode(struct exynos_panel *ctx,
 	if (ctx->hbm.local_hbm.enabled)
 		val |= S6E3HC4_WRCTRLD_LOCAL_HBM_BIT;
 
-	if (ctx->dimming_on)
-		val |= S6E3HC4_WRCTRLD_DIMMING_BIT;
-
 	dev_dbg(ctx->dev,
-		"%s(wrctrld:0x%x, hbm: %s, dimming: %s local_hbm: %s)\n",
+		"%s(wrctrld:0x%x, hbm: %s, local_hbm: %s)\n",
 		__func__, val, IS_HBM_ON(ctx->hbm_mode) ? "on" : "off",
-		ctx->dimming_on ? "on" : "off",
 		ctx->hbm.local_hbm.enabled ? "on" : "off");
 
 	EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, val);
@@ -810,6 +808,8 @@ static const struct exynos_dsi_cmd s6e3hc4_init_cmds[] = {
 	/* Enable SP */
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_LT(PANEL_REV_EVT1_1), 0xB0, 0x00, 0x58, 0x69),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_LT(PANEL_REV_EVT1_1), 0x69, 0x01),
+	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_GE(PANEL_REV_DVT1), 0xB0, 0x02, 0xF3, 0x68),
+	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_GE(PANEL_REV_DVT1), 0x68, 0x09, 0X09, 0X09, 0x0A, 0x0A, 0x0A),
 	/* FFC: 165 Mhz, 1% tolerance */
 	EXYNOS_DSI_CMD_SEQ(0xB0, 0x00, 0x36, 0xC5),
 	EXYNOS_DSI_CMD_SEQ(0xC5, 0x11, 0x10, 0x50, 0x05, 0x4E, 0x74),
@@ -903,6 +903,10 @@ static int s6e3hc4_disable(struct drm_panel *panel)
 	if (ret)
 		return ret;
 
+	/* HBM is disabled in exynos_panel_disable() */
+	clear_bit(FEAT_HBM, spanel->feat);
+	clear_bit(FEAT_IRC_OFF, spanel->feat);
+
 	/* panel register state gets reset after disabling hardware */
 	bitmap_clear(spanel->hw_feat, 0, FEAT_MAX);
 	spanel->hw_vrefresh = 60;
@@ -932,20 +936,21 @@ static int s6e3hc4_disable(struct drm_panel *panel)
  * - trigger early exit by command if it's changeable TE, which could result in
  *   fast 120 Hz boost and seeing 120 Hz TE earlier
  */
-static void s6e3hc4_update_idle_state(struct exynos_panel *ctx)
+static bool s6e3hc4_update_idle_state(struct exynos_panel *ctx)
 {
 	s64 delta_us;
 	struct s6e3hc4_panel *spanel = to_spanel(ctx);
+	bool updated = false;
 
 	ctx->panel_idle_vrefresh = 0;
 	if (!test_bit(FEAT_FRAME_AUTO, spanel->feat))
-		return;
+		return false;
 
 	delta_us = ktime_us_delta(ktime_get(), ctx->last_commit_ts);
 	if (delta_us < EARLY_EXIT_THRESHOLD_US) {
 		dev_dbg(ctx->dev, "skip early exit. %lldus since last commit\n",
 			delta_us);
-		return;
+		return false;
 	}
 
 	/* triggering early exit causes a switch to 120hz */
@@ -959,6 +964,7 @@ static void s6e3hc4_update_idle_state(struct exynos_panel *ctx)
 	if (ctx->idle_delay_ms) {
 		const struct exynos_panel_mode *pmode = ctx->current_mode;
 		s6e3hc4_update_refresh_mode(ctx, pmode, 0);
+		updated = true;
 	} else if (spanel->force_changeable_te) {
 		dev_dbg(ctx->dev, "sending early exit out cmd\n");
 		EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
@@ -967,14 +973,18 @@ static void s6e3hc4_update_idle_state(struct exynos_panel *ctx)
 	}
 
 	DPU_ATRACE_END(__func__);
+
+	return updated;
 }
 
+/* TODO: move update te2 to common display driver for other panel drivers */
 static void s6e3hc4_commit_done(struct exynos_panel *ctx)
 {
 	if (!ctx->current_mode)
 		return;
 
-	s6e3hc4_update_idle_state(ctx);
+	if (s6e3hc4_update_idle_state(ctx))
+		s6e3hc4_update_te2(ctx);
 }
 
 static void s6e3hc4_set_hbm_mode(struct exynos_panel *ctx,
@@ -1010,19 +1020,6 @@ static void s6e3hc4_set_hbm_mode(struct exynos_panel *ctx,
 	}
 }
 
-static void s6e3hc4_set_dimming_on(struct exynos_panel *ctx,
-				 bool dimming_on)
-{
-	const struct exynos_panel_mode *pmode = ctx->current_mode;
-
-	ctx->dimming_on = dimming_on;
-	if (pmode->exynos_mode.is_lp_mode) {
-		dev_info(ctx->dev,"in lp mode, skip to update");
-		return;
-	}
-	s6e3hc4_write_display_mode(ctx, &pmode->mode);
-}
-
 static const struct exynos_dsi_cmd s6e3hc4_lhbm_extra_cmds[] = {
 	EXYNOS_DSI_CMD0(unlock_cmd_f0),
 
@@ -1046,29 +1043,9 @@ static DEFINE_EXYNOS_CMD_SET(s6e3hc4_lhbm_extra);
 static void s6e3hc4_set_local_hbm_mode(struct exynos_panel *ctx,
 				 bool local_hbm_en)
 {
-	const struct exynos_panel_mode *pmode;
+	const struct exynos_panel_mode *pmode = ctx->current_mode;
 	const u32 flags = PANEL_CMD_SET_IGNORE_VBLANK | PANEL_CMD_SET_BATCH;
 
-	if (ctx->hbm.local_hbm.enabled == local_hbm_en)
-		return;
-
-	pmode = ctx->current_mode;
-	if (unlikely(pmode == NULL)) {
-		dev_err(ctx->dev, "%s: unknown current mode\n", __func__);
-		return;
-	}
-
-	if (local_hbm_en) {
-		const int vrefresh = drm_mode_vrefresh(&pmode->mode);
-		/* Add check to turn on LHBM @ 120hz only to comply with HW requirement */
-		if (vrefresh != 120) {
-			dev_err(ctx->dev, "unexpected mode `%s` while enabling LHBM, give up\n",
-				pmode->mode.name);
-			return;
-		}
-	}
-
-	ctx->hbm.local_hbm.enabled = local_hbm_en;
 	if (local_hbm_en)
 		exynos_panel_send_cmd_set_flags(ctx,
 			&s6e3hc4_lhbm_extra_cmd_set, flags);
@@ -1078,13 +1055,6 @@ static void s6e3hc4_set_local_hbm_mode(struct exynos_panel *ctx,
 static void s6e3hc4_mode_set(struct exynos_panel *ctx,
 			     const struct exynos_panel_mode *pmode)
 {
-	if (!is_panel_active(ctx))
-		return;
-
-	if (ctx->hbm.local_hbm.enabled == true)
-		dev_warn(ctx->dev, "do mode change (`%s`) unexpectedly when LHBM is ON\n",
-			pmode->mode.name);
-
 	s6e3hc4_change_frequency(ctx, pmode);
 }
 
@@ -1395,7 +1365,6 @@ static const struct exynos_panel_funcs s6e3hc4_exynos_funcs = {
 	.set_nolp_mode = s6e3hc4_set_nolp_mode,
 	.set_binned_lp = exynos_panel_set_binned_lp,
 	.set_hbm_mode = s6e3hc4_set_hbm_mode,
-	.set_dimming_on = s6e3hc4_set_dimming_on,
 	.set_local_hbm_mode = s6e3hc4_set_local_hbm_mode,
 	.is_mode_seamless = s6e3hc4_is_mode_seamless,
 	.mode_set = s6e3hc4_mode_set,
@@ -1432,7 +1401,7 @@ const struct brightness_capability s6e3hc4_brightness_capability = {
 			.max = 1000,
 		},
 		.level = {
-			.min = 2457,
+			.min = 2900,
 			.max = 4095,
 		},
 		.percentage = {
@@ -1444,7 +1413,7 @@ const struct brightness_capability s6e3hc4_brightness_capability = {
 
 const struct exynos_panel_desc samsung_s6e3hc4 = {
 	.data_lane_cnt = 4,
-	.max_brightness = 3949,
+	.max_brightness = 4095,
 	.dft_brightness = 1023,
 	.brt_capability = &s6e3hc4_brightness_capability,
 	.dbv_extra_frame = true,
@@ -1463,6 +1432,7 @@ const struct exynos_panel_desc samsung_s6e3hc4 = {
 	.binned_lp = s6e3hc4_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(s6e3hc4_binned_lp),
 	.is_panel_idle_supported = true,
+	.vrr_switch_duration = 1,
 	.panel_func = &s6e3hc4_drm_funcs,
 	.exynos_panel_func = &s6e3hc4_exynos_funcs,
 };

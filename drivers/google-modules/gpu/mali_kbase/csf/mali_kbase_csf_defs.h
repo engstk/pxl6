@@ -55,7 +55,7 @@
 #define CSF_FIRMWARE_ENTRY_ZERO       (1ul << 31)
 
 /**
- * enum kbase_csf_bind_state - bind state of the queue
+ * enum kbase_csf_queue_bind_state - bind state of the queue
  *
  * @KBASE_CSF_QUEUE_UNBOUND: Set when the queue is registered or when the link
  * between queue and the group to which it was bound or being bound is removed.
@@ -259,6 +259,11 @@ enum kbase_queue_group_priority {
  * @CSF_PM_TIMEOUT: Timeout for GPU Power Management to reach the desired
  *                  Shader, L2 and MCU state.
  * @CSF_GPU_RESET_TIMEOUT: Waiting timeout for GPU reset to complete.
+ * @CSF_CSG_SUSPEND_TIMEOUT: Timeout given for all active CSGs to be suspended.
+ * @CSF_FIRMWARE_BOOT_TIMEOUT: Maximum time to wait for firmware to boot.
+ * @CSF_FIRMWARE_PING_TIMEOUT: Maximum time to wait for firmware to respond
+ *                             to a ping from KBase.
+ * @CSF_SCHED_PROTM_PROGRESS_TIMEOUT: Timeout used to prevent protected mode execution hang.
  * @KBASE_TIMEOUT_SELECTOR_COUNT: Number of timeout selectors. Must be last in
  *                                the enum.
  */
@@ -266,6 +271,10 @@ enum kbase_timeout_selector {
 	CSF_FIRMWARE_TIMEOUT,
 	CSF_PM_TIMEOUT,
 	CSF_GPU_RESET_TIMEOUT,
+	CSF_CSG_SUSPEND_TIMEOUT,
+	CSF_FIRMWARE_BOOT_TIMEOUT,
+	CSF_FIRMWARE_PING_TIMEOUT,
+	CSF_SCHED_PROTM_PROGRESS_TIMEOUT,
 
 	/* Must be the last in the enum */
 	KBASE_TIMEOUT_SELECTOR_COUNT
@@ -446,6 +455,7 @@ struct kbase_protected_suspend_buffer {
  *                  allowed to use.
  * @compute_max:    Maximum number of compute endpoints the group is
  *                  allowed to use.
+ * @csi_handlers:   Requested CSI exception handler flags for the group.
  * @tiler_mask:     Mask of tiler endpoints the group is allowed to use.
  * @fragment_mask:  Mask of fragment endpoints the group is allowed to use.
  * @compute_mask:   Mask of compute endpoints the group is allowed to use.
@@ -467,6 +477,12 @@ struct kbase_protected_suspend_buffer {
  * @faulted:          Indicates that a GPU fault occurred for the queue group.
  *                    This flag persists until the fault has been queued to be
  *                    reported to userspace.
+ * @cs_unrecoverable: Flag to unblock the thread waiting for CSG termination in
+ *                    case of CS_FATAL_EXCEPTION_TYPE_CS_UNRECOVERABLE
+ * @reevaluate_idle_status : Flag set when work is submitted for the normal group
+ *                           or it becomes unblocked during protected mode. The
+ *                           flag helps Scheduler confirm if the group actually
+ *                           became non idle or not.
  * @bound_queues:   Array of registered queues bound to this queue group.
  * @doorbell_nr:    Index of the hardware doorbell page assigned to the
  *                  group.
@@ -494,6 +510,7 @@ struct kbase_queue_group {
 	u8 tiler_max;
 	u8 fragment_max;
 	u8 compute_max;
+	u8 csi_handlers;
 
 	u64 tiler_mask;
 	u64 fragment_mask;
@@ -507,6 +524,8 @@ struct kbase_queue_group {
 	u32 prepared_seq_num;
 	u32 scan_seq_num;
 	bool faulted;
+	bool cs_unrecoverable;
+	bool reevaluate_idle_status;
 
 	struct kbase_queue *bound_queues[MAX_SUPPORTED_STREAMS_PER_GROUP];
 
@@ -529,10 +548,10 @@ struct kbase_queue_group {
  * @lock:   Lock preventing concurrent access to @array and the @in_use bitmap.
  * @array:  Array of pointers to kernel CPU command queues.
  * @in_use: Bitmap which indicates which kernel CPU command queues are in use.
- * @wq:     Dedicated workqueue for processing kernel CPU command queues.
  * @num_cmds:           The number of commands that have been enqueued across
  *                      all the KCPU command queues. This could be used as a
  *                      timestamp to determine the command's enqueueing time.
+ * @jit_lock:           Lock protecting jit_cmds_head and jit_blocked_queues.
  * @jit_cmds_head:      A list of the just-in-time memory commands, both
  *                      allocate & free, in submission order, protected
  *                      by kbase_csf_kcpu_queue_context.lock.
@@ -545,9 +564,8 @@ struct kbase_csf_kcpu_queue_context {
 	struct mutex lock;
 	struct kbase_kcpu_command_queue *array[KBASEP_MAX_KCPU_QUEUES];
 	DECLARE_BITMAP(in_use, KBASEP_MAX_KCPU_QUEUES);
-	struct workqueue_struct *wq;
-	u64 num_cmds;
-
+	atomic64_t num_cmds;
+	spinlock_t jit_lock;
 	struct list_head jit_cmds_head;
 	struct list_head jit_blocked_queues;
 };
@@ -581,6 +599,8 @@ struct kbase_csf_cpu_queue_context {
  * @lock:     Lock preventing concurrent access to the @in_use bitmap.
  * @in_use:   Bitmap that indicates which heap context structures are currently
  *            allocated (in @region).
+ * @heap_context_size_aligned: Size of a heap context structure, in bytes,
+ *                             aligned to GPU cacheline size.
  *
  * Heap context structures are allocated by the kernel for use by the firmware.
  * The current implementation subdivides a single GPU memory region for use as
@@ -592,6 +612,7 @@ struct kbase_csf_heap_context_allocator {
 	u64 gpu_va;
 	struct mutex lock;
 	DECLARE_BITMAP(in_use, MAX_TILER_HEAPS);
+	u32 heap_context_size_aligned;
 };
 
 /**
@@ -605,6 +626,8 @@ struct kbase_csf_heap_context_allocator {
  * @ctx_alloc:   Allocator for heap context structures.
  * @nr_of_heaps: Total number of tiler heaps that were added during the
  *               life time of the context.
+ * @est_count_pages: Estimated potentially freeable pages from all the heaps
+ *                   on the @list.
  *
  * This contains all of the CSF state relating to chunked tiler heaps for one
  * @kbase_context. It is not the same as a heap context structure allocated by
@@ -615,6 +638,39 @@ struct kbase_csf_tiler_heap_context {
 	struct list_head list;
 	struct kbase_csf_heap_context_allocator ctx_alloc;
 	u64 nr_of_heaps;
+	atomic_t est_count_pages;
+};
+
+#define CSF_CTX_RECLAIM_CANDI_FLAG (1ul << 0)
+#define CSF_CTX_RECLAIM_SCAN_FLAG (1ul << 1)
+/**
+ * struct kbase_kctx_heap_info - Object representing the data section of a kctx
+ *                               for tiler heap reclaim manger
+ * @mgr_link:         Link for hooking up to the heap reclaim manger's kctx lists
+ * @attach_jiffies:   jiffies when the kctx is attached to the reclaim manager.
+ * @nr_scan_pages:    Number of a better estimated freeable pages from the kctx
+ *                    after all its CSGs are off-slots and have been properly
+ *                    gone through the freeable pages count process. This field
+ *                    is updated when the kctx is moved to the reclaim manager's
+ *                    pending scan (freeing) action list, after the counting.
+ * @nr_est_pages:     Estimated number of pages of the kctx when all its CSGs are
+ *                    off-slot. This is a nominal value used for estimating an
+ *                    available page counts from the kctx. The kctx is on the
+ *                    reclaim manager's candidate list, waiting for count.
+ * @flags:            reflecting the kctx's internal state in relation to the
+ *                    scheduler's heap reclaim manager.
+ * @on_slot_grps:     Number of on-slot groups from this kctx. In principle, if a
+ *                    kctx has groups on-slot, the scheduler will detach it from
+ *                    the tiler heap reclaim manager, i.e. no tiler heap memory
+ *                    reclaiming operations on the kctx.
+ */
+struct kbase_kctx_heap_info {
+	struct list_head mgr_link;
+	unsigned long attach_jiffies;
+	u32 nr_scan_pages;
+	u32 nr_est_pages;
+	u16 flags;
+	u8 on_slot_grps;
 };
 
 /**
@@ -629,7 +685,7 @@ struct kbase_csf_tiler_heap_context {
  *                      GPU command queues are idle and at least one of them
  *                      is blocked on a sync wait operation.
  * @num_idle_wait_grps: Length of the @idle_wait_groups list.
- * @sync_update_wq:     Dedicated workqueue to process work items corresponding
+ * @sync_update_worker: Dedicated workqueue to process work items corresponding
  *                      to the sync_update events by sync_set/sync_add
  *                      instruction execution on CSs bound to groups
  *                      of @idle_wait_groups list.
@@ -638,15 +694,20 @@ struct kbase_csf_tiler_heap_context {
  *                      streams bound to groups of @idle_wait_groups list.
  * @ngrp_to_schedule:	Number of groups added for the context to the
  *                      'groups_to_schedule' list of scheduler instance.
+ * @heap_info:          Heap reclaim information data of the kctx. As the
+ *                      reclaim action needs to be coordinated with the scheduler
+ *                      operations, the data is placed inside the scheduler's
+ *                      context object for this linkage.
  */
 struct kbase_csf_scheduler_context {
 	struct list_head runnable_groups[KBASE_QUEUE_GROUP_PRIORITY_COUNT];
 	u32 num_runnable_grps;
 	struct list_head idle_wait_groups;
 	u32 num_idle_wait_grps;
-	struct workqueue_struct *sync_update_wq;
-	struct work_struct sync_update_work;
+	struct kthread_worker sync_update_worker;
+	struct kthread_work sync_update_work;
 	u32 ngrp_to_schedule;
+	struct kbase_kctx_heap_info heap_info;
 };
 
 /**
@@ -728,6 +789,7 @@ struct kbase_csf_event {
  *                    of the USER register page. Currently used only for sanity
  *                    checking.
  * @sched:            Object representing the scheduler's context
+ * @pending_submission_worker: Worker for the pending submission work item
  * @pending_submission_work: Work item to process pending kicked GPU command queues.
  * @cpu_queue:        CPU queue information. Only be available when DEBUG_FS
  *                    is enabled.
@@ -737,7 +799,7 @@ struct kbase_csf_context {
 	DECLARE_BITMAP(cookies, KBASE_CSF_NUM_USER_IO_PAGES_HANDLE);
 	struct kbase_queue *user_pages_info[
 		KBASE_CSF_NUM_USER_IO_PAGES_HANDLE];
-	struct mutex lock;
+	struct rt_mutex lock;
 	struct kbase_queue_group *queue_groups[MAX_QUEUE_GROUP_NUM];
 	struct list_head queue_list;
 	struct kbase_csf_kcpu_queue_context kcpu_queues;
@@ -747,7 +809,8 @@ struct kbase_csf_context {
 	struct list_head link;
 	struct vm_area_struct *user_reg_vma;
 	struct kbase_csf_scheduler_context sched;
-	struct work_struct pending_submission_work;
+	struct kthread_worker pending_submission_worker;
+	struct kthread_work pending_submission_work;
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	struct kbase_csf_cpu_queue_context cpu_queue;
 #endif
@@ -787,6 +850,25 @@ struct kbase_csf_csg_slot {
 	atomic_t state;
 	unsigned long trigger_jiffies;
 	u8 priority;
+};
+
+/**
+ * struct kbase_csf_sched_heap_reclaim_mgr - Object for managing tiler heap reclaim
+ *                                           kctx lists inside the CSF device's scheduler.
+ *
+ * @candidate_ctxs:  List of kctxs that have all their CSGs off-slots. Candidates
+ *                   are ready for reclaim count examinations.
+ * @scan_list_ctxs:  List counted kctxs, ready for reclaim scan operations.
+ * @est_cand_pages:  Estimated pages based on chunks that could be free-able from the
+ *                   candidate list. For each addition of an acandidate, the number is
+ *                   increased with an estimate, and decreased vice versa.
+ * @mgr_scan_pages:  Number of pagess free-able in the scan list, device wide.
+ */
+struct kbase_csf_sched_heap_reclaim_mgr {
+	struct list_head candidate_ctxs;
+	struct list_head scan_list_ctxs;
+	atomic_t est_cand_pages;
+	atomic_t mgr_scan_pages;
 };
 
 /**
@@ -852,7 +934,7 @@ struct kbase_csf_csg_slot {
  *                          periodic scheduling tasks. If this value is 0
  *                          then it will only perform scheduling under the
  *                          influence of external factors e.g., IRQs, IOCTLs.
- * @wq:                     Dedicated workqueue to execute the @tick_work.
+ * @csf_worker:             Dedicated kthread_worker to execute the @tick_work.
  * @tick_timer:             High-resolution timer employed to schedule tick
  *                          workqueue items (kernel-provided delayed_work
  *                          items do not use hrtimer and for some reason do
@@ -861,6 +943,8 @@ struct kbase_csf_csg_slot {
  *                          operation to implement timeslice-based scheduling.
  * @tock_work:              Work item that would perform the schedule on tock
  *                          operation to implement the asynchronous scheduling.
+ * @pending_tock_work:      Indicates that the tock work item should re-execute
+ *                          once it's finished instead of going back to sleep.
  * @ping_work:              Work item that would ping the firmware at regular
  *                          intervals, only if there is a single active CSG
  *                          slot, to check if firmware is alive and would
@@ -870,8 +954,6 @@ struct kbase_csf_csg_slot {
  *                          @top_grp.
  * @top_grp:                Pointer to queue group inside @groups_to_schedule
  *                          list that was assigned the highest slot priority.
- * @tock_pending_request:   A "tock" request is pending: a group that is not
- *                          currently on the GPU demands to be scheduled.
  * @active_protm_grp:       Indicates if firmware has been permitted to let GPU
  *                          enter protected mode with the given group. On exit
  *                          from protected mode the pointer is reset to NULL.
@@ -914,6 +996,23 @@ struct kbase_csf_csg_slot {
  *                          protected mode execution compared to other such
  *                          groups. It is updated on every tick/tock.
  *                          @interrupt_lock is used to serialize the access.
+ * @sc_rails_off_work:      Work item enqueued on GPU idle notification to
+ *                          turn off the shader core power rails.
+ * @sc_power_rails_off:     Flag to keep a track of the status of shader core
+ *                          power rails, set to true when power rails are
+ *                          turned off.
+ * @gpu_idle_work_pending:  Flag to indicate that the power down of GPU is
+ *                          pending and it is set after turning off the
+ *                          shader core power rails. The power down is skipped
+ *                          if the flag is cleared. @lock is used to serialize
+ *                          the access. Scheduling actions are skipped whilst
+ *                          this flag is set.
+ * @gpu_idle_fw_timer_enabled: Flag to keep a track if GPU idle event reporting
+ *                             is disabled on FW side. It is set for the power
+ *                             policy where the power managment of shader cores
+ *                             needs to be done by the Host.
+ * @protm_enter_time:       GPU protected mode enter time.
+ * @reclaim_mgr:            CSGs tiler heap manager object.
  */
 struct kbase_csf_scheduler {
 	struct mutex lock;
@@ -936,17 +1035,17 @@ struct kbase_csf_scheduler {
 	DECLARE_BITMAP(csg_slots_prio_update, MAX_SUPPORTED_CSGS);
 	unsigned long last_schedule;
 	bool timer_enabled;
-	struct workqueue_struct *wq;
+	struct kthread_worker csf_worker;
 	struct hrtimer tick_timer;
-	struct work_struct tick_work;
-	struct delayed_work tock_work;
+	struct kthread_work tick_work;
+	struct kthread_delayed_work tock_work;
+	atomic_t pending_tock_work;
 	struct delayed_work ping_work;
 	struct kbase_context *top_ctx;
 	struct kbase_queue_group *top_grp;
-	bool tock_pending_request;
 	struct kbase_queue_group *active_protm_grp;
+	struct delayed_work gpu_idle_work;
 	struct workqueue_struct *idle_wq;
-	struct work_struct gpu_idle_work;
 	atomic_t gpu_no_longer_idle;
 	atomic_t non_idle_offslot_grps;
 	u32 non_idle_scanout_grps;
@@ -954,6 +1053,14 @@ struct kbase_csf_scheduler {
 	unsigned int csg_scheduling_period_ms;
 	bool tick_timer_active;
 	u32 tick_protm_pending_seq;
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	struct work_struct sc_rails_off_work;
+	bool sc_power_rails_off;
+	bool gpu_idle_work_pending;
+#endif
+	bool gpu_idle_fw_timer_enabled;
+	ktime_t protm_enter_time;
+	struct kbase_csf_sched_heap_reclaim_mgr reclaim_mgr;
 };
 
 /*
@@ -1174,6 +1281,57 @@ struct kbase_csf_hwcnt {
 	bool enable_pending;
 };
 
+/*
+ * struct kbase_csf_mcu_fw - Object containing device loaded MCU firmware data.
+ *
+ * @size:                    Loaded firmware data size. Meaningful only when the
+ *                           other field @p data is not NULL.
+ * @data:                    Pointer to the device retained firmware data. If NULL
+ *                           means not loaded yet or error in loading stage.
+ */
+struct kbase_csf_mcu_fw {
+	size_t size;
+	u8 *data;
+};
+
+/*
+ * Firmware log polling period.
+ */
+#define KBASE_CSF_FIRMWARE_LOG_POLL_PERIOD_MS 25
+
+/**
+ * enum kbase_csf_firmware_log_mode - Firmware log operating mode
+ *
+ * @KBASE_CSF_FIRMWARE_LOG_MODE_MANUAL: Manual mode, firmware log can be read
+ * manually by the userspace (and it will also be dumped automatically into
+ * dmesg on GPU reset).
+ *
+ * @KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_PRINT: Automatic printing mode, firmware log
+ * will be periodically emptied into dmesg, manual reading through debugfs is
+ * disabled.
+ */
+enum kbase_csf_firmware_log_mode {
+	KBASE_CSF_FIRMWARE_LOG_MODE_MANUAL,
+	KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_PRINT
+};
+
+/**
+ * struct kbase_csf_firmware_log - Object containing members for handling firmware log.
+ *
+ * @mode:                      Firmware log operating mode.
+ * @busy:                      Indicating whether a firmware log operation is in progress.
+ * @poll_work:                 Work item that would poll firmware log buffer
+ *                             at regular intervals to perform any periodic
+ *                             activities required by current log mode.
+ * @dump_buf:                  Buffer used for dumping the log.
+ */
+struct kbase_csf_firmware_log {
+	enum kbase_csf_firmware_log_mode mode;
+	atomic_t busy;
+	struct delayed_work poll_work;
+	u8 *dump_buf;
+};
+
 /**
  * struct kbase_csf_device - Object representing CSF for an instance of GPU
  *                           platform device.
@@ -1217,11 +1375,14 @@ struct kbase_csf_hwcnt {
  *                          in the address space of every process, that created
  *                          a Base context, to enable the access to LATEST_FLUSH
  *                          register from userspace.
+ * @nr_user_page_mapped:    The number of clients using the mapping of USER page.
+ *                          This is used to maintain backward compatibility.
+ *                          It's protected by @reg_lock.
  * @mali_file_inode:        Pointer to the inode corresponding to mali device
  *                          file. This is needed in order to switch to the
  *                          @dummy_user_reg_page on GPU power down.
  *                          All instances of the mali device file will point to
- *                          the same inode.
+ *                          the same inode. It's protected by @reg_lock.
  * @reg_lock:               Lock to serialize the MCU firmware related actions
  *                          that affect all contexts such as allocation of
  *                          regions from shared interface area, assignment of
@@ -1264,6 +1425,7 @@ struct kbase_csf_hwcnt {
  *                            acknowledgement is pending.
  * @fw_error_work:          Work item for handling the firmware internal error
  *                          fatal event.
+ * @coredump_work:          Work item for initiating a platform core dump.
  * @ipa_control:            IPA Control component manager.
  * @mcu_core_pwroff_dur_us: Sysfs attribute for the glb_pwroff timeout input
  *                          in unit of micro-seconds. The firmware does not use
@@ -1285,6 +1447,9 @@ struct kbase_csf_hwcnt {
  *                          for any request sent to the firmware.
  * @hwcnt:                  Contain members required for handling the dump of
  *                          HW counters.
+ * @fw:                     Copy of the loaded MCU firmware image.
+ * @fw_log:                 Contain members required for handling firmware log.
+ * @tiler_heap_reclaim:     Tiler heap reclaim shrinker object.
  */
 struct kbase_csf_device {
 	struct kbase_mmu_table mcu_mmu;
@@ -1299,6 +1464,7 @@ struct kbase_csf_device {
 	u32 db_file_offsets;
 	struct tagged_addr dummy_db_page;
 	struct tagged_addr dummy_user_reg_page;
+	u32 nr_user_page_mapped;
 	struct inode *mali_file_inode;
 	struct mutex reg_lock;
 	wait_queue_head_t event_wait;
@@ -1316,6 +1482,7 @@ struct kbase_csf_device {
 	struct work_struct firmware_reload_work;
 	bool glb_init_request_pending;
 	struct work_struct fw_error_work;
+	struct work_struct coredump_work;
 	struct kbase_ipa_control ipa_control;
 	u32 mcu_core_pwroff_dur_us;
 	u32 mcu_core_pwroff_dur_count;
@@ -1324,6 +1491,9 @@ struct kbase_csf_device {
 	u32 gpu_idle_dur_count;
 	unsigned int fw_timeout_ms;
 	struct kbase_csf_hwcnt hwcnt;
+	struct kbase_csf_mcu_fw fw;
+	struct kbase_csf_firmware_log fw_log;
+	struct shrinker tiler_heap_reclaim;
 };
 
 /**

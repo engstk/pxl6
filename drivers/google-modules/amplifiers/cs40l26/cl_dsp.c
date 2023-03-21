@@ -30,35 +30,45 @@ static inline bool cl_dsp_memchunk_valid_addr(struct cl_dsp_memchunk *ch,
 	return (u8 *)addr <= ch->max;
 }
 
-int cl_dsp_memchunk_read(struct cl_dsp_memchunk *ch, int nbits)
+int cl_dsp_memchunk_read(struct cl_dsp *dsp, struct cl_dsp_memchunk *ch,
+		int nbits, void *val)
 {
-	int nread, i;
-	u32 result;
+	int nbytes = nbits / 8, nread, i;
+	u32 result = 0;
 
-	if (!ch->cachebits) {
-		if (cl_dsp_memchunk_end(ch))
-			return -ENOSPC;
-
-		ch->cache = 0;
-		ch->cachebits = 24;
-
-		for (i = 0; i < sizeof(ch->cache); i++, ch->cache <<= 8)
-			ch->cache |= *ch->data++;
-
-		ch->bytes += sizeof(ch->cache);
+	if (nbits > 32) {
+		dev_err(dsp->dev, "Exceeded maximum read length: %d > 32\n", nbits);
+		return -EINVAL;
 	}
 
-	nread = min(ch->cachebits, nbits);
-	nbits -= nread;
+	while (nbits) {
+		if (!ch->cachebits) {
+			if (cl_dsp_memchunk_end(ch)) {
+				dev_err(dsp->dev, "Read past end of memory chunk\n");
+				return -ENOSPC;
+			}
 
-	result = ch->cache >> (32 - nread);
-	ch->cache <<= nread;
-	ch->cachebits -= nread;
+			ch->cache = 0;
+			ch->cachebits = 24;
 
-	if (nbits)
-		result = (result << nbits) | cl_dsp_memchunk_read(ch, nbits);
+			for (i = 0; i < sizeof(ch->cache); i++, ch->cache <<= 8)
+				ch->cache |= *ch->data++;
 
-	return result;
+			ch->bytes += sizeof(ch->cache);
+		}
+
+		nread = min(ch->cachebits, nbits);
+		nbits -= nread;
+
+		result |= ((ch->cache >> (32 - nread)) << nbits);
+		ch->cache <<= nread;
+		ch->cachebits -= nread;
+	}
+
+	if (val)
+		memcpy(val, &result, nbytes);
+
+	return 0;
 }
 EXPORT_SYMBOL(cl_dsp_memchunk_read);
 
@@ -241,11 +251,16 @@ static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 	void *buf = (void *)(dsp->wt_desc->owt.raw_data + pos);
 	struct cl_dsp_memchunk ch = cl_dsp_memchunk_create(buf, size);
 	u32 *wbuf = buf, *max = buf;
-	int i;
+	int i, ret;
 
 	for (i = 0; i < ARRAY_SIZE(dsp->wt_desc->owt.waves); i++, entry++) {
-		entry->flags = cl_dsp_memchunk_read(&ch, 16);
-		entry->type = cl_dsp_memchunk_read(&ch, 8);
+		ret = cl_dsp_memchunk_read(dsp, &ch, 16, &entry->flags);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(dsp, &ch, 8, &entry->type);
+		if (ret)
+			return ret;
 
 		if (entry->type == WT_TYPE_TERMINATOR) {
 			dsp->wt_desc->owt.nwaves = i;
@@ -255,8 +270,14 @@ static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 			return dsp->wt_desc->owt.bytes;
 		}
 
-		entry->offset = cl_dsp_memchunk_read(&ch, 24);
-		entry->size = cl_dsp_memchunk_read(&ch, 24);
+		ret = cl_dsp_memchunk_read(dsp, &ch, 24, &entry->offset);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(dsp, &ch, 24, &entry->size);
+		if (ret)
+			return ret;
+
 		entry->data = wbuf + entry->offset;
 
 		if (wbuf + entry->offset + entry->size > max) {
@@ -331,6 +352,56 @@ static void cl_dsp_coeff_handle_info_text(struct cl_dsp *dsp, const u8 *data,
 	kfree(info_str);
 }
 
+static int cl_dsp_wavetable_check(struct cl_dsp *dsp, const struct firmware *fw,
+		unsigned int reg, unsigned int pos, u32 data_len, u32 type)
+{
+	u32 data_len_bytes = data_len / 4 * 3;
+	unsigned int limit, wt_reg;
+	bool is_xm;
+	int ret;
+
+	if (type == CL_DSP_XM_UNPACKED_TYPE) {
+		is_xm = true;
+		limit = dsp->wt_desc->wt_limit_xm;
+		ret = cl_dsp_get_reg(dsp, dsp->wt_desc->wt_name_xm,
+				type, dsp->wt_desc->id, &wt_reg);
+	} else if (type == CL_DSP_YM_UNPACKED_TYPE) {
+		is_xm = false;
+		limit = dsp->wt_desc->wt_limit_ym;
+		ret = cl_dsp_get_reg(dsp, dsp->wt_desc->wt_name_ym,
+				type, dsp->wt_desc->id, &wt_reg);
+	} else {
+		dev_err(dsp->dev, "Invalid wavetable memory type 0x%04X\n",
+				type);
+		ret = -EINVAL;
+	}
+	if (ret)
+		return ret;
+
+	if (reg == wt_reg) {
+		if (data_len > limit) {
+			dev_err(dsp->dev, "%s too large: %d bytes\n",
+				is_xm ? "XM" : "YM", data_len_bytes);
+			return -EFBIG;
+		}
+
+		ret = cl_dsp_owt_init(dsp, fw);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_read_wt(dsp, pos, data_len);
+		if (ret < 0)
+			return ret;
+
+		dsp->wt_desc->is_xm = is_xm;
+
+		dev_info(dsp->dev, "Wavetable found: %d bytes (XM)\n",
+				data_len_bytes);
+	}
+
+	return 0;
+}
+
 int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 {
 	unsigned int pos = CL_DSP_COEFF_FILE_HEADER_SIZE;
@@ -339,9 +410,10 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 	struct cl_dsp_coeff_data_block data_block;
 	union cl_dsp_wmdr_header wmdr_header;
 	char wt_date[CL_DSP_WMDR_DATE_LEN];
-	unsigned int reg, wt_reg, algo_rev;
+	unsigned int reg, algo_rev;
 	u16 algo_id, parent_id;
 	struct device *dev;
+	u32 data_len;
 	int i;
 
 	if (!dsp)
@@ -367,13 +439,12 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 				CL_DSP_COEFF_DBLK_HEADER_SIZE);
 		pos += CL_DSP_COEFF_DBLK_HEADER_SIZE;
 
-		data_block.payload = kmalloc(data_block.header.data_len,
-				GFP_KERNEL);
+		data_len = data_block.header.data_len;
+		data_block.payload = kmalloc(data_len, GFP_KERNEL);
 		if (!data_block.payload)
 			return -ENOMEM;
 
-		memcpy(data_block.payload, &fw->data[pos],
-				data_block.header.data_len);
+		memcpy(data_block.payload, &fw->data[pos], data_len);
 
 		algo_id = data_block.header.algo_id & 0xFFFF;
 
@@ -417,9 +488,9 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 			reg = 0;
 
 			cl_dsp_coeff_handle_info_text(dsp, data_block.payload,
-					data_block.header.data_len);
+					data_len);
 
-			if (data_block.header.data_len < CL_DSP_WMDR_DATE_LEN)
+			if (data_len < CL_DSP_WMDR_DATE_LEN)
 				break;
 
 			if (memcmp(&fw->data[pos], CL_DSP_WMDR_DATE_PREFIX,
@@ -441,39 +512,11 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 					CL_DSP_BYTES_PER_WORD;
 
 			if (wt_found) {
-				ret = cl_dsp_get_reg(dsp,
-						dsp->wt_desc->wt_name_xm,
-						CL_DSP_XM_UNPACKED_TYPE,
-						dsp->wt_desc->id, &wt_reg);
+				ret = cl_dsp_wavetable_check(dsp,
+						fw, reg, pos, data_len,
+						CL_DSP_XM_UNPACKED_TYPE);
 				if (ret)
 					goto err_free;
-
-				if (reg == wt_reg) {
-					if (data_block.header.data_len >
-						dsp->wt_desc->wt_limit_xm) {
-						dev_err(dev,
-						"XM too large: %d bytes\n",
-						data_block.header.data_len
-						/ 4 * 3);
-
-						ret = -EINVAL;
-						goto err_free;
-					} else {
-						ret = cl_dsp_owt_init(dsp, fw);
-						if (ret)
-							goto err_free;
-
-						ret = cl_dsp_read_wt(dsp, pos,
-						data_block.header.data_len);
-						if (ret < 0)
-							goto err_free;
-						dsp->wt_desc->is_xm = true;
-					}
-
-					dev_info(dev,
-					"Wavetable found: %d bytes (XM)\n",
-					data_block.header.data_len / 4 * 3);
-				}
 			}
 			break;
 		case CL_DSP_XM_PACKED_TYPE:
@@ -489,35 +532,11 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 					dsp->algo_info[i].ym_base *
 					CL_DSP_UNPACKED_NUM_BYTES;
 			if (wt_found) {
-				ret = cl_dsp_get_reg(dsp,
-						dsp->wt_desc->wt_name_ym,
-						CL_DSP_YM_UNPACKED_TYPE,
-						dsp->wt_desc->id, &wt_reg);
+				ret = cl_dsp_wavetable_check(dsp,
+						fw, reg, pos, data_len,
+						CL_DSP_YM_UNPACKED_TYPE);
 				if (ret)
 					goto err_free;
-
-				if (reg == wt_reg) {
-					if (data_block.header.data_len >
-						dsp->wt_desc->wt_limit_ym) {
-						dev_err(dev,
-						"YM too large: %d bytes\n",
-						data_block.header.data_len
-						/ 4 * 3);
-
-						ret = -EINVAL;
-						goto err_free;
-					} else {
-						ret = cl_dsp_read_wt(dsp, pos,
-						data_block.header.data_len);
-						if (ret < 0)
-							goto err_free;
-						dsp->wt_desc->is_xm = false;
-					}
-
-					dev_dbg(dev,
-					"Wavetable found: %d bytes (YM)\n",
-					data_block.header.data_len / 4 * 3);
-				}
 			}
 			break;
 		case CL_DSP_YM_PACKED_TYPE:
@@ -535,8 +554,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		}
 		if (reg) {
 			ret = cl_dsp_raw_write(dsp, reg, &fw->data[pos],
-					data_block.header.data_len,
-					CL_DSP_MAX_WLEN);
+					data_len, CL_DSP_MAX_WLEN);
 			if (ret) {
 				dev_err(dev, "Failed to write coefficients\n");
 				goto err_free;
@@ -544,7 +562,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		}
 
 		/* Blocks are word-aligned */
-		pos += (data_block.header.data_len + 3) & ~CL_DSP_ALIGN;
+		pos += (data_len + 3) & ~CL_DSP_ALIGN;
 
 		kfree(data_block.payload);
 	}
@@ -1088,9 +1106,9 @@ int cl_dsp_wavetable_create(struct cl_dsp *dsp, unsigned int id,
 		return -ENOMEM;
 
 	wt_desc->id = id;
-	memcpy(wt_desc->wt_name_xm, wt_name_xm, CL_DSP_WMDR_NAME_LEN);
-	memcpy(wt_desc->wt_name_ym, wt_name_ym, CL_DSP_WMDR_NAME_LEN);
-	memcpy(wt_desc->wt_file, wt_file, CL_DSP_WMDR_NAME_LEN);
+	strscpy(wt_desc->wt_name_xm, wt_name_xm, strlen(wt_name_xm) + 1);
+	strscpy(wt_desc->wt_name_ym, wt_name_ym, strlen(wt_name_ym) + 1);
+	strscpy(wt_desc->wt_file, wt_file, strlen(wt_file) + 1);
 
 	dsp->wt_desc = wt_desc;
 
@@ -1104,7 +1122,7 @@ struct cl_dsp *cl_dsp_create(struct device *dev, struct regmap *regmap)
 
 	dsp = devm_kzalloc(dev, sizeof(struct cl_dsp), GFP_KERNEL);
 	if (!dsp)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	dsp->dev = dev;
 	dsp->regmap = regmap;
@@ -1135,3 +1153,4 @@ EXPORT_SYMBOL(cl_dsp_destroy);
 MODULE_DESCRIPTION("Cirrus Logic DSP Firmware Driver");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc, <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("3.1.10");

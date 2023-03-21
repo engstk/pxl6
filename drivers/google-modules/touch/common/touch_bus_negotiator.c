@@ -30,6 +30,9 @@ static irqreturn_t tbn_aoc2ap_irq_thread(int irq, void *ptr)
 {
 	struct tbn_context *tbn = ptr;
 
+	dev_info(tbn_context->dev, "%s: bus_released:%d bus_requested:%d.\n", __func__,
+		completion_done(&tbn->bus_released), completion_done(&tbn->bus_requested));
+
 	if (completion_done(&tbn->bus_released) && completion_done(&tbn->bus_requested))
 		return IRQ_HANDLED;
 
@@ -91,14 +94,26 @@ int tbn_handshaking(struct tbn_context *tbn, enum tbn_operation operation)
 	reinit_completion(wait_for_completion);
 
 	if (tbn->mode == TBN_MODE_GPIO) {
+		int ap2aoc_val_org = gpio_get_value(tbn->ap2aoc_gpio);
+		int aoc2ap_val_org = gpio_get_value(tbn->aoc2ap_gpio);
+
 		irq_set_irq_type(tbn->aoc2ap_irq, irq_type);
 		enable_irq(tbn->aoc2ap_irq);
 		gpio_direction_output(tbn->ap2aoc_gpio, bus_owner);
 		if (wait_for_completion_timeout(wait_for_completion,
-						 msecs_to_jiffies(timeout)) == 0) {
-			dev_err(tbn->dev, "AP %s bus ... timeout!\n", msg);
+			msecs_to_jiffies(timeout)) == 0) {
+			int ap2aoc_val = gpio_get_value(tbn->ap2aoc_gpio);
+			int aoc2ap_val = gpio_get_value(tbn->aoc2ap_gpio);
+
 			complete_all(wait_for_completion);
-			ret = -ETIMEDOUT;
+			if (bus_owner == aoc2ap_val)
+				ret = 0;
+			else
+				ret = -ETIMEDOUT;
+			dev_err(tbn->dev, "AP %s bus ... timeout!, ap2aoc_gpio(B:%d,A:%d)"
+				" aoc2ap_gpio(B:%d,A:%d), ret=%d\n",
+				msg, ap2aoc_val_org, ap2aoc_val, aoc2ap_val_org,
+				aoc2ap_val, ret);
 		} else
 			dev_info(tbn->dev, "AP %s bus ... SUCCESS!\n", msg);
 		disable_irq_nosync(tbn->aoc2ap_irq);

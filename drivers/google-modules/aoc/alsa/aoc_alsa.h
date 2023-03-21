@@ -110,9 +110,6 @@ enum uc_device_id {
 
 #define NULL_PATH -1
 
-/* Define trigger aoc watchdog reason */
-#define ALSA_CTL_TIMEOUT "alsa_ctl_timeout"
-
 /* TODO: Copied from AoC repo and will be removed */
 enum bluetooth_mode {
 	AHS_BT_MODE_UNCONFIGURED = 0,
@@ -183,7 +180,7 @@ enum aoc_playback_entry_point {
 	IMMERSIVE = 15,
 };
 
-enum { NORMAL = 0, MMAPED, RAW, INCALL, HIFI, ANDROID_AEC, COMPRESS };
+enum { NORMAL = 0, MMAPED, RAW, INCALL, HIFI, ANDROID_AEC, COMPRESS, CAP_INJ };
 
 enum { BUILTIN_MIC0 = 0, BUILTIN_MIC1, BUILTIN_MIC2, BUILTIN_MIC3 };
 enum { MIC_LOW_POWER_GAIN = 0, MIC_HIGH_POWER_GAIN, MIC_CURRENT_GAIN };
@@ -242,6 +239,7 @@ struct aoc_chip {
 	int compr_offload_volume;
 	int mic_spatial_module_enable;
 	int capture_eraser_enable;
+	int cca_module_loaded;
 	int sidetone_enable;
 	int mic_loopback_enabled;
 	int gapless_offload_enable;
@@ -359,6 +357,8 @@ int aoc_capture_filter_runtime_control(struct aoc_chip *chip, uint32_t port_id, 
 int aoc_audio_capture_runtime_trigger(struct aoc_chip *chip, int ep_id, int dst, bool on);
 int aoc_audio_capture_eraser_enable(struct aoc_chip *chip, long enable);
 int aoc_eraser_aec_reference_set(struct aoc_chip *chip, long ref_source);
+
+int aoc_load_cca_module(struct aoc_chip *chip, long load);
 
 int aoc_voice_call_mic_mute(struct aoc_chip *chip, int mute);
 int aoc_incall_capture_enable_get(struct aoc_chip *chip, int stream, long *val);

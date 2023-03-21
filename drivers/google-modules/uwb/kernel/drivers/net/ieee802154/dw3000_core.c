@@ -187,8 +187,8 @@ const struct dw3000_chip_version dw3000_chip_versions[] = {
 #define DW3000_TXRXSWITCH_TX 0x01011100
 #define DW3000_TXRXSWITCH_AUTO 0x1C000000
 
-#define DW3000_RF_TXCTRL_CH5 0x1C071134UL
-#define DW3000_RF_TXCTRL_CH9 0x1C010034UL
+#define DW3000_RF_TXCTRL_CH5 0x1C081134UL
+#define DW3000_RF_TXCTRL_CH9 0x1C020034UL
 #define DW3000_RF_TXCTRL_LO_B2 0x0E
 #define DW3000_RF_PLL_CFG_CH5 0x1F3C
 #define DW3000_RF_PLL_CFG_CH9 0x0F3C
@@ -296,6 +296,12 @@ enum ciadiag_dbl_options {
 
 /* Disable CIA diagnostic. CIACONFIG's bit-4 in RX_ANTENNA_DELAY + 1 */
 #define DW3000_CIA_CONFIG_DIAG_OFF (0x1 << 4)
+
+/* LDO VOUT value */
+#define DW3000_RF_LDO_VOUT 0x0D7FFFFFUL
+
+/* PLL common value  */
+#define DW3000_RF_PLL_COMMON 0xE104
 
 struct dw3000_ciadiag_reg_info {
 	u32 diag1;
@@ -1794,6 +1800,12 @@ static int dw3000_power_supply(struct dw3000 *dw, int onoff)
 	if (rc < 0) {
 		dev_err(dw->dev, "regulator %s failed for 2p5 (%d)\n",
 			onoff ? "enable" : "disable", rc);
+		return rc;
+	}
+	/* Set 2p5 reg to 2.7V  */
+	rc = regulator_set_voltage(power->regulator_2p5, 2700000, 2700000);
+	if (rc < 0) {
+		dev_err(dw->dev, "regulator failed to set voltage :%d\n", rc);
 		return rc;
 	}
 
@@ -4253,6 +4265,11 @@ static inline int dw3000_configure_rf(struct dw3000 *dw)
 	rc = dw3000_reg_write16(dw, DW3000_PLL_CFG_ID, 0, rf_pll_cfg);
 	if (rc)
 		return rc;
+
+	rc = dw3000_reg_write16(dw, DW3000_PLL_COMMON_ID, 0, DW3000_RF_PLL_COMMON);
+	if (rc)
+		return rc;
+
 	rc = dw3000_reg_write8(dw, DW3000_LDO_RLOAD_ID, 1,
 			       DW3000_LDO_RLOAD_VAL_B1);
 	if (rc)
@@ -4390,6 +4407,8 @@ int dw3000_configure_chan(struct dw3000 *dw)
 	rc = dw3000_configure_rf(dw);
 	if (rc)
 		return rc;
+	/* Disable AGC */
+	dw3000_reg_modify32(dw, DW3000_AGC_CFG_ID, 0, DW3000_AGC_DIS_MASK, 0);
 	/* Configure DGC. */
 	return dw3000_configure_dgc(dw);
 }
@@ -5213,6 +5232,8 @@ static int dw3000_configure(struct dw3000 *dw)
 
 	/* Update configuration dependent timings */
 	dw3000_update_timings(dw);
+	/* update VOUT */
+	rc = dw3000_reg_write32(dw, DW3000_LDO_VOUT_ID, 0, DW3000_RF_LDO_VOUT);
 	return rc;
 }
 
@@ -7453,6 +7474,9 @@ static inline int dw3000_isr_handle_spi_ready(struct dw3000 *dw,
 
 	/* TODO: So, just add below this line more required unsaved registers
 	 * setup. */
+	 rc = dw3000_reg_write32(dw, DW3000_LDO_VOUT_ID, 0, DW3000_RF_LDO_VOUT);
+	 if (rc)
+		 return rc;
 
 setuperror:
 #ifdef CONFIG_DW3000_DEBUG

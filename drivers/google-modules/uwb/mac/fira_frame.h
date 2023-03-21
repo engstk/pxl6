@@ -53,11 +53,12 @@ struct fira_session_params;
 	 4 * (reply_time_present) + 6 * (n_reply_time))
 #define FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(tof_present, aoa_azimuth_present, \
 					  aoa_elevation_present,            \
-					  aoa_fom_present)                  \
+					  aoa_fom_present, neg_tof_present)                  \
 	(FIRA_IE_VENDOR_OUI_LEN + 2 + 4 * (tof_present) +                   \
 	 2 * (aoa_azimuth_present) + 2 * (aoa_elevation_present) +          \
 	 (aoa_fom_present) *                                                \
-		 (1 * (aoa_azimuth_present) + 1 * (aoa_elevation_present)))
+		 (1 * (aoa_azimuth_present) + 1 * (aoa_elevation_present)) +		\
+	4 * (neg_tof_present))
 
 #define FIRA_MIC_LEVEL 64
 #define FIRA_MIC_LEN (FIRA_MIC_LEVEL / 8)
@@ -88,6 +89,7 @@ struct fira_session_params;
 #define FIRA_RESULT_REPORT_CONTROL_AOA_AZIMUTH_PRESENT (1 << 1)
 #define FIRA_RESULT_REPORT_CONTROL_AOA_ELEVATION_PRESENT (1 << 2)
 #define FIRA_RESULT_REPORT_CONTROL_AOA_FOM_PRESENT (1 << 3)
+#define FIRA_RESULT_REPORT_CONTROL_NEG_TOF_PRESENT (1 << 4)
 
 /**
  * fira_frame_check_n_controlees() - Check the number of wanted

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -176,10 +176,6 @@ int kbase_context_common_init(struct kbase_context *kctx)
 	/* creating a context is considered a disjoint event */
 	kbase_disjoint_event(kctx->kbdev);
 
-	kctx->as_nr = KBASEP_AS_NR_INVALID;
-
-	atomic_set(&kctx->refcount, 0);
-
 	spin_lock_init(&kctx->mm_update_lock);
 	kctx->process_mm = NULL;
 	atomic_set(&kctx->nonmapped_pages, 0);
@@ -286,7 +282,9 @@ static void kbase_remove_kctx_from_process(struct kbase_context *kctx)
 		/* Add checks, so that the terminating process Should not
 		 * hold any gpu_memory.
 		 */
+		spin_lock(&kctx->kbdev->gpu_mem_usage_lock);
 		WARN_ON(kprcs->total_gpu_pages);
+		spin_unlock(&kctx->kbdev->gpu_mem_usage_lock);
 		WARN_ON(!RB_EMPTY_ROOT(&kprcs->dma_buf_root));
 		kobject_del(&kprcs->kobj);
 		kobject_put(&kprcs->kobj);
@@ -296,14 +294,7 @@ static void kbase_remove_kctx_from_process(struct kbase_context *kctx)
 
 void kbase_context_common_term(struct kbase_context *kctx)
 {
-	unsigned long flags;
 	int pages;
-
-	mutex_lock(&kctx->kbdev->mmu_hw_mutex);
-	spin_lock_irqsave(&kctx->kbdev->hwaccess_lock, flags);
-	kbase_ctx_sched_remove_ctx(kctx);
-	spin_unlock_irqrestore(&kctx->kbdev->hwaccess_lock, flags);
-	mutex_unlock(&kctx->kbdev->mmu_hw_mutex);
 
 	pages = atomic_read(&kctx->used_pages);
 	if (pages != 0)

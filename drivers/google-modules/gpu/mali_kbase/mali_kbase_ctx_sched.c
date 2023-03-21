@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2017-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2017-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -23,7 +23,9 @@
 #include <mali_kbase_defs.h>
 #include "mali_kbase_ctx_sched.h"
 #include "tl/mali_kbase_tracepoints.h"
-#if !MALI_USE_CSF
+#if MALI_USE_CSF
+#include "mali_kbase_reset_gpu.h"
+#else
 #include <mali_kbase_hwaccess_jm.h>
 #endif
 
@@ -65,6 +67,12 @@ void kbase_ctx_sched_term(struct kbase_device *kbdev)
 		WARN_ON(kbdev->as_to_kctx[i] != NULL);
 		WARN_ON(!(kbdev->as_free & (1u << i)));
 	}
+}
+
+void kbase_ctx_sched_init_ctx(struct kbase_context *kctx)
+{
+	kctx->as_nr = KBASEP_AS_NR_INVALID;
+	atomic_set(&kctx->refcount, 0);
 }
 
 /* kbasep_ctx_sched_find_as_for_ctx - Find a free address space
@@ -152,7 +160,19 @@ void kbase_ctx_sched_retain_ctx_refcount(struct kbase_context *kctx)
 	struct kbase_device *const kbdev = kctx->kbdev;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	WARN_ON(atomic_read(&kctx->refcount) == 0);
+#if MALI_USE_CSF
+	/* We expect the context to be active when this function is called,
+	 * except for the case where a page fault is reported for it during
+	 * the GPU reset sequence, in which case we can expect the refcount
+	 * to be 0.
+	 */
+	WARN_ON(!atomic_read(&kctx->refcount) && !kbase_reset_gpu_is_active(kbdev));
+#else
+	/* We expect the context to be active (and thus refcount should be non-zero)
+         * when this function is called
+         */
+	WARN_ON(!atomic_read(&kctx->refcount));
+#endif
 	WARN_ON(kctx->as_nr == KBASEP_AS_NR_INVALID);
 	WARN_ON(kbdev->as_to_kctx[kctx->as_nr] != kctx);
 
@@ -187,9 +207,10 @@ void kbase_ctx_sched_release_ctx(struct kbase_context *kctx)
 void kbase_ctx_sched_remove_ctx(struct kbase_context *kctx)
 {
 	struct kbase_device *const kbdev = kctx->kbdev;
+	unsigned long flags;
 
-	lockdep_assert_held(&kbdev->mmu_hw_mutex);
-	lockdep_assert_held(&kbdev->hwaccess_lock);
+	mutex_lock(&kbdev->mmu_hw_mutex);
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 
 	WARN_ON(atomic_read(&kctx->refcount) != 0);
 
@@ -201,6 +222,9 @@ void kbase_ctx_sched_remove_ctx(struct kbase_context *kctx)
 		kbdev->as_to_kctx[kctx->as_nr] = NULL;
 		kctx->as_nr = KBASEP_AS_NR_INVALID;
 	}
+
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+	mutex_unlock(&kbdev->mmu_hw_mutex);
 }
 
 void kbase_ctx_sched_restore_all_as(struct kbase_device *kbdev)
@@ -313,12 +337,18 @@ struct kbase_context *kbase_ctx_sched_as_to_ctx_nolock(
 bool kbase_ctx_sched_inc_refcount_nolock(struct kbase_context *kctx)
 {
 	bool result = false;
+#ifdef CONFIG_MALI_DEBUG
+	int as_nr;
+#endif
 
 	if (WARN_ON(kctx == NULL))
 		return result;
 
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
 
+#ifdef CONFIG_MALI_DEBUG
+	as_nr = kctx->as_nr;
+#endif
 	if (atomic_read(&kctx->refcount) > 0) {
 		KBASE_DEBUG_ASSERT(as_nr >= 0);
 

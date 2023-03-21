@@ -34,13 +34,8 @@
 /* Forward declaration of struct kbase_device */
 struct kbase_device;
 
-#if !MALI_USE_CSF
 /* Forward declaration of struct kbase_context */
 struct kbase_context;
-
-/* Forward declaration of struct kbase_atom */
-struct kbase_jd_atom;
-#endif
 
 /**
  * struct kbase_platform_funcs_conf - Specifies platform integration function
@@ -104,8 +99,6 @@ struct kbase_platform_funcs_conf {
 	 * can be accessed (and possibly terminated) in here.
 	 */
 	void (*platform_late_term_func)(struct kbase_device *kbdev);
-
-#if !MALI_USE_CSF
 	/**
 	 * @platform_handler_context_init_func: platform specific handler for
 	 * when a new kbase_context is created.
@@ -129,33 +122,63 @@ struct kbase_platform_funcs_conf {
 	 */
 	void (*platform_handler_context_term_func)(struct kbase_context *kctx);
 	/**
-	 * @platform_handler_atom_submit_func: platform specific handler for
-	 * when a kbase_jd_atom is submitted.
-	 * @katom - kbase_jd_atom pointer
+	 * platform_handler_work_begin_func - Platform specific handler whose
+	 *                                    function changes depending on the
+	 *                                    backend used.
+	 * @param
+	 *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
+	 *    to the atom that just started executing.
+	 *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
+	 *    the group resident in a CSG slot which just started executing.
 	 *
-	 * Function pointer for platform specific handling at the point when an
-	 * atom is submitted to the GPU or set to NULL if not required. The
+	 * Function pointer for platform specific handling at the point when a unit
+	 * of work starts running on the GPU or set to NULL if not required. The
 	 * function cannot assume that it is running in a process context.
 	 *
-	 * Context: The caller must hold the hwaccess_lock. Function must be
-	 *          runnable in an interrupt context.
+	 * Context:
+	 *  - If job manager: Function must be runnable in an interrupt context.
 	 */
-	void (*platform_handler_atom_submit_func)(struct kbase_jd_atom *katom);
+	void (*platform_handler_work_begin_func)(void* param);
 	/**
-	 * @platform_handler_atom_complete_func: platform specific handler for
-	 * when a kbase_jd_atom completes.
-	 * @katom - kbase_jd_atom pointer
+	 * platform_handler_work_end_func - Platform specific handler whose function
+	 *                                  changes depending on the backend used.
+	 * @param
+	 *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
+	 *    to the atom that just completed.
+	 *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
+	 *    the group resident in a CSG slot which just completed or suspended
+	 *    execution.
 	 *
-	 * Function pointer for platform specific handling at the point when an
-	 * atom stops running on the GPU or set to NULL if not required. The
+	 * Function pointer for platform specific handling at the point when a unit
+	 * of work stops running on the GPU or set to NULL if not required. The
 	 * function cannot assume that it is running in a process context.
 	 *
-	 * Context: The caller must hold the hwaccess_lock. Function must be
-	 *          runnable in an interrupt context.
+	 * Context:
+	 *  - If job manager: Function must be runnable in an interrupt context.
 	 */
-	void (*platform_handler_atom_complete_func)(
-		struct kbase_jd_atom *katom);
-#endif
+	void (*platform_handler_work_end_func)(void* param);
+	/**
+	 * platform_fw_cfg_init_func - Platform specific callback for FW configuration
+	 *
+	 * @kbdev: kbase_device pointer
+	 *
+	 * Function pointer for platform specific FW configuration
+	 *
+	 * Context: Process context
+	 */
+	int (*platform_fw_cfg_init_func)(struct kbase_device *kbdev);
+	/**
+	 * platform_handler_core_dump_func - Platform specific handler for triggering a core dump.
+	 *
+	 * @kbdev: kbase_device pointer
+	 * @reason: A null terminated string containing a dump reason
+	 *
+	 * Function pointer for platform specific handling at the point an internal error
+	 * has occurred, to dump debug info about the error. Or set to NULL if not required.
+	 *
+	 * Context: The caller must hold the hwaccess lock
+	 */
+	void (*platform_handler_core_dump_func)(struct kbase_device *kbdev, const char* reason);
 };
 
 /*
@@ -297,6 +320,14 @@ struct kbase_pm_callback_conf {
 	int (*soft_reset_callback)(struct kbase_device *kbdev);
 
 	/*
+	 * Optional callback for full hardware reset of the GPU
+	 *
+	 * This callback will be called by the power management core to trigger
+	 * a GPU hardware reset.
+	 */
+	void (*hardware_reset_callback)(struct kbase_device *kbdev);
+
+	/*
 	 * Optional callback invoked after GPU becomes idle, not supported on
 	 * JM GPUs.
 	 *
@@ -338,6 +369,24 @@ struct kbase_pm_callback_conf {
 	 * this feature.
 	 */
 	void (*power_runtime_gpu_active_callback)(struct kbase_device *kbdev);
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	/*
+	 * This callback will be invoked by the Kbase when GPU becomes active
+	 * to turn on the shader core power rails.
+	 * This callback is invoked from process context and the power rails
+	 * must be turned on before the completion of callback.
+	 */
+	void (*power_on_sc_rails_callback)(struct kbase_device *kbdev);
+
+	/*
+	 * This callback will be invoked by the Kbase when GPU becomes idle
+	 * to turn off the shader core power rails.
+	 * This callback is invoked from process context and the power rails
+	 * must be turned off before the completion of callback.
+	 */
+	void (*power_off_sc_rails_callback)(struct kbase_device *kbdev);
+#endif
 };
 
 /* struct kbase_gpu_clk_notifier_data - Data for clock rate change notifier.
@@ -511,7 +560,6 @@ int kbasep_platform_device_late_init(struct kbase_device *kbdev);
  */
 void kbasep_platform_device_late_term(struct kbase_device *kbdev);
 
-#if !MALI_USE_CSF
 /**
  * kbasep_platform_context_init - Platform specific callback when a kernel
  *                                context is created
@@ -538,28 +586,58 @@ int kbasep_platform_context_init(struct kbase_context *kctx);
 void kbasep_platform_context_term(struct kbase_context *kctx);
 
 /**
- * kbasep_platform_event_atom_submit - Platform specific callback when an atom
- *                                     is submitted to the GPU
- * @katom: kbase_jd_atom pointer
+ * kbasep_platform_event_work_begin - Platform specific callback whose function
+ *                                    changes depending on the backend used.
+ *                                    Signals that a unit of work has started
+ *                                    running on the GPU.
+ * @param
+ *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
+ *    to the atom that just started executing.
+ *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
+ *    the group resident in a CSG slot which just started executing.
  *
  * Function calls a platform defined routine if specified in the configuration
- * attributes.  The routine should not assume that it is in a process context.
+ * attributes. The routine should not assume that it is in a process context.
  *
- * Return: 0 if no errors were encountered. Negative error code otherwise.
  */
-void kbasep_platform_event_atom_submit(struct kbase_jd_atom *katom);
+void kbasep_platform_event_work_begin(void *param);
 
 /**
- * kbasep_platform_event_atom_complete - Platform specific callback when an atom
- *                                       has stopped running on the GPU
- * @katom: kbase_jd_atom pointer
+ * kbasep_platform_event_work_end - Platform specific callback whose function
+ *                                  changes depending on the backend used.
+ *                                  Signals that a unit of work has completed.
+ * @param
+ *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
+ *    to the atom that just completed.
+ *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
+ *    the group resident in a CSG slot which just completed or suspended execution.
  *
  * Function calls a platform defined routine if specified in the configuration
- * attributes.  The routine should not assume that it is in a process context.
+ * attributes. The routine should not assume that it is in a process context.
  *
  */
-void kbasep_platform_event_atom_complete(struct kbase_jd_atom *katom);
-#endif
+void kbasep_platform_event_work_end(void *param);
+
+/**
+ * kbasep_platform_fw_config_init - Platform specific callback to configure FW
+ *
+ * @kbdev - kbase_device pointer
+ *
+ * Function calls a platform defined routine if specified in the configuration attributes.
+ *
+ */
+int kbasep_platform_fw_config_init(struct kbase_device *kbdev);
+
+/**
+ * kbasep_platform_event_core_dump - Platform specific callback to act on a firmware error.
+ *
+ * @kbdev - kbase_device pointer
+ * @reason: A null terminated string containing a dump reason
+ *
+ * Function calls a platform defined routine if specified in the configuration attributes.
+ *
+ */
+void kbasep_platform_event_core_dump(struct kbase_device *kbdev, const char* reason);
 
 #ifndef CONFIG_OF
 /**

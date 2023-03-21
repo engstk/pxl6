@@ -62,8 +62,8 @@ enum ramdump_section_index {
 };
 
 enum RamdumpPlatform : uint32_t {
-	RAMDUMP_PLATFORM_1 = 1,
-	RAMDUMP_PLATFORM_2,
+	RAMDUMP_PLATFORM_WHI = 1,
+	RAMDUMP_PLATFORM_WHI_PRO,
 };
 
 struct aoc_section_header {

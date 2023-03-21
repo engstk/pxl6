@@ -29,7 +29,7 @@ struct device_node;
 
 #define GBMS_CHG_TEMP_NB_LIMITS_MAX 10
 #define GBMS_CHG_VOLT_NB_LIMITS_MAX 5
-#define GBMS_CHG_ALG_BUF 500
+#define GBMS_CHG_ALG_BUF_SZ 500
 #define GBMS_CHG_TOPOFF_NB_LIMITS_MAX 6
 #define GBMS_AACR_DATA_MAX 10
 
@@ -65,8 +65,8 @@ struct gbms_chg_profile {
 	u32 aacr_nb_limits;
 };
 
-#define WLC_BPP_THRESHOLD_UV	700000
-#define WLC_EPP_THRESHOLD_UV	1100000
+#define WLC_BPP_THRESHOLD_UV	7000000
+#define WLC_EPP_THRESHOLD_UV	11000000
 
 #define FOREACH_CHG_EV_ADAPTER(S)		\
 	S(UNKNOWN), 	\
@@ -293,11 +293,17 @@ enum gbms_stats_tier_idx_t {
 	GBMS_STATS_AC_TI_V2_PREDICT_SUCCESS = 19,
 	GBMS_STATS_AC_TI_DONE_AON = 20,
 
-	/* Thermal stats, reported from google_charger */
+	/* Thermal stats, reported from google_charger - reserved 50-59 */
 	GBMS_STATS_TH_LVL0 = 50,
 	GBMS_STATS_TH_LVL1 = 51,
 	GBMS_STATS_TH_LVL2 = 52,
 	GBMS_STATS_TH_LVL3 = 53,
+	GBMS_STATS_TH_LVL4 = 54,
+	GBMS_STATS_TH_LVL5 = 55,
+	GBMS_STATS_TH_LVL6 = 56,
+	GBMS_STATS_TH_LVL7 = 57,
+	GBMS_STATS_TH_LVL8 = 58,
+	GBMS_STATS_TH_LVL9 = 59,
 
 	/* TODO: rename, these are not really related to AC */
 	GBMS_STATS_AC_TI_FULL_CHARGE = 100,
@@ -451,9 +457,14 @@ const char *gbms_chg_ev_adapter_s(int adapter);
 #define VOTABLE_FAN_LEVEL	"FAN_LEVEL"
 #define VOTABLE_DEAD_BATTERY	"DEAD_BATTERY"
 #define VOTABLE_TEMP_DRYRUN	"MSC_TEMP_DRYRUN"
+#define VOTABLE_MDIS		"CHG_MDIS"
 
 #define VOTABLE_CSI_STATUS	"CSI_STATUS"
 #define VOTABLE_CSI_TYPE	"CSI_TYPE"
+
+#define VOTABLE_DC_CHG_AVAIL	"DC_AVAIL"
+#define REASON_DC_DRV		"DC_DRV"
+#define REASON_MDIS		"MDIS"
 
 #define FAN_LVL_UNKNOWN		-1
 #define FAN_LVL_NOT_CARE	0
@@ -534,17 +545,16 @@ bool chg_state_is_disconnected(const union gbms_charger_state *chg_state);
 void gbms_tier_stats_init(struct gbms_ce_tier_stats *stats, int8_t idx);
 
 void gbms_chg_stats_tier(struct gbms_ce_tier_stats *tier,
-				int msc_state,
-				ktime_t elap);
+			 int msc_state, ktime_t elap);
 
-void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp,
-				ktime_t elap, int cc, union gbms_charger_state *chg_state,
-				enum gbms_msc_states_t msc_state, int soc_in,
-				struct gbms_ce_tier_stats *tier);
+void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp, ktime_t elap,
+			    int cc, union gbms_charger_state *chg_state,
+			    enum gbms_msc_states_t msc_state, int soc_in,
+			    struct gbms_ce_tier_stats *tier);
 
 int gbms_tier_stats_cstr(char *buff, int size,
-				const struct gbms_ce_tier_stats *tier_stat,
-				bool verbose);
+			 const struct gbms_ce_tier_stats *tier_stat,
+			 bool verbose);
 
 void gbms_log_cstr_handler(struct logbuffer *log, char *buf, int len);
 
@@ -564,6 +574,9 @@ enum gbms_charger_modes {
 	GBMS_USB_OTG_FRS_ON	= 0x32,
 
 	GBMS_CHGR_MODE_WLC_TX	= 0x40,
+
+	GBMS_POGO_VIN		= 0x50,
+	GBMS_POGO_VOUT		= 0x51,
 };
 
 #define GBMS_MODE_VOTABLE "CHARGER_MODE"
@@ -586,6 +599,8 @@ enum bhi_algo {
 	 */
 
 	BHI_ALGO_MIX_N_MATCH 	= 6,
+	BHI_ALGO_DEBUG		= 7,
+	BHI_ALGO_INDI		= 8, /* individual conditions check */
 	BHI_ALGO_MAX,
 };
 
@@ -595,6 +610,12 @@ enum bhi_status {
 	BH_MARGINAL,
 	BH_NEEDS_REPLACEMENT,
 	BH_FAILED,
+};
+
+struct bhi_weight {
+	int w_ci;
+	int w_ii;
+	int w_sd;
 };
 
 /* Charging Speed */
@@ -627,6 +648,15 @@ enum csi_status {
 	CSI_STATUS_Charging = 200,	// All good
 };
 
+#define to_cooling_device(_dev)	\
+	container_of(_dev, struct thermal_cooling_device, device)
+
+#define DEBUG_ATTRIBUTE_WO(name) \
+static const struct file_operations name ## _fops = {	\
+	.open	= simple_open,			\
+	.llseek	= no_llseek,			\
+	.write	= name ## _store,			\
+}
 
 
 #endif  /* __GOOGLE_BMS_H_ */

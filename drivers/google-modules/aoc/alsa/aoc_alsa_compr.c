@@ -585,6 +585,8 @@ static int aoc_compr_pointer(struct snd_soc_component *component, struct snd_com
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
 	uint64_t current_sample = 0;
 
+	//pr_debug("%s, %pK, %pK\n", __func__, runtime, arg);
+
 	arg->byte_offset = alsa_stream->pos;
 	arg->copied_total = alsa_stream->prev_consumed - alsa_stream->hw_ptr_base;
 

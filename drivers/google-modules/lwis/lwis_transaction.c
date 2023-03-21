@@ -16,7 +16,6 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/workqueue.h>
 
 #include "lwis_allocator.h"
 #include "lwis_device.h"
@@ -127,10 +126,6 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 						   /*use_write_barrier=*/true);
 	}
 
-	if (!in_irq) {
-		mutex_lock(&lwis_dev->reg_rw_lock);
-	}
-
 	for (i = 0; i < info->num_io_entries; ++i) {
 		entry = &info->io_entries[i];
 		if (entry->type == LWIS_IO_ENTRY_WRITE ||
@@ -224,10 +219,6 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 		resp->completion_index = i;
 	}
 
-	if (!in_irq) {
-		mutex_unlock(&lwis_dev->reg_rw_lock);
-	}
-
 	process_duration_ns = ktime_to_ns(lwis_get_time() - process_timestamp);
 
 	/* Use read memory barrier at the end of I/O entries if the access protocol
@@ -280,18 +271,18 @@ static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transac
 	lwis_transaction_free(lwis_dev, transaction);
 }
 
-static void process_transactions_in_queue(struct lwis_client *client,
-					  struct list_head *transaction_queue, bool in_irq)
+static void transaction_work_func(struct kthread_work *work)
 {
 	unsigned long flags;
-	struct lwis_transaction *transaction;
+	struct lwis_client *client = container_of(work, struct lwis_client, transaction_work);
 	struct list_head *it_tran, *it_tran_tmp;
 	struct list_head pending_events;
+	struct lwis_transaction *transaction;
 
 	INIT_LIST_HEAD(&pending_events);
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
-	list_for_each_safe (it_tran, it_tran_tmp, transaction_queue) {
+	list_for_each_safe (it_tran, it_tran_tmp, &client->transaction_process_queue) {
 		transaction = list_entry(it_tran, struct lwis_transaction, process_queue_node);
 		list_del(&transaction->process_queue_node);
 		if (transaction->resp->error_code) {
@@ -299,35 +290,20 @@ static void process_transactions_in_queue(struct lwis_client *client,
 					   transaction->resp->error_code, &pending_events);
 		} else {
 			spin_unlock_irqrestore(&client->transaction_lock, flags);
-			process_transaction(client, transaction, &pending_events, in_irq,
+			process_transaction(client, transaction, &pending_events,
+					    /*in_irq=*/false,
 					    /*skip_err=*/false);
 			spin_lock_irqsave(&client->transaction_lock, flags);
 		}
 	}
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
 
-	lwis_pending_events_emit(client->lwis_dev, &pending_events, in_irq);
-}
-
-static void transaction_tasklet_func(unsigned long data)
-{
-	struct lwis_client *client = (struct lwis_client *)data;
-
-	process_transactions_in_queue(client, &client->transaction_process_queue_tasklet,
-				      /*in_irq=*/true);
-}
-
-static void transaction_work_func(struct kthread_work *work)
-{
-	struct lwis_client *client = container_of(work, struct lwis_client, transaction_work);
-	process_transactions_in_queue(client, &client->transaction_process_queue, /*in_irq=*/false);
+	lwis_pending_events_emit(client->lwis_dev, &pending_events, /*in_irq=*/false);
 }
 
 int lwis_transaction_init(struct lwis_client *client)
 {
 	spin_lock_init(&client->transaction_lock);
-	INIT_LIST_HEAD(&client->transaction_process_queue_tasklet);
-	tasklet_init(&client->transaction_tasklet, transaction_tasklet_func, (unsigned long)client);
 	INIT_LIST_HEAD(&client->transaction_process_queue);
 	kthread_init_work(&client->transaction_work, transaction_work_func);
 	client->transaction_counter = 0;
@@ -345,7 +321,6 @@ int lwis_transaction_clear(struct lwis_client *client)
 			"Failed to wait for all in-process transactions to complete (%d)\n", ret);
 		return ret;
 	}
-	tasklet_kill(&client->transaction_tasklet);
 	return 0;
 }
 
@@ -399,17 +374,11 @@ int lwis_transaction_client_flush(struct lwis_client *client)
 	if (client->lwis_dev->transaction_worker_thread)
 		kthread_flush_worker(&client->lwis_dev->transaction_worker);
 
-	/* Wait for tasklet to complete in-progress transactions and disable. */
-	tasklet_disable(&client->transaction_tasklet);
-
 	spin_lock_irqsave(&client->transaction_lock, flags);
-	/* Both transaction queues should be empty after draining, but check anyway. */
+	/* The transaction queue should be empty after canceling all transactions,
+	 * but check anyway. */
 	cancel_all_transactions_in_queue_locked(client, &client->transaction_process_queue);
-	cancel_all_transactions_in_queue_locked(client, &client->transaction_process_queue_tasklet);
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
-
-	/* Resume the tasklet once making sure transactions are all flushed. */
-	tasklet_enable(&client->transaction_tasklet);
 
 	return 0;
 }
@@ -630,16 +599,9 @@ static int queue_transaction_locked(struct lwis_client *client,
 
 	if (info->trigger_event_id == LWIS_EVENT_ID_NONE) {
 		/* Immediate trigger. */
-		if (info->run_at_real_time) {
-			list_add_tail(&transaction->process_queue_node,
-				      &client->transaction_process_queue_tasklet);
-			tasklet_schedule(&client->transaction_tasklet);
-		} else {
-			list_add_tail(&transaction->process_queue_node,
-				      &client->transaction_process_queue);
-			kthread_queue_work(&client->lwis_dev->transaction_worker,
-					   &client->transaction_work);
-		}
+		list_add_tail(&transaction->process_queue_node, &client->transaction_process_queue);
+		kthread_queue_work(&client->lwis_dev->transaction_worker,
+				   &client->transaction_work);
 	} else {
 		/* Trigger by event. */
 		event_list = event_list_find_or_create(client, info->trigger_event_id);
@@ -732,9 +694,6 @@ static void defer_transaction_locked(struct lwis_client *client,
 		process_transaction(client, transaction, pending_events, in_irq,
 				    /*skip_err=*/false);
 		spin_lock_irqsave(&client->transaction_lock, flags);
-	} else if (transaction->info.run_at_real_time) {
-		list_add_tail(&transaction->process_queue_node,
-			      &client->transaction_process_queue_tasklet);
 	} else {
 		list_add_tail(&transaction->process_queue_node, &client->transaction_process_queue);
 	}
@@ -792,9 +751,6 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 	}
 
 	/* Schedule deferred transactions */
-	if (!list_empty(&client->transaction_process_queue_tasklet)) {
-		tasklet_schedule(&client->transaction_tasklet);
-	}
 	if (!list_empty(&client->transaction_process_queue)) {
 		kthread_queue_work(&client->lwis_dev->transaction_worker,
 				   &client->transaction_work);

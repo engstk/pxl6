@@ -75,6 +75,7 @@ struct dsc_slice {
 
 struct exynos_dsc {
 	bool enabled;
+	bool is_scrv4;
 	u32 dsc_count;
 	u32 slice_count;
 	u32 slice_width;

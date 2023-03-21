@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2018-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -34,6 +34,8 @@
 #include <csf/ipa_control/mali_kbase_csf_ipa_control.h>
 #include <mali_kbase_hwaccess_time.h>
 #include "mali_kbase_csf_event.h"
+#include <mali_linux_trace.h>
+#include <linux/protected_memory_allocator.h>
 
 #define CS_REQ_EXCEPTION_MASK (CS_REQ_FAULT_MASK | CS_REQ_FATAL_MASK)
 #define CS_ACK_EXCEPTION_MASK (CS_ACK_FAULT_MASK | CS_ACK_FATAL_MASK)
@@ -50,6 +52,23 @@ const u8 kbasep_csf_relative_to_queue_group_priority[KBASE_QUEUE_GROUP_PRIORITY_
 	BASE_QUEUE_GROUP_PRIORITY_HIGH,
 	BASE_QUEUE_GROUP_PRIORITY_MEDIUM,
 	BASE_QUEUE_GROUP_PRIORITY_LOW
+};
+
+/*
+ * struct irq_idle_and_protm_track - Object that tracks the idle and protected mode
+ *                                   request information in an interrupt case across
+ *                                   groups.
+ *
+ * @protm_grp: Possibly schedulable group that requested protected mode in the interrupt.
+ *             If NULL, no such case observed in the tracked interrupt case.
+ * @idle_seq:  The highest priority group that notified idle. If no such instance in the
+ *             interrupt case, marked with the largest field value: U32_MAX.
+ * @idle_slot: The slot number if @p idle_seq is valid in the given tracking case.
+ */
+struct irq_idle_and_protm_track {
+	struct kbase_queue_group *protm_grp;
+	u32 idle_seq;
+	s8 idle_slot;
 };
 
 static void put_user_pages_mmap_handle(struct kbase_context *kctx,
@@ -112,13 +131,13 @@ static int get_user_pages_mmap_handle(struct kbase_context *kctx,
 	return 0;
 }
 
-static void gpu_munmap_user_io_pages(struct kbase_context *kctx,
-			struct kbase_va_region *reg)
+static void gpu_munmap_user_io_pages(struct kbase_context *kctx, struct kbase_va_region *reg,
+				     struct tagged_addr *phys)
 {
 	size_t num_pages = 2;
 
-	kbase_mmu_teardown_pages(kctx->kbdev, &kctx->kbdev->csf.mcu_mmu,
-				 reg->start_pfn, num_pages, MCU_AS_NR);
+	kbase_mmu_teardown_pages(kctx->kbdev, &kctx->kbdev->csf.mcu_mmu, reg->start_pfn, phys,
+				 num_pages, MCU_AS_NR);
 
 	WARN_ON(reg->flags & KBASE_REG_FREE);
 
@@ -159,12 +178,6 @@ static int gpu_mmap_user_io_pages(struct kbase_device *kbdev,
 	 */
 	const enum kbase_caller_mmu_sync_info mmu_sync_info = CALLER_MMU_ASYNC;
 
-#if ((KERNEL_VERSION(4, 4, 147) >= LINUX_VERSION_CODE) || \
-		((KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE) && \
-		 (KERNEL_VERSION(4, 5, 0) <= LINUX_VERSION_CODE)))
-	mem_flags |=
-		KBASE_REG_MEMATTR_INDEX(AS_MEMATTR_INDEX_NON_CACHEABLE);
-#else
 	if (kbdev->system_coherency == COHERENCY_NONE) {
 		mem_flags |=
 			KBASE_REG_MEMATTR_INDEX(AS_MEMATTR_INDEX_NON_CACHEABLE);
@@ -172,7 +185,6 @@ static int gpu_mmap_user_io_pages(struct kbase_device *kbdev,
 		mem_flags |= KBASE_REG_SHARE_BOTH |
 			KBASE_REG_MEMATTR_INDEX(AS_MEMATTR_INDEX_SHARED);
 	}
-#endif
 
 	mutex_lock(&kbdev->csf.reg_lock);
 	ret = kbase_add_va_region_rbtree(kbdev, reg, 0, num_pages, 1);
@@ -201,8 +213,7 @@ static int gpu_mmap_user_io_pages(struct kbase_device *kbdev,
 	return 0;
 
 bad_insert_output_page:
-	kbase_mmu_teardown_pages(kbdev, &kbdev->csf.mcu_mmu,
-				 reg->start_pfn, 1, MCU_AS_NR);
+	kbase_mmu_teardown_pages(kbdev, &kbdev->csf.mcu_mmu, reg->start_pfn, phys, 1, MCU_AS_NR);
 bad_insert:
 	mutex_lock(&kbdev->csf.reg_lock);
 	kbase_remove_va_region(kbdev, reg);
@@ -231,6 +242,8 @@ static int kernel_map_user_io_pages(struct kbase_context *kctx,
 {
 	struct page *page_list[2];
 	pgprot_t cpu_map_prot;
+	unsigned long flags;
+	char *user_io_addr;
 	int ret = 0;
 	size_t i;
 
@@ -245,26 +258,24 @@ static int kernel_map_user_io_pages(struct kbase_context *kctx,
 	/* The pages are mapped to Userspace also, so use the same mapping
 	 * attributes as used inside the CPU page fault handler.
 	 */
-#if ((KERNEL_VERSION(4, 4, 147) >= LINUX_VERSION_CODE) || \
-		((KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE) && \
-		 (KERNEL_VERSION(4, 5, 0) <= LINUX_VERSION_CODE)))
-	cpu_map_prot = pgprot_device(PAGE_KERNEL);
-#else
 	if (kctx->kbdev->system_coherency == COHERENCY_NONE)
 		cpu_map_prot = pgprot_writecombine(PAGE_KERNEL);
 	else
 		cpu_map_prot = PAGE_KERNEL;
-#endif
 
 	for (i = 0; i < ARRAY_SIZE(page_list); i++)
 		page_list[i] = as_page(queue->phys[i]);
 
-	queue->user_io_addr = vmap(page_list, ARRAY_SIZE(page_list), VM_MAP, cpu_map_prot);
+	user_io_addr = vmap(page_list, ARRAY_SIZE(page_list), VM_MAP, cpu_map_prot);
 
-	if (!queue->user_io_addr)
+	if (!user_io_addr)
 		ret = -ENOMEM;
 	else
 		atomic_add(ARRAY_SIZE(page_list), &kctx->permanent_mapped_pages);
+
+	kbase_csf_scheduler_spin_lock(kctx->kbdev, &flags);
+	queue->user_io_addr = user_io_addr;
+	kbase_csf_scheduler_spin_unlock(kctx->kbdev, flags);
 
 unlock:
 	kbase_gpu_vm_unlock(kctx);
@@ -302,7 +313,7 @@ static void kbase_csf_free_command_stream_user_pages(struct kbase_context *kctx,
 {
 	const size_t num_pages = 2;
 
-	gpu_munmap_user_io_pages(kctx, queue->reg);
+	gpu_munmap_user_io_pages(kctx, queue->reg, &queue->phys[0]);
 	kernel_unmap_user_io_pages(kctx, queue);
 
 	kbase_mem_pool_free_pages(
@@ -406,9 +417,9 @@ int kbase_csf_queue_group_handle_is_valid(struct kbase_context *kctx,
 {
 	struct kbase_queue_group *group;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 	group = find_queue_group(kctx, group_handle);
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return group ? 0 : -EINVAL;
 }
@@ -442,6 +453,17 @@ static void release_queue(struct kbase_queue *queue)
 		/* The queue can't still be on the per context list. */
 		WARN_ON(!list_empty(&queue->link));
 		WARN_ON(queue->group);
+
+		/* After this the Userspace would be able to free the
+		 * memory for GPU queue. In case the Userspace missed
+		 * terminating the queue, the cleanup will happen on
+		 * context termination where tear down of region tracker
+		 * would free up the GPU queue memory.
+		 */
+		kbase_gpu_vm_lock(queue->kctx);
+		kbase_va_region_no_user_free_put(queue->kctx, queue->queue_reg);
+		kbase_gpu_vm_unlock(queue->kctx);
+
 		kfree(queue);
 	}
 }
@@ -482,7 +504,7 @@ static int csf_queue_register_internal(struct kbase_context *kctx,
 	queue_addr = reg->buffer_gpu_addr;
 	queue_size = reg->buffer_size >> PAGE_SHIFT;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	/* Check if queue is already registered */
 	if (find_queue(kctx, queue_addr) != NULL) {
@@ -495,7 +517,8 @@ static int csf_queue_register_internal(struct kbase_context *kctx,
 	region = kbase_region_tracker_find_region_enclosing_address(kctx,
 								    queue_addr);
 
-	if (kbase_is_region_invalid_or_free(region)) {
+	if (kbase_is_region_invalid_or_free(region) || kbase_is_region_shrinkable(region) ||
+	    region->gpu_alloc->type != KBASE_MEM_TYPE_NATIVE) {
 		ret = -ENOENT;
 		goto out_unlock_vm;
 	}
@@ -544,7 +567,7 @@ static int csf_queue_register_internal(struct kbase_context *kctx,
 
 	queue->kctx = kctx;
 	queue->base_addr = queue_addr;
-	queue->queue_reg = region;
+	queue->queue_reg = kbase_va_region_no_user_free_get(kctx, region);
 	queue->size = (queue_size << PAGE_SHIFT);
 	queue->csi_index = KBASEP_IF_NR_INVALID;
 	queue->enabled = false;
@@ -578,7 +601,6 @@ static int csf_queue_register_internal(struct kbase_context *kctx,
 
 	queue->extract_ofs = 0;
 
-	region->flags |= KBASE_REG_NO_USER_FREE;
 	region->user_data = queue;
 
 	/* Initialize the cs_trace configuration parameters, When buffer_size
@@ -600,7 +622,7 @@ static int csf_queue_register_internal(struct kbase_context *kctx,
 out_unlock_vm:
 	kbase_gpu_vm_unlock(kctx);
 out:
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return ret;
 }
@@ -656,7 +678,7 @@ void kbase_csf_queue_terminate(struct kbase_context *kctx,
 	else
 		reset_prevented = true;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 	queue = find_queue(kctx, term->buffer_gpu_addr);
 
 	if (queue) {
@@ -672,16 +694,8 @@ void kbase_csf_queue_terminate(struct kbase_context *kctx,
 		unbind_queue(kctx, queue);
 
 		kbase_gpu_vm_lock(kctx);
-		if (!WARN_ON(!queue->queue_reg)) {
-			/* After this the Userspace would be able to free the
-			 * memory for GPU queue. In case the Userspace missed
-			 * terminating the queue, the cleanup will happen on
-			 * context termination where tear down of region tracker
-			 * would free up the GPU queue memory.
-			 */
-			queue->queue_reg->flags &= ~KBASE_REG_NO_USER_FREE;
+		if (!WARN_ON(!queue->queue_reg))
 			queue->queue_reg->user_data = NULL;
-		}
 		kbase_gpu_vm_unlock(kctx);
 
 		dev_dbg(kctx->kbdev->dev,
@@ -692,7 +706,7 @@ void kbase_csf_queue_terminate(struct kbase_context *kctx,
 		release_queue(queue);
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kbdev);
 }
@@ -704,7 +718,7 @@ int kbase_csf_queue_bind(struct kbase_context *kctx, union kbase_ioctl_cs_queue_
 	u8 max_streams;
 	int ret = -EINVAL;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	group = find_queue_group(kctx, bind->in.group_handle);
 	queue = find_queue(kctx, bind->in.buffer_gpu_addr);
@@ -737,7 +751,7 @@ int kbase_csf_queue_bind(struct kbase_context *kctx, union kbase_ioctl_cs_queue_
 	queue->bind_state = KBASE_CSF_QUEUE_BIND_IN_PROGRESS;
 
 out:
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return ret;
 }
@@ -779,7 +793,7 @@ static struct kbase_queue_group *get_bound_queue_group(
  * If the queue is already scheduled and resident, it will be started
  * right away, otherwise once the group is made resident.
  */
-static void pending_submission_worker(struct work_struct *work)
+static void pending_submission_worker(struct kthread_work *work)
 {
 	struct kbase_context *kctx =
 		container_of(work, struct kbase_context, csf.pending_submission_work);
@@ -792,7 +806,7 @@ static void pending_submission_worker(struct work_struct *work)
 		return;
 	}
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	/* Iterate through the queue list and schedule the pending ones for submission. */
 	list_for_each_entry(queue, &kctx->csf.queue_list, link) {
@@ -801,12 +815,12 @@ static void pending_submission_worker(struct work_struct *work)
 
 			if (!group || queue->bind_state != KBASE_CSF_QUEUE_BOUND)
 				dev_dbg(kbdev->dev, "queue is not bound to a group");
-			else
-				WARN_ON(kbase_csf_scheduler_queue_start(queue));
+			else if (kbase_csf_scheduler_queue_start(queue))
+				dev_dbg(kbdev->dev, "Failed to start queue");
 		}
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	kbase_reset_gpu_allow(kbdev);
 }
@@ -815,6 +829,8 @@ void kbase_csf_ring_csg_doorbell(struct kbase_device *kbdev, int slot)
 {
 	if (WARN_ON(slot < 0))
 		return;
+
+	kbase_csf_scheduler_spin_lock_assert_held(kbdev);
 
 	kbase_csf_ring_csg_slots_doorbell(kbdev, (u32) (1 << slot));
 }
@@ -827,6 +843,8 @@ void kbase_csf_ring_csg_slots_doorbell(struct kbase_device *kbdev,
 	const u32 allowed_bitmap =
 		(u32) ((1U << kbdev->csf.global_iface.group_num) - 1);
 	u32 value;
+
+	kbase_csf_scheduler_spin_lock_assert_held(kbdev);
 
 	if (WARN_ON(slot_bitmap > allowed_bitmap))
 		return;
@@ -857,6 +875,8 @@ void kbase_csf_ring_cs_kernel_doorbell(struct kbase_device *kbdev,
 	struct kbase_csf_cmd_stream_group_info *ginfo;
 	u32 value;
 
+	kbase_csf_scheduler_spin_lock_assert_held(kbdev);
+
 	if (WARN_ON(csg_nr < 0) ||
 	    WARN_ON(csg_nr >= kbdev->csf.global_iface.group_num))
 		return;
@@ -878,7 +898,7 @@ void kbase_csf_ring_cs_kernel_doorbell(struct kbase_device *kbdev,
 
 static void enqueue_gpu_submission_work(struct kbase_context *const kctx)
 {
-	queue_work(system_highpri_wq, &kctx->csf.pending_submission_work);
+	kthread_queue_work(&kctx->csf.pending_submission_worker, &kctx->csf.pending_submission_work);
 }
 
 int kbase_csf_queue_kick(struct kbase_context *kctx,
@@ -929,7 +949,7 @@ static void unbind_stopped_queue(struct kbase_context *kctx,
 		kbase_csf_scheduler_spin_lock(kctx->kbdev, &flags);
 		bitmap_clear(queue->group->protm_pending_bitmap,
 				queue->csi_index, 1);
-		KBASE_KTRACE_ADD_CSF_GRP_Q(kctx->kbdev, PROTM_PENDING_CLEAR,
+		KBASE_KTRACE_ADD_CSF_GRP_Q(kctx->kbdev, CSI_PROTM_PEND_CLEAR,
 			 queue->group, queue, queue->group->protm_pending_bitmap[0]);
 		queue->group->bound_queues[queue->csi_index] = NULL;
 		queue->group = NULL;
@@ -977,7 +997,7 @@ static void unbind_queue(struct kbase_context *kctx, struct kbase_queue *queue)
 	}
 }
 
-void kbase_csf_queue_unbind(struct kbase_queue *queue)
+void kbase_csf_queue_unbind(struct kbase_queue *queue, bool process_exit)
 {
 	struct kbase_context *kctx = queue->kctx;
 
@@ -991,7 +1011,7 @@ void kbase_csf_queue_unbind(struct kbase_queue *queue)
 	 * whereas CSG TERM request would result in an immediate abort or
 	 * cancellation of the pending work.
 	 */
-	if (current->flags & PF_EXITING) {
+	if (process_exit) {
 		struct kbase_queue_group *group = get_bound_queue_group(queue);
 
 		if (group)
@@ -1339,10 +1359,13 @@ static int create_queue_group(struct kbase_context *const kctx,
 			group->tiler_max = create->in.tiler_max;
 			group->fragment_max = create->in.fragment_max;
 			group->compute_max = create->in.compute_max;
+			group->csi_handlers = create->in.csi_handlers;
 			group->priority = kbase_csf_priority_queue_group_priority_to_relative(
 				kbase_csf_priority_check(kctx->kbdev, create->in.priority));
 			group->doorbell_nr = KBASEP_USER_DB_NR_INVALID;
 			group->faulted = false;
+			group->cs_unrecoverable = false;
+			group->reevaluate_idle_status = false;
 
 
 			group->group_uid = generate_group_uid();
@@ -1386,8 +1409,16 @@ int kbase_csf_queue_group_create(struct kbase_context *const kctx,
 	const u32 tiler_count = hweight64(create->in.tiler_mask);
 	const u32 fragment_count = hweight64(create->in.fragment_mask);
 	const u32 compute_count = hweight64(create->in.compute_mask);
+	size_t i;
 
-	mutex_lock(&kctx->csf.lock);
+	for (i = 0; i < sizeof(create->in.padding); i++) {
+		if (create->in.padding[i] != 0) {
+			dev_warn(kctx->kbdev->dev, "Invalid padding not 0 in queue group create\n");
+			return -EINVAL;
+		}
+	}
+
+	rt_mutex_lock(&kctx->csf.lock);
 
 	if ((create->in.tiler_max > tiler_count) ||
 	    (create->in.fragment_max > fragment_count) ||
@@ -1403,6 +1434,10 @@ int kbase_csf_queue_group_create(struct kbase_context *const kctx,
 		dev_dbg(kctx->kbdev->dev,
 			"No CSG has at least %d CSs",
 			create->in.cs_min);
+		err = -EINVAL;
+	} else if (create->in.csi_handlers & ~BASE_CSF_EXCEPTION_HANDLER_FLAGS_MASK) {
+		dev_warn(kctx->kbdev->dev, "Unknown exception handler flags set: %u",
+			 create->in.csi_handlers & ~BASE_CSF_EXCEPTION_HANDLER_FLAGS_MASK);
 		err = -EINVAL;
 	} else if (create->in.reserved) {
 		dev_warn(kctx->kbdev->dev, "Reserved field was set to non-0");
@@ -1423,7 +1458,7 @@ int kbase_csf_queue_group_create(struct kbase_context *const kctx,
 			err = group_handle;
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return err;
 }
@@ -1442,9 +1477,8 @@ static void term_normal_suspend_buffer(struct kbase_context *const kctx,
 
 	lockdep_assert_held(&kctx->csf.lock);
 
-	WARN_ON(kbase_mmu_teardown_pages(
-				kctx->kbdev, &kctx->kbdev->csf.mcu_mmu,
-				s_buf->reg->start_pfn, nr_pages, MCU_AS_NR));
+	WARN_ON(kbase_mmu_teardown_pages(kctx->kbdev, &kctx->kbdev->csf.mcu_mmu,
+					 s_buf->reg->start_pfn, s_buf->phy, nr_pages, MCU_AS_NR));
 
 	WARN_ON(s_buf->reg->flags & KBASE_REG_FREE);
 
@@ -1474,10 +1508,16 @@ static void term_protected_suspend_buffer(struct kbase_device *const kbdev,
 {
 	const size_t nr_pages =
 		PFN_UP(kbdev->csf.global_iface.groups[0].suspend_size);
+	struct tagged_addr *phys = kmalloc(sizeof(*phys) * nr_pages, GFP_KERNEL);
+	size_t i = 0;
 
-	WARN_ON(kbase_mmu_teardown_pages(
-			kbdev, &kbdev->csf.mcu_mmu,
-			s_buf->reg->start_pfn, nr_pages, MCU_AS_NR));
+	for (i = 0; phys && i < nr_pages; i++)
+		phys[i] = as_tagged(s_buf->pma[i]->pa);
+
+	WARN_ON(kbase_mmu_teardown_pages(kbdev, &kbdev->csf.mcu_mmu, s_buf->reg->start_pfn, phys,
+					 nr_pages, MCU_AS_NR));
+
+	kfree(phys);
 
 	WARN_ON(s_buf->reg->flags & KBASE_REG_FREE);
 
@@ -1586,7 +1626,7 @@ void kbase_csf_queue_group_terminate(struct kbase_context *kctx,
 	else
 		reset_prevented = true;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	group = find_queue_group(kctx, group_handle);
 
@@ -1609,7 +1649,7 @@ void kbase_csf_queue_group_terminate(struct kbase_context *kctx,
 		remove_pending_group_fatal_error(group);
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kbdev);
 
@@ -1632,7 +1672,7 @@ int kbase_csf_queue_group_suspend(struct kbase_context *kctx,
 			group_handle);
 		return err;
 	}
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	group = find_queue_group(kctx, group_handle);
 	if (group)
@@ -1641,7 +1681,7 @@ int kbase_csf_queue_group_suspend(struct kbase_context *kctx,
 	else
 		err = -EINVAL;
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	kbase_reset_gpu_allow(kbdev);
 
 	return err;
@@ -1681,7 +1721,7 @@ void kbase_csf_active_queue_groups_reset(struct kbase_device *kbdev,
 
 	INIT_LIST_HEAD(&evicted_groups);
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	kbase_csf_scheduler_evict_ctx_slots(kbdev, kctx, &evicted_groups);
 	while (!list_empty(&evicted_groups)) {
@@ -1702,12 +1742,11 @@ void kbase_csf_active_queue_groups_reset(struct kbase_device *kbdev,
 			kbase_csf_term_descheduled_queue_group(group);
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 }
 
 int kbase_csf_ctx_init(struct kbase_context *kctx)
 {
-	struct kbase_device *kbdev = kctx->kbdev;
 	int err = -ENOMEM;
 
 	INIT_LIST_HEAD(&kctx->csf.queue_list);
@@ -1716,51 +1755,49 @@ int kbase_csf_ctx_init(struct kbase_context *kctx)
 	kbase_csf_event_init(kctx);
 
 	kctx->csf.user_reg_vma = NULL;
-	mutex_lock(&kbdev->pm.lock);
-	/* The inode information for /dev/malixx file is not available at the
-	 * time of device probe as the inode is created when the device node
-	 * is created by udevd (through mknod).
-	 */
-	if (kctx->filp) {
-		if (!kbdev->csf.mali_file_inode)
-			kbdev->csf.mali_file_inode = kctx->filp->f_inode;
-
-		/* inode is unique for a file */
-		WARN_ON(kbdev->csf.mali_file_inode != kctx->filp->f_inode);
-	}
-	mutex_unlock(&kbdev->pm.lock);
 
 	/* Mark all the cookies as 'free' */
 	bitmap_fill(kctx->csf.cookies, KBASE_CSF_NUM_USER_IO_PAGES_HANDLE);
 
 	kctx->csf.wq = alloc_workqueue("mali_kbase_csf_wq",
 					WQ_UNBOUND, 1);
+	if (unlikely(!kctx->csf.wq))
+		goto out;
 
-	if (likely(kctx->csf.wq)) {
-		err = kbase_csf_scheduler_context_init(kctx);
-
-		if (likely(!err)) {
-			err = kbase_csf_kcpu_queue_context_init(kctx);
-
-			if (likely(!err)) {
-				err = kbase_csf_tiler_heap_context_init(kctx);
-
-				if (likely(!err)) {
-					mutex_init(&kctx->csf.lock);
-					INIT_WORK(&kctx->csf.pending_submission_work,
-						  pending_submission_worker);
-				} else
-					kbase_csf_kcpu_queue_context_term(kctx);
-			}
-
-			if (unlikely(err))
-				kbase_csf_scheduler_context_term(kctx);
-		}
-
-		if (unlikely(err))
-			destroy_workqueue(kctx->csf.wq);
+	err = kbase_create_realtime_thread(kctx->kbdev, kthread_worker_fn,
+					   &kctx->csf.pending_submission_worker, "mali_submit");
+	if (err) {
+		dev_err(kctx->kbdev->dev, "error initializing pending submission worker thread");
+		goto out_err_kthread;
 	}
 
+	err = kbase_csf_scheduler_context_init(kctx);
+	if (unlikely(err))
+		goto out_err_scheduler_context;
+
+	err = kbase_csf_kcpu_queue_context_init(kctx);
+	if (unlikely(err))
+		goto out_err_kcpu_queue_context;
+
+	err = kbase_csf_tiler_heap_context_init(kctx);
+	if (unlikely(err))
+		goto out_err_tiler_heap_context;
+
+	rt_mutex_init(&kctx->csf.lock);
+	kthread_init_work(&kctx->csf.pending_submission_work,
+			  pending_submission_worker);
+
+	return err;
+
+out_err_tiler_heap_context:
+	kbase_csf_kcpu_queue_context_term(kctx);
+out_err_kcpu_queue_context:
+	kbase_csf_scheduler_context_term(kctx);
+out_err_scheduler_context:
+	kbase_destroy_kworker_stack(&kctx->csf.pending_submission_worker);
+out_err_kthread:
+	destroy_workqueue(kctx->csf.wq);
+out:
 	return err;
 }
 
@@ -1797,7 +1834,7 @@ void kbase_csf_ctx_handle_fault(struct kbase_context *kctx,
 		}
 	};
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	for (gr = 0; gr < MAX_QUEUE_GROUP_NUM; gr++) {
 		struct kbase_queue_group *const group =
@@ -1810,7 +1847,7 @@ void kbase_csf_ctx_handle_fault(struct kbase_context *kctx,
 		}
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	if (reported)
 		kbase_event_wakeup_sync(kctx);
@@ -1843,9 +1880,9 @@ void kbase_csf_ctx_term(struct kbase_context *kctx)
 	else
 		reset_prevented = true;
 
-	cancel_work_sync(&kctx->csf.pending_submission_work);
+	kthread_cancel_work_sync(&kctx->csf.pending_submission_work);
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	/* Iterate through the queue groups that were not terminated by
 	 * userspace and issue the term request to firmware for them.
@@ -1858,7 +1895,7 @@ void kbase_csf_ctx_term(struct kbase_context *kctx)
 			term_queue_group(group);
 		}
 	}
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kbdev);
@@ -1885,7 +1922,7 @@ void kbase_csf_ctx_term(struct kbase_context *kctx)
 	if (as)
 		flush_workqueue(as->pf_wq);
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	for (i = 0; i < MAX_QUEUE_GROUP_NUM; i++) {
 		kfree(kctx->csf.queue_groups[i]);
@@ -1907,28 +1944,28 @@ void kbase_csf_ctx_term(struct kbase_context *kctx)
 		 * only one reference left that was taken when queue was
 		 * registered.
 		 */
-		if (atomic_read(&queue->refcount) != 1)
-			dev_warn(kctx->kbdev->dev,
-				 "Releasing queue with incorrect refcounting!\n");
+		WARN_ON(atomic_read(&queue->refcount) != 1);
 		list_del_init(&queue->link);
 		release_queue(queue);
 	}
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
+
+	kbase_destroy_kworker_stack(&kctx->csf.pending_submission_worker);
 
 	kbase_csf_tiler_heap_context_term(kctx);
 	kbase_csf_kcpu_queue_context_term(kctx);
 	kbase_csf_scheduler_context_term(kctx);
 	kbase_csf_event_term(kctx);
 
-	mutex_destroy(&kctx->csf.lock);
+	rt_mutex_destroy(&kctx->csf.lock);
 }
 
 /**
  * handle_oom_event - Handle the OoM event generated by the firmware for the
  *                    CSI.
  *
- * @kctx: Pointer to the kbase context in which the tiler heap was initialized.
+ * @group:  Pointer to the CSG group the oom-event belongs to.
  * @stream: Pointer to the structure containing info provided by the firmware
  *          about the CSI.
  *
@@ -1943,9 +1980,10 @@ void kbase_csf_ctx_term(struct kbase_context *kctx)
  * Return: 0 if successfully handled the request, otherwise a negative error
  *         code on failure.
  */
-static int handle_oom_event(struct kbase_context *const kctx,
-		struct kbase_csf_cmd_stream_info const *const stream)
+static int handle_oom_event(struct kbase_queue_group *const group,
+			    struct kbase_csf_cmd_stream_info const *const stream)
 {
+	struct kbase_context *const kctx = group->kctx;
 	u64 gpu_heap_va =
 		kbase_csf_firmware_cs_output(stream, CS_HEAP_ADDRESS_LO) |
 		((u64)kbase_csf_firmware_cs_output(stream, CS_HEAP_ADDRESS_HI) << 32);
@@ -1972,12 +2010,18 @@ static int handle_oom_event(struct kbase_context *const kctx,
 	err = kbase_csf_tiler_heap_alloc_new_chunk(kctx,
 		gpu_heap_va, renderpasses_in_flight, pending_frag_count, &new_chunk_ptr);
 
-	/* It is okay to acknowledge with a NULL chunk (firmware will then wait
-	 * for the fragment jobs to complete and release chunks)
-	 */
-	if (err == -EBUSY)
+	if ((group->csi_handlers & BASE_CSF_TILER_OOM_EXCEPTION_FLAG) &&
+	    (pending_frag_count == 0) && (err == -ENOMEM || err == -EBUSY)) {
+		/* The group allows incremental rendering, trigger it */
 		new_chunk_ptr = 0;
-	else if (err)
+		dev_dbg(kctx->kbdev->dev, "Group-%d (slot-%d) enter incremental render\n",
+			group->handle, group->csg_nr);
+	} else if (err == -EBUSY) {
+		/* Acknowledge with a NULL chunk (firmware will then wait for
+		 * the fragment jobs to complete and release chunks)
+		 */
+		new_chunk_ptr = 0;
+	} else if (err)
 		return err;
 
 	kbase_csf_firmware_cs_input(stream, CS_TILER_HEAP_START_LO,
@@ -2041,6 +2085,7 @@ static void kbase_queue_oom_event(struct kbase_queue *const queue)
 	struct kbase_csf_cmd_stream_info const *stream;
 	int csi_index = queue->csi_index;
 	u32 cs_oom_ack, cs_oom_req;
+	unsigned long flags;
 
 	lockdep_assert_held(&kctx->csf.lock);
 
@@ -2051,6 +2096,13 @@ static void kbase_queue_oom_event(struct kbase_queue *const queue)
 	}
 
 	kbase_csf_scheduler_lock(kbdev);
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	if (kbdev->csf.scheduler.sc_power_rails_off) {
+		dev_warn(kctx->kbdev->dev, "SC power rails off unexpectedly when handling OoM event");
+		goto unlock;
+	}
+#endif
 
 	slot_num = kbase_csf_scheduler_group_get_slot(group);
 
@@ -2084,10 +2136,13 @@ static void kbase_queue_oom_event(struct kbase_queue *const queue)
 	if (cs_oom_ack == cs_oom_req)
 		goto unlock;
 
-	err = handle_oom_event(kctx, stream);
+	err = handle_oom_event(group, stream);
 
+	kbase_csf_scheduler_spin_lock(kbdev, &flags);
 	kbase_csf_firmware_cs_input_mask(stream, CS_REQ, cs_oom_ack,
 					 CS_REQ_TILER_OOM_MASK);
+	kbase_csf_ring_cs_kernel_doorbell(kbdev, csi_index, slot_num, true);
+	kbase_csf_scheduler_spin_unlock(kbdev, flags);
 
 	if (err) {
 		dev_warn(
@@ -2098,8 +2153,6 @@ static void kbase_queue_oom_event(struct kbase_queue *const queue)
 		report_tiler_oom_error(group);
 		return;
 	}
-
-	kbase_csf_ring_cs_kernel_doorbell(kbdev, csi_index, slot_num, true);
 unlock:
 	kbase_csf_scheduler_unlock(kbdev);
 }
@@ -2127,12 +2180,12 @@ static void oom_event_worker(struct work_struct *data)
 	if (err)
 		return;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	kbase_queue_oom_event(queue);
 	release_queue(queue);
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	kbase_reset_gpu_allow(kbdev);
 }
 
@@ -2184,12 +2237,12 @@ static void timer_event_worker(struct work_struct *data)
 	else
 		reset_prevented = true;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	term_queue_group(group);
 	report_group_timeout_error(group);
 
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kctx->kbdev);
 }
@@ -2220,7 +2273,7 @@ static void protm_event_worker(struct work_struct *data)
 	struct kbase_queue_group *const group =
 		container_of(data, struct kbase_queue_group, protm_event_work);
 
-	KBASE_KTRACE_ADD_CSF_GRP(group->kctx->kbdev, PROTM_EVENT_WORKER_BEGIN,
+	KBASE_KTRACE_ADD_CSF_GRP(group->kctx->kbdev, PROTM_EVENT_WORKER_START,
 				 group, 0u);
 	kbase_csf_scheduler_group_protm_enter(group);
 	KBASE_KTRACE_ADD_CSF_GRP(group->kctx->kbdev, PROTM_EVENT_WORKER_END,
@@ -2294,7 +2347,7 @@ static void report_queue_fatal_error(struct kbase_queue *const queue,
 	};
 
 	kbase_csf_event_add_error(queue->kctx, &queue->error, &error);
-	kbase_event_wakeup(queue->kctx);
+	kbase_event_wakeup_sync(queue->kctx);
 }
 
 /**
@@ -2322,7 +2375,7 @@ static void fatal_event_worker(struct work_struct *const data)
 	else
 		reset_prevented = true;
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 
 	group = get_bound_queue_group(queue);
 	if (!group) {
@@ -2337,7 +2390,7 @@ static void fatal_event_worker(struct work_struct *const data)
 
 unlock:
 	release_queue(queue);
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 	if (reset_prevented)
 		kbase_reset_gpu_allow(kbdev);
 }
@@ -2387,6 +2440,11 @@ handle_fatal_event(struct kbase_queue *const queue,
 			CS_FATAL_EXCEPTION_TYPE_FIRMWARE_INTERNAL_ERROR) {
 		queue_work(system_wq, &kbdev->csf.fw_error_work);
 	} else {
+		if (cs_fatal_exception_type == CS_FATAL_EXCEPTION_TYPE_CS_UNRECOVERABLE) {
+			queue->group->cs_unrecoverable = true;
+			if (kbase_prepare_to_reset_gpu(queue->kctx->kbdev, RESET_FLAGS_NONE))
+				kbase_reset_gpu(queue->kctx->kbdev);
+		}
 		get_queue(queue);
 		queue->cs_fatal = cs_fatal;
 		queue->cs_fatal_info = cs_fatal_info;
@@ -2440,6 +2498,9 @@ static void handle_queue_exception_event(struct kbase_queue *const queue,
  * @ginfo:  The CSG interface provided by the firmware.
  * @irqreq: CSG's IRQ request bitmask (one bit per CS).
  * @irqack: CSG's IRQ acknowledge bitmask (one bit per CS).
+ * @track: Pointer that tracks the highest scanout priority idle CSG
+ *         and any newly potentially viable protected mode requesting
+ *          CSG in current IRQ context.
  *
  * If the interrupt request bitmask differs from the acknowledge bitmask
  * then the firmware is notifying the host of an event concerning those
@@ -2448,8 +2509,9 @@ static void handle_queue_exception_event(struct kbase_queue *const queue,
  * the request and acknowledge registers for the individual CS(s).
  */
 static void process_cs_interrupts(struct kbase_queue_group *const group,
-		      struct kbase_csf_cmd_stream_group_info const *const ginfo,
-		      u32 const irqreq, u32 const irqack)
+				  struct kbase_csf_cmd_stream_group_info const *const ginfo,
+				  u32 const irqreq, u32 const irqack,
+				  struct irq_idle_and_protm_track *track)
 {
 	struct kbase_device *const kbdev = group->kctx->kbdev;
 	u32 remaining = irqreq ^ irqack;
@@ -2481,7 +2543,8 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
 
 			if ((cs_req & CS_REQ_EXCEPTION_MASK) ^
 			    (cs_ack & CS_ACK_EXCEPTION_MASK)) {
-				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_FAULT_INTERRUPT, group, queue, cs_req ^ cs_ack);
+				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_INTERRUPT_FAULT,
+							 group, queue, cs_req ^ cs_ack);
 				handle_queue_exception_event(queue, cs_req, cs_ack);
 			}
 
@@ -2493,16 +2556,18 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
 				u32 const cs_req_remain = cs_req & ~CS_REQ_EXCEPTION_MASK;
 				u32 const cs_ack_remain = cs_ack & ~CS_ACK_EXCEPTION_MASK;
 
-				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_IGNORED_INTERRUPTS_GROUP_SUSPEND,
-							   group, queue, cs_req_remain ^ cs_ack_remain);
+				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev,
+							 CSI_INTERRUPT_GROUP_SUSPENDS_IGNORED,
+							 group, queue,
+							 cs_req_remain ^ cs_ack_remain);
 				continue;
 			}
 
 			if (((cs_req & CS_REQ_TILER_OOM_MASK) ^
 			     (cs_ack & CS_ACK_TILER_OOM_MASK))) {
 				get_queue(queue);
-				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_TILER_OOM_INTERRUPT, group, queue,
-							   cs_req ^ cs_ack);
+				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_INTERRUPT_TILER_OOM,
+							 group, queue, cs_req ^ cs_ack);
 				if (WARN_ON(!queue_work(wq, &queue->oom_event_work))) {
 					/* The work item shall not have been
 					 * already queued, there can be only
@@ -2515,8 +2580,8 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
 
 			if ((cs_req & CS_REQ_PROTM_PEND_MASK) ^
 			    (cs_ack & CS_ACK_PROTM_PEND_MASK)) {
-				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_PROTM_PEND_INTERRUPT, group, queue,
-							   cs_req ^ cs_ack);
+				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_INTERRUPT_PROTM_PEND,
+							 group, queue, cs_req ^ cs_ack);
 
 				dev_dbg(kbdev->dev,
 					"Protected mode entry request for queue on csi %d bound to group-%d on slot %d",
@@ -2524,7 +2589,7 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
 					group->csg_nr);
 
 				bitmap_set(group->protm_pending_bitmap, i, 1);
-				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, PROTM_PENDING_SET, group, queue,
+				KBASE_KTRACE_ADD_CSF_GRP_Q(kbdev, CSI_PROTM_PEND_SET, group, queue,
 							   group->protm_pending_bitmap[0]);
 				protm_pend = true;
 			}
@@ -2533,12 +2598,10 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
 
 	if (protm_pend) {
 		struct kbase_csf_scheduler *scheduler = &kbdev->csf.scheduler;
-		u32 current_protm_pending_seq =
-			scheduler->tick_protm_pending_seq;
 
-		if (current_protm_pending_seq > group->scan_seq_num) {
+		if (scheduler->tick_protm_pending_seq > group->scan_seq_num) {
 			scheduler->tick_protm_pending_seq = group->scan_seq_num;
-			queue_work(group->kctx->csf.wq, &group->protm_event_work);
+			track->protm_grp = group;
 		}
 
 		if (test_bit(group->csg_nr, scheduler->csg_slots_idle_mask)) {
@@ -2556,6 +2619,8 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
  *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  * @csg_nr: CSG number.
+ * @track: Pointer that tracks the highest idle CSG and the newly possible viable
+ *         protected mode requesting group, in current IRQ context.
  *
  * Handles interrupts for a CSG and for CSs within it.
  *
@@ -2566,8 +2631,8 @@ static void process_cs_interrupts(struct kbase_queue_group *const group,
  *
  * See process_cs_interrupts() for details of per-stream interrupt handling.
  */
-static void process_csg_interrupts(struct kbase_device *const kbdev,
-	int const csg_nr)
+static void process_csg_interrupts(struct kbase_device *const kbdev, int const csg_nr,
+				   struct irq_idle_and_protm_track *track)
 {
 	struct kbase_csf_cmd_stream_group_info *ginfo;
 	struct kbase_queue_group *group = NULL;
@@ -2578,7 +2643,7 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 	if (WARN_ON(csg_nr >= kbdev->csf.global_iface.group_num))
 		return;
 
-	KBASE_KTRACE_ADD(kbdev, CSG_INTERRUPT_PROCESS, NULL, csg_nr);
+	KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_INTERRUPT_PROCESS_START, group, csg_nr);
 
 	ginfo = &kbdev->csf.global_iface.groups[csg_nr];
 	req = kbase_csf_firmware_csg_input_read(ginfo, CSG_REQ);
@@ -2618,7 +2683,7 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 		kbase_csf_firmware_csg_input_mask(ginfo,
 			CSG_REQ, ack, CSG_REQ_SYNC_UPDATE_MASK);
 
-		KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_SYNC_UPDATE_INTERRUPT, group, req ^ ack);
+		KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_INTERRUPT_SYNC_UPDATE, group, req ^ ack);
 
 		/* SYNC_UPDATE events shall invalidate GPU idle event */
 		atomic_set(&kbdev->csf.scheduler.gpu_no_longer_idle, true);
@@ -2635,7 +2700,7 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 		set_bit(csg_nr, scheduler->csg_slots_idle_mask);
 		KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_SLOT_IDLE_SET, group,
 					 scheduler->csg_slots_idle_mask[0]);
-		KBASE_KTRACE_ADD_CSF_GRP(kbdev,  CSG_IDLE_INTERRUPT, group, req ^ ack);
+		KBASE_KTRACE_ADD_CSF_GRP(kbdev,  CSG_INTERRUPT_IDLE, group, req ^ ack);
 		dev_dbg(kbdev->dev, "Idle notification received for Group %u on slot %d\n",
 			 group->handle, csg_nr);
 
@@ -2643,21 +2708,12 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 			/* If there are non-idle CSGs waiting for a slot, fire
 			 * a tock for a replacement.
 			 */
-			mod_delayed_work(scheduler->wq, &scheduler->tock_work, 0);
-		} else {
-			u32 current_protm_pending_seq =
-				scheduler->tick_protm_pending_seq;
+			kbase_csf_scheduler_invoke_tock(kbdev);
+		}
 
-			if ((current_protm_pending_seq !=
-				KBASEP_TICK_PROTM_PEND_SCAN_SEQ_NR_INVALID) &&
-			    (group->scan_seq_num < current_protm_pending_seq)) {
-				/* If the protm enter was prevented due to groups
-				 * priority, then fire a tock for the scheduler
-				 * to re-examine the case.
-				 */
-				mod_delayed_work(scheduler->wq,
-						 &scheduler->tock_work, 0);
-			}
+		if (group->scan_seq_num < track->idle_seq) {
+			track->idle_seq = group->scan_seq_num;
+			track->idle_slot = csg_nr;
 		}
 	}
 
@@ -2665,7 +2721,7 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 		kbase_csf_firmware_csg_input_mask(ginfo, CSG_REQ, ack,
 			CSG_REQ_PROGRESS_TIMER_EVENT_MASK);
 
-		KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_PROGRESS_TIMER_INTERRUPT,
+		KBASE_KTRACE_ADD_CSF_GRP(kbdev, CSG_INTERRUPT_PROGRESS_TIMER_EVENT,
 					 group, req ^ ack);
 		dev_info(kbdev->dev,
 			"[%llu] Iterator PROGRESS_TIMER timeout notification received for group %u of ctx %d_%d on slot %d\n",
@@ -2675,7 +2731,7 @@ static void process_csg_interrupts(struct kbase_device *const kbdev,
 		handle_progress_timer_event(group);
 	}
 
-	process_cs_interrupts(group, ginfo, irqreq, irqack);
+	process_cs_interrupts(group, ginfo, irqreq, irqack, track);
 
 out:
 	/* group may still be NULL here */
@@ -2797,6 +2853,7 @@ static inline void check_protm_enter_req_complete(struct kbase_device *kbdev,
 	dev_dbg(kbdev->dev, "Protected mode entry interrupt received");
 
 	kbdev->protected_mode = true;
+	trace_mali_protected_mode(kbdev->protected_mode);
 	kbase_ipa_protection_mode_switch_event(kbdev);
 	kbase_ipa_control_protm_entered(kbdev);
 	kbase_hwcnt_backend_csf_protm_entered(&kbdev->hwcnt_gpu_iface);
@@ -2826,7 +2883,7 @@ static inline void process_protm_exit(struct kbase_device *kbdev, u32 glb_ack)
 					     GLB_REQ_PROTM_EXIT_MASK);
 
 	if (likely(scheduler->active_protm_grp)) {
-		KBASE_KTRACE_ADD_CSF_GRP(kbdev, SCHEDULER_EXIT_PROTM,
+		KBASE_KTRACE_ADD_CSF_GRP(kbdev, SCHEDULER_PROTM_EXIT,
 					 scheduler->active_protm_grp, 0u);
 		scheduler->active_protm_grp = NULL;
 	} else {
@@ -2835,29 +2892,117 @@ static inline void process_protm_exit(struct kbase_device *kbdev, u32 glb_ack)
 
 	if (!WARN_ON(!kbdev->protected_mode)) {
 		kbdev->protected_mode = false;
+		trace_mali_protected_mode(kbdev->protected_mode);
 		kbase_ipa_control_protm_exited(kbdev);
 		kbase_hwcnt_backend_csf_protm_exited(&kbdev->hwcnt_gpu_iface);
 	}
+}
+
+static inline void process_tracked_info_for_protm(struct kbase_device *kbdev,
+						  struct irq_idle_and_protm_track *track)
+{
+	struct kbase_csf_scheduler *scheduler = &kbdev->csf.scheduler;
+	struct kbase_queue_group *group = track->protm_grp;
+	u32 current_protm_pending_seq = scheduler->tick_protm_pending_seq;
+
+	kbase_csf_scheduler_spin_lock_assert_held(kbdev);
+
+	if (likely(current_protm_pending_seq == KBASEP_TICK_PROTM_PEND_SCAN_SEQ_NR_INVALID))
+		return;
+
+	/* Handle protm from the tracked information */
+	if (track->idle_seq < current_protm_pending_seq) {
+		/* If the protm enter was prevented due to groups priority, then fire a tock
+		 * for the scheduler to re-examine the case.
+		 */
+		dev_dbg(kbdev->dev, "Attempt pending protm from idle slot %d\n", track->idle_slot);
+		kbase_csf_scheduler_invoke_tock(kbdev);
+	} else if (group) {
+		u32 i, num_groups = kbdev->csf.global_iface.group_num;
+		struct kbase_queue_group *grp;
+		bool tock_triggered = false;
+
+		/* A new protm request, and track->idle_seq is not sufficient, check across
+		 * previously notified idle CSGs in the current tick/tock cycle.
+		 */
+		for_each_set_bit(i, scheduler->csg_slots_idle_mask, num_groups) {
+			if (i == track->idle_slot)
+				continue;
+			grp = kbase_csf_scheduler_get_group_on_slot(kbdev, i);
+			/* If not NULL then the group pointer cannot disappear as the
+			 * scheduler spinlock is held.
+			 */
+			if (grp == NULL)
+				continue;
+
+			if (grp->scan_seq_num < current_protm_pending_seq) {
+				tock_triggered = true;
+				dev_dbg(kbdev->dev,
+					"Attempt new protm from tick/tock idle slot %d\n", i);
+				kbase_csf_scheduler_invoke_tock(kbdev);
+				break;
+			}
+		}
+
+		if (!tock_triggered) {
+			dev_dbg(kbdev->dev, "Group-%d on slot-%d start protm work\n",
+				group->handle, group->csg_nr);
+			queue_work(group->kctx->csf.wq, &group->protm_event_work);
+		}
+	}
+}
+
+static void order_job_irq_clear_with_iface_mem_read(void)
+{
+	/* Ensure that write to the JOB_IRQ_CLEAR is ordered with regards to the
+	 * read from interface memory. The ordering is needed considering the way
+	 * FW & Kbase writes to the JOB_IRQ_RAWSTAT and JOB_IRQ_CLEAR registers
+	 * without any synchronization. Without the barrier there is no guarantee
+	 * about the ordering, the write to IRQ_CLEAR can take effect after the read
+	 * from interface memory and that could cause a problem for the scenario where
+	 * FW sends back to back notifications for the same CSG for events like
+	 * SYNC_UPDATE and IDLE, but Kbase gets a single IRQ and observes only the
+	 * first event. Similar thing can happen with glb events like CFG_ALLOC_EN
+	 * acknowledgment and GPU idle notification.
+	 *
+	 *       MCU                                    CPU
+	 *  ---------------                         ----------------
+	 *  Update interface memory                 Write to IRQ_CLEAR to clear current IRQ
+	 *  <barrier>                               <barrier>
+	 *  Write to IRQ_RAWSTAT to raise new IRQ   Read interface memory
+	 */
+#if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE
+	__iomb();
+#else
+	/* CPU and GPU would be in the same Outer shareable domain */
+	dmb(osh);
+#endif
 }
 
 void kbase_csf_interrupt(struct kbase_device *kbdev, u32 val)
 {
 	unsigned long flags;
 	u32 csg_interrupts = val & ~JOB_IRQ_GLOBAL_IF;
+	struct irq_idle_and_protm_track track = { .protm_grp = NULL, .idle_seq = U32_MAX };
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
-	KBASE_KTRACE_ADD(kbdev, CSF_INTERRUPT, NULL, val);
+	KBASE_KTRACE_ADD(kbdev, CSF_INTERRUPT_START, NULL, val);
 	kbase_reg_write(kbdev, JOB_CONTROL_REG(JOB_IRQ_CLEAR), val);
+	order_job_irq_clear_with_iface_mem_read();
 
 	if (csg_interrupts != 0) {
 		kbase_csf_scheduler_spin_lock(kbdev, &flags);
+		/* Looping through and track the highest idle and protm groups */
 		while (csg_interrupts != 0) {
 			int const csg_nr = ffs(csg_interrupts) - 1;
 
-			process_csg_interrupts(kbdev, csg_nr);
+			process_csg_interrupts(kbdev, csg_nr, &track);
 			csg_interrupts &= ~(1 << csg_nr);
 		}
+
+		/* Handle protm from the tracked information */
+		process_tracked_info_for_protm(kbdev, &track);
 		kbase_csf_scheduler_spin_unlock(kbdev, flags);
 	}
 
@@ -2877,7 +3022,7 @@ void kbase_csf_interrupt(struct kbase_device *kbdev, u32 val)
 					global_iface, GLB_REQ);
 			glb_ack = kbase_csf_firmware_global_output(
 					global_iface, GLB_ACK);
-			KBASE_KTRACE_ADD(kbdev, GLB_REQ_ACQ, NULL, glb_req ^ glb_ack);
+			KBASE_KTRACE_ADD(kbdev, CSF_INTERRUPT_GLB_REQ_ACK, NULL, glb_req ^ glb_ack);
 
 			check_protm_enter_req_complete(kbdev, glb_req, glb_ack);
 
@@ -2887,11 +3032,19 @@ void kbase_csf_interrupt(struct kbase_device *kbdev, u32 val)
 			/* Handle IDLE Hysteresis notification event */
 			if ((glb_req ^ glb_ack) & GLB_REQ_IDLE_EVENT_MASK) {
 				dev_dbg(kbdev->dev, "Idle-hysteresis event flagged");
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+				if (kbase_csf_scheduler_process_gpu_idle_event(kbdev)) {
+					kbase_csf_firmware_global_input_mask(
+						global_iface, GLB_REQ, glb_ack,
+						GLB_REQ_IDLE_EVENT_MASK);
+				}
+#else
 				kbase_csf_firmware_global_input_mask(
 						global_iface, GLB_REQ, glb_ack,
 						GLB_REQ_IDLE_EVENT_MASK);
 
 				kbase_csf_scheduler_process_gpu_idle_event(kbdev);
+#endif
 			}
 
 			process_prfcnt_interrupts(kbdev, glb_req, glb_ack);

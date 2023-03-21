@@ -70,6 +70,9 @@ struct audio_sz_type {
 	uint32_t mic_broken_degrade;
 	uint32_t ams_count;
 	uint32_t cs_count;
+	uint32_t cca_active;
+	uint32_t cca_enable;
+	uint32_t cca_cs;
 };
 
 struct audiometrics_priv_type {
@@ -166,60 +169,62 @@ static ssize_t speaker_impedance_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct audiometrics_priv_type *priv = NULL;
-	int counts = 0;
+	int i, length;
 	int scale = 100000;
 
 	if (IS_ERR_OR_NULL(dev))
-		return -EINVAL;
+		return -ENODEV;
 
 	priv = dev_get_drvdata(dev);
 
 	if (IS_ERR_OR_NULL(priv))
-		return -EINVAL;
+		return -ENODEV;
 
 	mutex_lock(&priv->lock);
 
-	counts = scnprintf(buf, PAGE_SIZE, "%d.%05d,%d.%05d",
-			priv->sz.speaker_impedance[0] / scale,
-			priv->sz.speaker_impedance[0] % scale,
-			priv->sz.speaker_impedance[1] / scale,
-			priv->sz.speaker_impedance[1] % scale);
+	length = 0;
+	for (i = 0; i < SPEAKER_MAX_COUNT; i++) {
+		if (priv->sz.speaker_impedance[i] < 0)
+			continue;
+
+		length += scnprintf(buf + length, PAGE_SIZE - length, "%.*s%d.%05d", i, ",",
+				priv->sz.speaker_impedance[i] / scale,
+				priv->sz.speaker_impedance[i] % scale);
+	}
 
 	mutex_unlock(&priv->lock);
-
-	dev_dbg(dev, "%s: %s\n", __func__, buf);
-
-	return counts;
+	return length;
 }
 
 static ssize_t speaker_temp_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct audiometrics_priv_type *priv = NULL;
-	int counts = 0;
+	int i, length;
 	int scale = 100000;
 
 	if (IS_ERR_OR_NULL(dev))
-		return -EINVAL;
+		return -ENODEV;
 
 	priv = dev_get_drvdata(dev);
 
 	if (IS_ERR_OR_NULL(priv))
-		return -EINVAL;
+		return -ENODEV;
 
 	mutex_lock(&priv->lock);
 
-	counts = scnprintf(buf, PAGE_SIZE, "%d.%05d,%d.%05d",
-			priv->sz.speaker_temp[0] / scale,
-			priv->sz.speaker_temp[0] % scale,
-			priv->sz.speaker_temp[1] / scale,
-			priv->sz.speaker_temp[1] % scale);
+	length = 0;
+	for (i = 0; i < SPEAKER_MAX_COUNT; i++) {
+		if (priv->sz.speaker_temp[i] < 0)
+			continue;
+
+		length += scnprintf(buf + length, PAGE_SIZE - length, "%.*s%d.%05d", i, ",",
+				priv->sz.speaker_temp[i] / scale,
+				priv->sz.speaker_temp[i] % scale);
+	}
 
 	mutex_unlock(&priv->lock);
-
-	dev_dbg(dev, "%s: %s\n", __func__, buf);
-
-	return counts;
+	return length;
 }
 
 
@@ -227,30 +232,31 @@ static ssize_t speaker_excursion_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct audiometrics_priv_type *priv = NULL;
-	int counts = 0;
+	int i, length;
 	int scale = 100000;
 
 	if (IS_ERR_OR_NULL(dev))
-		return -EINVAL;
+		return -ENODEV;
 
 	priv = dev_get_drvdata(dev);
 
 	if (IS_ERR_OR_NULL(priv))
-		return -EINVAL;
+		return -ENODEV;
 
 	mutex_lock(&priv->lock);
 
-	counts = scnprintf(buf, PAGE_SIZE, "%d.%05d,%d.%05d",
-			priv->sz.speaker_excursion[0] / scale,
-			priv->sz.speaker_excursion[0] % scale,
-			priv->sz.speaker_excursion[1] / scale,
-			priv->sz.speaker_excursion[1] % scale);
+	length = 0;
+	for (i = 0; i < SPEAKER_MAX_COUNT; i++) {
+		if (priv->sz.speaker_excursion[i] < 0)
+			continue;
+
+		length += scnprintf(buf + length, PAGE_SIZE - length, "%.*s%d.%05d", i, ",",
+				priv->sz.speaker_excursion[i] / scale,
+				priv->sz.speaker_excursion[i] % scale);
+	}
 
 	mutex_unlock(&priv->lock);
-
-	dev_dbg(dev, "%s: %s\n", __func__, buf);
-
-	return counts;
+	return length;
 
 }
 
@@ -259,27 +265,29 @@ static ssize_t speaker_heartbeat_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct audiometrics_priv_type *priv = NULL;
-	int counts = 0;
+	int i, length;
 
 	if (IS_ERR_OR_NULL(dev))
-		return -EINVAL;
+		return -ENODEV;
 
 	priv = dev_get_drvdata(dev);
 
 	if (IS_ERR_OR_NULL(priv))
-		return -EINVAL;
+		return -ENODEV;
 
 	mutex_lock(&priv->lock);
 
-	counts = scnprintf(buf, PAGE_SIZE, "%d,%d",
-			priv->sz.speaker_heartbeat[0],
-			priv->sz.speaker_heartbeat[1]);
+	length = 0;
+	for (i = 0; i < SPEAKER_MAX_COUNT; i++) {
+		if (priv->sz.speaker_heartbeat[i] < 0)
+			continue;
+
+		length += scnprintf(buf + length, PAGE_SIZE - length, "%.*s%d", i, ",",
+					priv->sz.speaker_heartbeat[i]);
+	}
 
 	mutex_unlock(&priv->lock);
-
-	dev_dbg(dev, "%s: %s\n", __func__, buf);
-
-	return counts;
+	return length;
 }
 
 static ssize_t codec_crashed_counter_show(struct device *dev,
@@ -395,6 +403,67 @@ static ssize_t ams_rate_read_once_show(struct device *dev,
 
 	priv->sz.ams_count = 0;
 	priv->sz.cs_count = 0;
+
+	mutex_unlock(&priv->lock);
+	return counts;
+}
+
+static ssize_t cca_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+
+	if (IS_ERR_OR_NULL(dev))
+		return -ENODEV;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+	counts = scnprintf(buf, PAGE_SIZE, "%u,%u,%u", priv->sz.cca_active,
+		priv->sz.cca_enable, priv->sz.cca_cs);
+	mutex_unlock(&priv->lock);
+
+	return counts;
+}
+
+static ssize_t cca_rate_read_once_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+	uint rate_active = 0, rate_enable = 0;
+	const int scale = 100;
+
+
+	if (IS_ERR_OR_NULL(dev))
+		return -ENODEV;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+
+	if (priv->sz.cca_cs) {
+		rate_active = (priv->sz.cca_active * scale / priv->sz.cca_cs);
+		rate_enable = (priv->sz.cca_enable * scale / priv->sz.cca_cs);
+	}
+
+	if (rate_active > scale) {
+		rate_active = scale;
+		rate_enable = scale;
+	}
+
+	counts = scnprintf(buf, PAGE_SIZE, "%u,%u", rate_active, rate_enable);
+
+	priv->sz.cca_active = 0;
+	priv->sz.cca_enable = 0;
+	priv->sz.cca_cs = 0;
 
 	mutex_unlock(&priv->lock);
 	return counts;
@@ -550,6 +619,36 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			ret = 0;
 		break;
 
+		case AMCS_OP_CCA:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_GET) {
+				params.val[1] =	priv->sz.cca_active;
+				params.val[2] =	priv->sz.cca_enable;
+				params.val[3] =	priv->sz.cca_cs;
+			} else if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.cca_active = params.val[1];
+				priv->sz.cca_enable = params.val[2];
+				priv->sz.cca_cs = params.val[3];
+			}
+			mutex_unlock(&priv->lock);
+
+			if (!copy_to_user((struct amcs_params *)arg, &params, _IOC_SIZE(cmd)))
+				ret = 0;
+			else
+				ret = -EINVAL;
+		break;
+
+		case AMCS_OP_CCA_INCREASE:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.cca_active += params.val[1];
+				priv->sz.cca_enable += params.val[2];
+				priv->sz.cca_cs += params.val[3];
+			}
+			mutex_unlock(&priv->lock);
+			ret = 0;
+		break;
+
 		default:
 			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
 			ret = -EINVAL;
@@ -611,6 +710,8 @@ static DEVICE_ATTR_RO(mic_broken_degrade);
 static DEVICE_ATTR_RO(codec_crashed_counter);
 static DEVICE_ATTR_RO(ams_cs);
 static DEVICE_ATTR_RO(ams_rate_read_once);
+static DEVICE_ATTR_RO(cca);
+static DEVICE_ATTR_RO(cca_rate_read_once);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -626,6 +727,8 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_codec_crashed_counter.attr,
 	&dev_attr_ams_cs.attr,
 	&dev_attr_ams_rate_read_once.attr,
+	&dev_attr_cca.attr,
+	&dev_attr_cca_rate_read_once.attr,
 	NULL,
 };
 
@@ -649,6 +752,27 @@ static void init_hwinfo_revision(struct audiometrics_priv_type *priv)
 	scnprintf(priv->sz.hwinfo_part_number, AUDIOMETRIC_CH_LENGTH, "%s", "AOC");
 	mutex_unlock(&priv->lock);
 }
+
+static void init_suez_speaker_default(struct audiometrics_priv_type *priv)
+{
+	int i;
+	mutex_lock(&priv->lock);
+	for (i = 0; i < SPEAKER_MAX_COUNT && i < 2; i++) {
+		priv->sz.speaker_impedance[i] = 0;
+		priv->sz.speaker_excursion[i] = 0;
+		priv->sz.speaker_temp[i] = 0;
+		priv->sz.speaker_heartbeat[i] = 0;
+	}
+
+	for (i = 2; i < SPEAKER_MAX_COUNT; i++) {
+		priv->sz.speaker_impedance[i] = -1;
+		priv->sz.speaker_excursion[i] = -1;
+		priv->sz.speaker_temp[i] = -1;
+		priv->sz.speaker_heartbeat[i] = -1;
+	}
+	mutex_unlock(&priv->lock);
+}
+
 
 static int amcs_init_cdev(struct audiometrics_priv_type *priv)
 {
@@ -745,6 +869,7 @@ static int audiometrics_platform_probe(struct platform_device *pdev)
 	}
 
 	init_hwinfo_revision(priv);
+	init_suez_speaker_default(priv);
 
 	dev_dbg(&pdev->dev, "%s registered\n", __func__);
 	return 0;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -23,11 +23,11 @@
 #include <mali_kbase.h>
 #include <linux/seq_file.h>
 #include <linux/delay.h>
-#include <csf/mali_kbase_csf_trace_buffer.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 #include "mali_kbase_csf_tl_reader.h"
+#include <linux/version_compat_defs.h>
 
 #define MAX_SCHED_STATE_STRING_LEN (16)
 static const char *scheduler_state_to_string(struct kbase_device *kbdev,
@@ -77,16 +77,32 @@ static const char *blocked_reason_to_string(u32 reason_id)
 	return cs_blocked_reason[reason_id];
 }
 
+static bool sb_source_supported(u32 glb_version)
+{
+	bool supported = false;
+
+	if (((GLB_VERSION_MAJOR_GET(glb_version) == 3) &&
+	     (GLB_VERSION_MINOR_GET(glb_version) >= 5)) ||
+	    ((GLB_VERSION_MAJOR_GET(glb_version) == 2) &&
+	     (GLB_VERSION_MINOR_GET(glb_version) >= 6)) ||
+	    ((GLB_VERSION_MAJOR_GET(glb_version) == 1) &&
+	     (GLB_VERSION_MINOR_GET(glb_version) >= 3)))
+		supported = true;
+
+	return supported;
+}
+
 static void kbasep_csf_scheduler_dump_active_queue_cs_status_wait(
-	struct seq_file *file, u32 wait_status, u32 wait_sync_value,
-	u64 wait_sync_live_value, u64 wait_sync_pointer, u32 sb_status,
-	u32 blocked_reason)
+	struct seq_file *file, u32 glb_version, u32 wait_status, u32 wait_sync_value,
+	u64 wait_sync_live_value, u64 wait_sync_pointer, u32 sb_status, u32 blocked_reason)
 {
 #define WAITING "Waiting"
 #define NOT_WAITING "Not waiting"
 
 	seq_printf(file, "SB_MASK: %d\n",
 			CS_STATUS_WAIT_SB_MASK_GET(wait_status));
+	if (sb_source_supported(glb_version))
+		seq_printf(file, "SB_SOURCE: %d\n", CS_STATUS_WAIT_SB_SOURCE_GET(wait_status));
 	seq_printf(file, "PROGRESS_WAIT: %s\n",
 			CS_STATUS_WAIT_PROGRESS_WAIT_GET(wait_status) ?
 			WAITING : NOT_WAITING);
@@ -156,9 +172,12 @@ static void kbasep_csf_scheduler_dump_active_queue(struct seq_file *file,
 	struct kbase_vmap_struct *mapping;
 	u64 *evt;
 	u64 wait_sync_live_value;
+	u32 glb_version;
 
 	if (!queue)
 		return;
+
+	glb_version = queue->kctx->kbdev->csf.global_iface.version;
 
 	if (WARN_ON(queue->csi_index == KBASEP_IF_NR_INVALID ||
 		    !queue->group))
@@ -200,9 +219,8 @@ static void kbasep_csf_scheduler_dump_active_queue(struct seq_file *file,
 			}
 
 			kbasep_csf_scheduler_dump_active_queue_cs_status_wait(
-				file, wait_status, wait_sync_value,
-				wait_sync_live_value, wait_sync_pointer,
-				sb_status, blocked_reason);
+				file, glb_version, wait_status, wait_sync_value,
+				wait_sync_live_value, wait_sync_pointer, sb_status, blocked_reason);
 		}
 	} else {
 		struct kbase_device const *const kbdev =
@@ -257,9 +275,8 @@ static void kbasep_csf_scheduler_dump_active_queue(struct seq_file *file,
 		}
 
 		kbasep_csf_scheduler_dump_active_queue_cs_status_wait(
-			file, wait_status, wait_sync_value,
-			wait_sync_live_value, wait_sync_pointer, sb_status,
-			blocked_reason);
+			file, glb_version, wait_status, wait_sync_value, wait_sync_live_value,
+			wait_sync_pointer, sb_status, blocked_reason);
 		/* Dealing with cs_trace */
 		if (kbase_csf_scheduler_queue_has_trace(queue))
 			kbasep_csf_scheduler_dump_active_cs_trace(file, stream);
@@ -299,8 +316,8 @@ static void update_active_group_status(struct seq_file *file,
 	kbase_csf_firmware_csg_input_mask(ginfo, CSG_REQ,
 			~kbase_csf_firmware_csg_output(ginfo, CSG_ACK),
 			CSG_REQ_STATUS_UPDATE_MASK);
-	kbase_csf_scheduler_spin_unlock(kbdev, flags);
 	kbase_csf_ring_csg_doorbell(kbdev, group->csg_nr);
+	kbase_csf_scheduler_spin_unlock(kbdev, flags);
 
 	remaining = wait_event_timeout(kbdev->csf.event_wait,
 		!((kbase_csf_firmware_csg_input_read(ginfo, CSG_REQ) ^
@@ -412,7 +429,7 @@ static int kbasep_csf_queue_group_debugfs_show(struct seq_file *file,
 	seq_printf(file, "MALI_CSF_CSG_DEBUGFS_VERSION: v%u\n",
 			MALI_CSF_CSG_DEBUGFS_VERSION);
 
-	mutex_lock(&kctx->csf.lock);
+	rt_mutex_lock(&kctx->csf.lock);
 	kbase_csf_scheduler_lock(kbdev);
 	if (kbdev->csf.scheduler.state == SCHED_SLEEPING) {
 		/* Wait for the MCU sleep request to complete. Please refer the
@@ -428,7 +445,7 @@ static int kbasep_csf_queue_group_debugfs_show(struct seq_file *file,
 			kbasep_csf_scheduler_dump_active_group(file, group);
 	}
 	kbase_csf_scheduler_unlock(kbdev);
-	mutex_unlock(&kctx->csf.lock);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return 0;
 }
@@ -500,11 +517,7 @@ static const struct file_operations kbasep_csf_queue_group_debugfs_fops = {
 void kbase_csf_queue_group_debugfs_init(struct kbase_context *kctx)
 {
 	struct dentry *file;
-#if (KERNEL_VERSION(4, 7, 0) <= LINUX_VERSION_CODE)
 	const mode_t mode = 0444;
-#else
-	const mode_t mode = 0400;
-#endif
 
 	if (WARN_ON(!kctx || IS_ERR_OR_NULL(kctx->kctx_dentry)))
 		return;
@@ -556,14 +569,11 @@ static int kbasep_csf_debugfs_scheduling_timer_kick_set(
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(kbasep_csf_debugfs_scheduling_timer_enabled_fops,
-		&kbasep_csf_debugfs_scheduling_timer_enabled_get,
-		&kbasep_csf_debugfs_scheduling_timer_enabled_set,
-		"%llu\n");
-DEFINE_SIMPLE_ATTRIBUTE(kbasep_csf_debugfs_scheduling_timer_kick_fops,
-		NULL,
-		&kbasep_csf_debugfs_scheduling_timer_kick_set,
-		"%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(kbasep_csf_debugfs_scheduling_timer_enabled_fops,
+			 &kbasep_csf_debugfs_scheduling_timer_enabled_get,
+			 &kbasep_csf_debugfs_scheduling_timer_enabled_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(kbasep_csf_debugfs_scheduling_timer_kick_fops, NULL,
+			 &kbasep_csf_debugfs_scheduling_timer_kick_set, "%llu\n");
 
 /**
  * kbase_csf_debugfs_scheduler_state_get() - Get the state of scheduler.
@@ -671,7 +681,6 @@ void kbase_csf_debugfs_init(struct kbase_device *kbdev)
 			&kbasep_csf_debugfs_scheduler_state_fops);
 
 	kbase_csf_tl_reader_debugfs_init(kbdev);
-	kbase_csf_firmware_trace_buffer_debugfs_init(kbdev);
 }
 
 #else

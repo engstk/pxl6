@@ -199,7 +199,7 @@ enum spi_modes {
 /* Size of RX LUT configuration tables */
 #define DW3000_CONFIGMRXLUT_MAX 7
 #define DW3000_DGC_CFG 0x38
-#define DW3000_DGC_CFG0 0x10000240
+#define DW3000_DGC_CFG0 0x00000240
 #define DW3000_DGC_CFG1 0x1a491248
 #define DW3000_DGC_CFG2 0x2db248db
 

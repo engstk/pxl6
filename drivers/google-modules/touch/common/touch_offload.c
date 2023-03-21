@@ -326,7 +326,7 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 			if (!(context->config.context_channel_types & mask))
 				continue;
 
-			frame->channel_type[chan] = mask;
+			frame->channel_type[chan] = (__u32)mask;
 			size = 0;
 			switch (mask) {
 			case CONTEXT_CHANNEL_TYPE_DRIVER_STATUS:
@@ -338,7 +338,7 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 				    TOUCH_OFFLOAD_FRAME_SIZE_STYLUS_STATUS;
 				break;
 			default:
-				pr_err("%s: Invalid channel_type = 0x%08X",
+				pr_err("%s: Invalid channel_type = 0x%08X\n",
 					__func__, mask);
 				goto invalid_context_channel;
 			}
@@ -350,7 +350,7 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 			chan_header =
 				(struct TouchOffloadChannelHeader *)
 					frame->channel_data[chan];
-			chan_header->channel_type = mask;
+			chan_header->channel_type = (__u32)mask;
 			chan_header->channel_size = size;
 			frame->channel_data_size[chan] = size;
 			frame->header.frame_size += size;
@@ -657,8 +657,6 @@ int touch_offload_init(struct touch_offload_context *context)
 {
 	int ret = 0;
 
-	pr_debug("%s\n", __func__);
-
 	/* Initialize ioctl interface */
 	context->file_in_use = false;
 	mutex_init(&context->file_lock);
@@ -675,40 +673,53 @@ int touch_offload_init(struct touch_offload_context *context)
 	init_completion(&context->reserve_returned);
 	complete_all(&context->reserve_returned);
 
-	if (!context->multiple_panels)
-		scnprintf(context->device_name, 32, "%s", DEVICE_NAME);
+	if (!strnlen(context->device_name, sizeof(context->device_name)))
+		scnprintf(context->device_name, sizeof(context->device_name), "%s", DEVICE_NAME);
+
+	pr_info("%s: %s.\n", __func__, context->device_name);
 
 	/* Initialize char device */
-	context->major_num = register_chrdev(0, context->device_name,
-					     &touch_offload_fops);
-	if (context->major_num < 0) {
+	cdev_init(&context->dev, &touch_offload_fops);
+
+	ret = alloc_chrdev_region(&context->dev_num, 0, 1, context->device_name);
+	if (ret < 0) {
 		pr_err("%s: register_chrdev failed with error = %u\n",
-		       __func__, context->major_num);
-		return context->major_num;
+		       __func__, ret);
+		return ret;
+	}
+
+	ret = cdev_add(&context->dev, context->dev_num, 1);
+	if (ret < 0) {
+		pr_err("%s: cdev_add failed with error = %u\n",
+		        __func__, ret);
+		goto err_cdev_add;
 	}
 
 	context->cls = class_create(THIS_MODULE, context->device_name);
 	if (IS_ERR(context->cls)) {
 		pr_err("%s: class_create failed with error = %ld.\n",
 		       __func__, PTR_ERR(context->cls));
-		unregister_chrdev(context->major_num, context->device_name);
-		return PTR_ERR(context->cls);
+		ret = PTR_ERR(context->cls);
+		goto err_class_create;
 	}
 
-	context->device = device_create(context->cls, NULL,
-					MKDEV(context->major_num, 0), NULL,
-					context->device_name);
+	context->device = device_create(context->cls, NULL, context->dev_num,
+		NULL, context->device_name);
 	if (IS_ERR(context->device)) {
 		pr_err("%s: device_create failed with error = %ld.\n",
 		       __func__, PTR_ERR(context->device));
-		class_destroy(context->cls);
-		unregister_chrdev(context->major_num, context->device_name);
-		return PTR_ERR(context->device);
+		ret = PTR_ERR(context->device);
+		goto err_device_create;
 	}
 
-	cdev_init(&context->dev, &touch_offload_fops);
-	cdev_add(&context->dev, MKDEV(context->major_num, 0), 1);
+	return ret;
 
+err_device_create:
+	class_destroy(context->cls);
+err_class_create:
+	cdev_del(&context->dev);
+err_cdev_add:
+	unregister_chrdev_region(context->dev_num, 1);
 	return ret;
 }
 EXPORT_SYMBOL(touch_offload_init);
@@ -719,11 +730,13 @@ int touch_offload_cleanup(struct touch_offload_context *context)
 
 	cdev_del(&context->dev);
 
-	device_destroy(context->cls, MKDEV(context->major_num, 0));
+	device_destroy(context->cls, context->dev_num);
 
 	class_destroy(context->cls);
 
-	unregister_chrdev(context->major_num, context->device_name);
+	cdev_del(&context->dev);
+
+	unregister_chrdev_region(context->dev_num, 1);
 
 	complete_all(&context->reserve_returned);
 

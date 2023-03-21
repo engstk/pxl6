@@ -303,6 +303,8 @@ static inline struct kbase_mem_phy_alloc *kbase_mem_phy_alloc_put(struct kbase_m
  * @jit_usage_id: The last just-in-time memory usage ID for this region.
  * @jit_bin_id:   The just-in-time memory bin this region came from.
  * @va_refcnt:    Number of users of this region. Protected by reg_lock.
+ * @no_user_free_refcnt:    Number of users that want to prevent the region from
+ *                          being freed by userspace.
  * @heap_info_gpu_addr: Pointer to an object in GPU memory defining an end of
  *                      an allocated region
  *                      The object can be one of:
@@ -387,6 +389,13 @@ struct kbase_va_region {
 
 #define KBASE_REG_PROTECTED         (1ul << 19)
 
+/* Region belongs to a shrinker.
+ *
+ * This can either mean that it is part of the JIT/Ephemeral or tiler heap
+ * shrinker paths. Should be removed only after making sure that there are
+ * no references remaining to it in these paths, as it may cause the physical
+ * backing of the region to disappear during use.
+ */
 #define KBASE_REG_DONT_NEED         (1ul << 20)
 
 /* Imported buffer is padded? */
@@ -416,10 +425,7 @@ struct kbase_va_region {
 #define KBASE_REG_RESERVED_BIT_23   (1ul << 23)
 #endif /* !MALI_USE_CSF */
 
-/* Whilst this flag is set the GPU allocation is not supposed to be freed by
- * user space. The flag will remain set for the lifetime of JIT allocations.
- */
-#define KBASE_REG_NO_USER_FREE      (1ul << 24)
+/* Bit 24 is currently unused and is available for use for a new flag */
 
 /* Memory has permanent kernel side mapping */
 #define KBASE_REG_PERMANENT_KERNEL_MAPPING (1ul << 25)
@@ -560,6 +566,7 @@ struct kbase_va_region {
 #endif /* MALI_JIT_PRESSURE_LIMIT_BASE */
 
 	int    va_refcnt;
+	int no_user_free_refcnt;
 };
 
 /**
@@ -602,6 +609,23 @@ static inline bool kbase_is_region_invalid_or_free(struct kbase_va_region *reg)
 	return (kbase_is_region_invalid(reg) ||	kbase_is_region_free(reg));
 }
 
+/**
+ * kbase_is_region_shrinkable - Check if a region is "shrinkable".
+ * A shrinkable regions is a region for which its backing pages (reg->gpu_alloc->pages)
+ * can be freed at any point, even though the kbase_va_region structure itself
+ * may have been refcounted.
+ * Regions that aren't on a shrinker, but could be shrunk at any point in future
+ * without warning are still considered "shrinkable" (e.g. Active JIT allocs)
+ *
+ * @reg: Pointer to region
+ *
+ * Return: true if the region is "shrinkable", false if not.
+ */
+static inline bool kbase_is_region_shrinkable(struct kbase_va_region *reg)
+{
+	return (reg->flags & KBASE_REG_DONT_NEED) || (reg->flags & KBASE_REG_ACTIVE_JIT_ALLOC);
+}
+
 void kbase_remove_va_region(struct kbase_device *kbdev,
 			    struct kbase_va_region *reg);
 static inline void kbase_region_refcnt_free(struct kbase_device *kbdev,
@@ -622,6 +646,7 @@ static inline struct kbase_va_region *kbase_va_region_alloc_get(
 	lockdep_assert_held(&kctx->reg_lock);
 
 	WARN_ON(!region->va_refcnt);
+	WARN_ON(region->va_refcnt == INT_MAX);
 
 	/* non-atomic as kctx->reg_lock is held */
 	dev_dbg(kctx->kbdev->dev, "va_refcnt %d before get %pK\n",
@@ -647,6 +672,69 @@ static inline struct kbase_va_region *kbase_va_region_alloc_put(
 		kbase_region_refcnt_free(kctx->kbdev, region);
 
 	return NULL;
+}
+
+/**
+ * kbase_va_region_is_no_user_free - Check if user free is forbidden for the region.
+ * A region that must not be freed by userspace indicates that it is owned by some other
+ * kbase subsystem, for example tiler heaps, JIT memory or CSF queues.
+ * Such regions must not be shrunk (i.e. have their backing pages freed), except by the
+ * current owner.
+ * Hence, callers cannot rely on this check alone to determine if a region might be shrunk
+ * by any part of kbase. Instead they should use kbase_is_region_shrinkable().
+ *
+ * @kctx: Pointer to kbase context.
+ * @region: Pointer to region.
+ *
+ * Return: true if userspace cannot free the region, false if userspace can free the region.
+ */
+static inline bool kbase_va_region_is_no_user_free(struct kbase_context *kctx,
+						   struct kbase_va_region *region)
+{
+	lockdep_assert_held(&kctx->reg_lock);
+	return region->no_user_free_refcnt > 0;
+}
+
+/**
+ * kbase_va_region_no_user_free_get - Increment "no user free" refcount for a region.
+ * Calling this function will prevent the region to be shrunk by parts of kbase that
+ * don't own the region (as long as the refcount stays above zero). Refer to
+ * kbase_va_region_is_no_user_free() for more information.
+ *
+ * @kctx: Pointer to kbase context.
+ * @region: Pointer to region (not shrinkable).
+ *
+ * Return: the pointer to the region passed as argument.
+ */
+static inline struct kbase_va_region *
+kbase_va_region_no_user_free_get(struct kbase_context *kctx, struct kbase_va_region *region)
+{
+	lockdep_assert_held(&kctx->reg_lock);
+
+	WARN_ON(kbase_is_region_shrinkable(region));
+	WARN_ON(region->no_user_free_refcnt == INT_MAX);
+
+	/* non-atomic as kctx->reg_lock is held */
+	region->no_user_free_refcnt++;
+
+	return region;
+}
+
+/**
+ * kbase_va_region_no_user_free_put - Decrement "no user free" refcount for a region.
+ *
+ * @kctx: Pointer to kbase context.
+ * @region: Pointer to region (not shrinkable).
+ */
+static inline void kbase_va_region_no_user_free_put(struct kbase_context *kctx,
+						    struct kbase_va_region *region)
+{
+	lockdep_assert_held(&kctx->reg_lock);
+
+	WARN_ON(!kbase_va_region_is_no_user_free(kctx, region));
+
+	/* non-atomic as kctx->reg_lock is held */
+	region->no_user_free_refcnt--;
 }
 
 /* Common functions */
@@ -1735,8 +1823,8 @@ void kbase_jit_report_update_pressure(struct kbase_context *kctx,
 		unsigned int flags);
 
 /**
- * jit_trim_necessary_pages() - calculate and trim the least pages possible to
- * satisfy a new JIT allocation
+ * kbase_jit_trim_necessary_pages() - calculate and trim the least pages
+ * possible to satisfy a new JIT allocation
  *
  * @kctx: Pointer to the kbase context
  * @needed_pages: Number of JIT physical pages by which trimming is requested.
@@ -1983,7 +2071,7 @@ static inline void kbase_mem_pool_lock(struct kbase_mem_pool *pool)
 }
 
 /**
- * kbase_mem_pool_lock - Release a memory pool
+ * kbase_mem_pool_unlock - Release a memory pool
  * @pool: Memory pool to lock
  */
 static inline void kbase_mem_pool_unlock(struct kbase_mem_pool *pool)

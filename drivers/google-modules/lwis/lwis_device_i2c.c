@@ -40,6 +40,8 @@
 #define I2C_ON_STRING "on_i2c"
 #define I2C_OFF_STRING "off_i2c"
 
+static struct mutex group_i2c_lock[MAX_I2C_LOCK_NUM];
+
 static int lwis_i2c_device_enable(struct lwis_device *lwis_dev);
 static int lwis_i2c_device_disable(struct lwis_device *lwis_dev);
 static int lwis_i2c_register_io(struct lwis_device *lwis_dev, struct lwis_io_entry *entry,
@@ -174,6 +176,9 @@ static int lwis_i2c_device_setup(struct lwis_i2c_device *i2c_dev)
 	return -ENOSYS;
 #endif
 
+	/* Initialize device i2c lock */
+	i2c_dev->group_i2c_lock = &group_i2c_lock[i2c_dev->i2c_lock_group_id];
+
 	info.addr = i2c_dev->address;
 
 	i2c_dev->client = i2c_new_client_device(i2c_dev->adapter, &info);
@@ -261,8 +266,7 @@ static int lwis_i2c_device_probe(struct platform_device *plat_dev)
 	}
 
 	/* Create associated kworker threads */
-	ret = lwis_create_kthread_workers(&i2c_dev->base_dev, "lwis_i2c_trans_kthread",
-					 "lwis_i2c_prd_io_kthread");
+	ret = lwis_create_kthread_workers(&i2c_dev->base_dev);
 	if (ret) {
 		dev_err(i2c_dev->base_dev.dev,"Failed to create lwis_i2c_kthread");
 		lwis_base_unprobe(&i2c_dev->base_dev);
@@ -413,12 +417,17 @@ static struct platform_driver lwis_driver = { .probe = lwis_i2c_device_probe,
 int __init lwis_i2c_device_init(void)
 {
 	int ret = 0;
+	int i;
 
 	pr_info("I2C device initialization\n");
 
 	ret = platform_driver_register(&lwis_driver);
 	if (ret) {
 		pr_err("platform_driver_register failed: %d\n", ret);
+	}
+
+	for (i = 0; i < MAX_I2C_LOCK_NUM; ++i) {
+		mutex_init(&group_i2c_lock[i]);
 	}
 
 	return ret;

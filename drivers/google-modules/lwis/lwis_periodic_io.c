@@ -15,7 +15,6 @@
 #include <linux/completion.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
-#include <linux/workqueue.h>
 
 #include "lwis_allocator.h"
 #include "lwis_event.h"
@@ -183,7 +182,6 @@ static int process_io_entries(struct lwis_client *client,
 						   /*use_write_barrier=*/true);
 	}
 
-	mutex_lock(&lwis_dev->reg_rw_lock);
 	reinit_completion(&periodic_io->io_done);
 	for (i = 0; i < info->num_io_entries; ++i) {
 		/* Abort if periodic io is deactivated during processing.
@@ -257,7 +255,6 @@ static int process_io_entries(struct lwis_client *client,
 
 event_push:
 	complete(&periodic_io->io_done);
-	mutex_unlock(&lwis_dev->reg_rw_lock);
 	/* Use read memory barrier at the beginning of I/O entries if the access protocol
 	 * allows it */
 	if (lwis_dev->vops.register_io_barrier != NULL) {

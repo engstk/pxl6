@@ -15,6 +15,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/debugfs.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/module.h>
@@ -32,6 +33,7 @@
 
 #define DOCK_USER_VOTER			"DOCK_USER_VOTER"
 #define DOCK_AICL_VOTER			"DOCK_AICL_VOTER"
+#define DOCK_VOUT_VOTER			"DOCK_VOUT_VOTER"
 
 #define DOCK_DELAY_INIT_MS		500
 #define DOCK_NOTIFIER_DELAY_MS		100
@@ -58,6 +60,7 @@ struct dock_drv {
 	struct alarm icl_ramp_alarm;
 	struct notifier_block nb;
 	struct gvotable_election *dc_icl_votable;
+	struct gvotable_election *chg_mode_votable;
 
 	bool init_complete;
 	bool check_dc;
@@ -71,10 +74,38 @@ struct dock_drv {
 	struct wakeup_source *detect_ws;
 };
 
+/* ------------------------------------------------------------------------- */
+
+static bool google_dock_find_mode_votable(struct dock_drv *dock)
+{
+	if (!dock->chg_mode_votable) {
+		dock->chg_mode_votable = gvotable_election_get_handle(GBMS_MODE_VOTABLE);
+		if (!dock->chg_mode_votable) {
+			dev_err(dock->device, "Could not get CHARGER_MODE votable\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static int google_dock_set_pogo_vout(struct dock_drv *dock,
+				     int enabled)
+{
+	if (!google_dock_find_mode_votable(dock))
+		return -EINVAL;
+
+	dev_dbg(dock->device, "pogo_vout_enabled=%d\n", enabled);
+
+	return gvotable_cast_long_vote(dock->chg_mode_votable,
+				       DOCK_VOUT_VOTER,
+				       GBMS_POGO_VOUT,
+				       enabled != 0);
+}
 
 /* ------------------------------------------------------------------------- */
 static ssize_t is_dock_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+			    struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct dock_drv *dock = power_supply_get_drvdata(psy);
@@ -87,6 +118,24 @@ static ssize_t is_dock_show(struct device *dev,
 
 static DEVICE_ATTR_RO(is_dock);
 
+static int debug_pogo_vout_write(void *data, u64 val)
+{
+	struct dock_drv *dock = (struct dock_drv *)data;
+	int ret;
+
+	if (val < 0 || val > 1)
+		return -EINVAL;
+
+	ret = google_dock_set_pogo_vout(dock, val);
+	if (ret)
+		dev_err(dock->device, "Failed to set pogo vout: %d\n", ret);
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(debug_pogo_vout_fops, NULL,
+			debug_pogo_vout_write, "%llu\n");
+
 static int dock_init_fs(struct dock_drv *dock)
 {
 	int ret;
@@ -97,6 +146,21 @@ static int dock_init_fs(struct dock_drv *dock)
 		dev_err(&dock->psy->dev, "Failed to create is_dock\n");
 
 	return ret;
+}
+
+static int dock_init_debugfs(struct dock_drv *dock)
+{
+	struct dentry *de = NULL;
+
+	de = debugfs_create_dir("google_dock", 0);
+	if (IS_ERR_OR_NULL(de))
+		return 0;
+
+	/* pogo_vout */
+	debugfs_create_file("pogo_vout", 0600, de, dock,
+			    &debug_pogo_vout_fops);
+
+	return 0;
 }
 /* ------------------------------------------------------------------------- */
 
@@ -284,7 +348,7 @@ out:
 }
 
 static int google_dock_parse_dt(struct device *dev,
-			  struct dock_drv *dock)
+				struct dock_drv *dock)
 {
 	int ret = 0;
 	struct device_node *node = dev->of_node;
@@ -454,6 +518,7 @@ static void google_dock_init_work(struct work_struct *work)
 	}
 
 	(void)dock_init_fs(dock);
+	(void)dock_init_debugfs(dock);
 
 	dock->init_complete = true;
 	dev_info(dock->device, "google_dock_init_work done\n");

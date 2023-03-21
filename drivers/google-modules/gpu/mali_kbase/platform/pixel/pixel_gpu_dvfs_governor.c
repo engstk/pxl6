@@ -96,15 +96,16 @@ static int gpu_dvfs_governor_quickstep(struct kbase_device *kbdev,
 	int level_max = pc->dvfs.level_max;
 	int level_min = pc->dvfs.level_min;
 	int util = util_stats->util;
+	int step_up = pc->dvfs.step_up_val;
 
 	lockdep_assert_held(&pc->dvfs.lock);
 
 	if ((level > level_max) && (util > tbl[level].util_max)) {
 		/* We need to clock up. */
-		if (level >= 2 && (util > (100 + tbl[level].util_max) / 2)) {
-			dev_dbg(kbdev->dev, "DVFS +2: %d -> %d (u: %d / %d)\n",
-				level, level - 2, util, tbl[level].util_max);
-			level -= 2;
+		if (level >= step_up && (util > (100 + tbl[level].util_max) / 2)) {
+			dev_dbg(kbdev->dev, "DVFS +%d: %d -> %d (u: %d / %d)\n",
+				step_up, level, level - step_up, util, tbl[level].util_max);
+			level -= step_up;
 			pc->dvfs.governor.delay = tbl[level].hysteresis / 2;
 		} else {
 			dev_dbg(kbdev->dev, "DVFS +1: %d -> %d (u: %d / %d)\n",

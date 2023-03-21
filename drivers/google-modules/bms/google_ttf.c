@@ -374,6 +374,8 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 		ratio = ttf_elap(&elap, stats, ce_data, qnum_toint(soc));
 		if (ratio >= 0)
 			estimate += (elap * (100 - frac)) / 100;
+		if (ratio > max_ratio)
+			max_ratio = ratio;
 
 		i += 1;
 	}
@@ -402,6 +404,8 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 		ratio = ttf_elap(&elap, stats, ce_data, qnum_toint(last));
 		if (ratio >= 0)
 			estimate += (elap * frac) / 100;
+		if (ratio > max_ratio)
+			max_ratio = ratio;
 	}
 
 	*res = estimate / 100;

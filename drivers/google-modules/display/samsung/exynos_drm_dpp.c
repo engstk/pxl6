@@ -383,6 +383,9 @@ static void dpp_convert_plane_state_to_config(struct dpp_params_info *config,
 		config->comp_type = COMP_TYPE_NONE;
 	}
 
+	config->is_lossy = has_all_bits(DRM_FORMAT_MOD_SAMSUNG_SBWC(0) |
+			SBWC_FORMAT_MOD_LOSSY, fb->modifier) ? true : false;
+
 	config->format = fb->format->format;
 	config->standard = state->standard;
 	config->transfer = state->transfer;
@@ -1142,7 +1145,11 @@ static irqreturn_t dma_irq_handler(int irq, void *priv)
 	if (dump && time_after(jiffies, last_dumptime + msecs_to_jiffies(5000))) {
 		struct decon_device *decon = get_decon_drvdata(dpp->decon_id);
 		if (decon) {
-			decon_dump_all(decon, DPU_EVT_CONDITION_IDMA_ERROR, true);
+			if (decon_dump_ignore(DPU_EVT_CONDITION_IDMA_ERROR))
+				decon_dump_event_condition(decon,
+					DPU_EVT_CONDITION_IDMA_ERROR_COMPACT);
+			else
+				decon_dump_all(decon, DPU_EVT_CONDITION_IDMA_ERROR, true);
 			last_dumptime = jiffies;
 		}
 	}

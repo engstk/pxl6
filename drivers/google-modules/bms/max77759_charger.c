@@ -588,6 +588,20 @@ static int max77759_foreach_callback(void *data, const char *reason,
 		pr_debug("%s: WLC_TX vote=%x\n", __func__, mode);
 		cb_data->wlc_tx += 1;
 		break;
+	/* pogo vin */
+	case GBMS_POGO_VIN:
+		if (!cb_data->pogo_vin)
+			cb_data->reason = reason;
+		pr_debug("%s: POGO VIN vote=%x\n", __func__, mode);
+		cb_data->pogo_vin += 1;
+		break;
+	/* pogo vout */
+	case GBMS_POGO_VOUT:
+		if (!cb_data->pogo_vout)
+			cb_data->reason = reason;
+		pr_debug("%s: POGO VOUT vote=%x\n", __func__, mode);
+		cb_data->pogo_vout += 1;
+		break;
 
 	default:
 		pr_err("mode=%x not supported\n", mode);
@@ -637,7 +651,10 @@ static int max77759_get_otg_usecase(struct max77759_foreach_cb_data *cb_data)
 	}
 
 	/* pure OTG defaults to ext boost */
-	if (!cb_data->wlc_rx && !cb_data->wlc_tx) {
+	if (cb_data->pogo_vout) {
+		usecase = GSU_MODE_USB_OTG_POGO_VOUT;
+		mode = MAX77759_CHGR_MODE_OTG_BOOST_ON;
+	} else if (!cb_data->wlc_rx && !cb_data->wlc_tx) {
 		/* 5-1: USB_OTG or  5-2: USB_OTG_FRS */
 
 		if (cb_data->frs_on) {
@@ -694,12 +711,6 @@ static int max77759_get_usecase(struct max77759_foreach_cb_data *cb_data,
 			return -EINVAL;
 		}
 
-		if (dc_on) {
-			pr_warn("%s: no wlc_tx with dc_on for now\n", __func__);
-			/* TODO: GSU_MODE_USB_DC_WLC_TX */
-			wlc_tx = 0;
-		}
-
 		if (uc_data->ext_otg_only && cb_data->otg_on) {
 			pr_warn("%s: no wlc_tx with otg_on for now\n", __func__);
 			wlc_tx = 0;
@@ -724,6 +735,19 @@ static int max77759_get_usecase(struct max77759_foreach_cb_data *cb_data,
 		/* USB+WLC for factory and testing */
 		usecase = GSU_MODE_USB_WLC_RX;
 		mode = MAX77759_CHGR_MODE_CHGR_BUCK_ON;
+	} else if (cb_data->pogo_vout) {
+
+		if (!buck_on) {
+			mode = MAX77759_CHGR_MODE_ALL_OFF;
+			usecase = GSU_MODE_POGO_VOUT;
+		} else if (chgr_on) {
+			mode = MAX77759_CHGR_MODE_CHGR_BUCK_ON;
+			usecase = GSU_MODE_USB_CHG_POGO_VOUT;
+		} else {
+			mode = MAX77759_CHGR_MODE_BUCK_ON;
+			usecase = GSU_MODE_USB_CHG_POGO_VOUT;
+		}
+
 	} else if (!buck_on && !wlc_rx) {
 		mode = MAX77759_CHGR_MODE_ALL_OFF;
 
@@ -736,14 +760,10 @@ static int max77759_get_usecase(struct max77759_foreach_cb_data *cb_data,
 		dc_on = false;
 	} else if (wlc_tx) {
 
+		/* Disable DC when Rtx is on will handle by dc_avail_votable */
 		if (!buck_on) {
 			mode = MAX77759_CHGR_MODE_ALL_OFF;
 			usecase = GSU_MODE_WLC_TX;
-		} else if (dc_on) {
-			/* TODO: turn off DC and run off MW */
-			pr_err("WLC_TX+DC is not supported yet\n");
-			mode = MAX77759_CHGR_MODE_ALL_OFF;
-			usecase = GSU_MODE_USB_DC;
 		} else if (chgr_on) {
 			mode = MAX77759_CHGR_MODE_CHGR_BUCK_ON;
 			usecase = GSU_MODE_USB_CHG_WLC_TX;
@@ -801,6 +821,12 @@ static int max77759_get_usecase(struct max77759_foreach_cb_data *cb_data,
 
 	}
 
+	if (!cb_data->dc_avail_votable)
+		cb_data->dc_avail_votable = gvotable_election_get_handle(VOTABLE_DC_CHG_AVAIL);
+	if (cb_data->dc_avail_votable)
+		gvotable_cast_int_vote(cb_data->dc_avail_votable,
+				       "WLC_TX", wlc_tx? 0 : 1, wlc_tx);
+
 	/* reg might be ignored later */
 	cb_data->reg = _chg_cnfg_00_cp_en_set(cb_data->reg, dc_on);
 	cb_data->reg = _chg_cnfg_00_mode_set(cb_data->reg, mode);
@@ -808,7 +834,23 @@ static int max77759_get_usecase(struct max77759_foreach_cb_data *cb_data,
 	return usecase;
 }
 
-static int max77759_wcin_is_valid(struct max77759_chgr_data *data);
+static void max77759_set_pogo_ovp_en(struct max77759_usecase_data *uc_data,
+				     const int enabled)
+{
+	const int gpio_en = gpio_get_value_cansleep(uc_data->pogo_ovp_en);
+	const bool pogo_ovp_en = uc_data->pogo_ovp_en_act_low ?
+				 (gpio_en == 0) : (gpio_en == 1);
+
+	/* return if pogo_ovp_en has been set */
+	if ((enabled && pogo_ovp_en) || (!enabled && !pogo_ovp_en))
+		return;
+
+	/* turn on/off pogo_ovp_en */
+	gpio_set_value_cansleep(uc_data->pogo_ovp_en, enabled ?
+				!uc_data->pogo_ovp_en_act_low :
+				uc_data->pogo_ovp_en_act_low);
+}
+
 /*
  * adjust *INSEL (only one source can be enabled at a given time)
  * NOTE: providing compatibility with input_suspend makes this more complex
@@ -834,6 +876,7 @@ static int max77759_set_insel(struct max77759_chgr_data *data,
 		 * input_suspend masks both inputs but must still allow
 		 * TODO: use a separate use case for usb + wlc
 		 */
+		 force_wlc = true;
 	} else if (cb_data->buck_on && !cb_data->chgin_off) {
 		insel_value |= MAX77759_CHG_CNFG_12_CHGINSEL;
 	} else if (cb_data->wlc_rx && !cb_data->wlcin_off) {
@@ -859,15 +902,15 @@ static int max77759_set_insel(struct max77759_chgr_data *data,
 		force_wlc = true;
 	}
 
-	/* always disable USB when Dock is present */
-	if (uc_data->dcin_is_dock && max77759_wcin_is_valid(data) && !cb_data->wlcin_off) {
-		insel_value &= ~MAX77759_CHG_CNFG_12_CHGINSEL;
-		/* b/232723240: charge over USB-C
-		 *              set to 1 for POGO_OVP_EN
-		 *              set to 0 for POGO_OVP_EN_L
-		 */
+	if (cb_data->pogo_vout) {
+		/* always disable WCIN when pogo power out */
+		insel_value &= ~MAX77759_CHG_CNFG_12_WCINSEL;
+		/* turn off pogo_ovp */
 		if (uc_data->pogo_ovp_en > 0)
-			gpio_set_value_cansleep(uc_data->pogo_ovp_en, !uc_data->pogo_ovp_en_act_low);
+			gpio_set_value_cansleep(uc_data->pogo_ovp_en, uc_data->pogo_ovp_en_act_low);
+	} else if (cb_data->pogo_vin && !cb_data->wlcin_off) {
+		/* always disable USB when Dock is present */
+		insel_value &= ~MAX77759_CHG_CNFG_12_CHGINSEL;
 		insel_value |= MAX77759_CHG_CNFG_12_WCINSEL;
 	}
 
@@ -889,6 +932,9 @@ static int max77759_set_insel(struct max77759_chgr_data *data,
 
 	/* changing [CHGIN|WCIN]_INSEL: works when protection is disabled  */
 	ret = max77759_chg_insel_write(uc_data->client, insel_mask, insel_value);
+
+	if (uc_data->pogo_ovp_en > 0)
+		max77759_set_pogo_ovp_en(uc_data, cb_data->pogo_vin);
 
 	pr_debug("%s: usecase=%d->%d mask=%x insel=%x wlc_on=%d force_wlc=%d (%d)\n",
 		 __func__, from_uc, use_case, insel_mask, insel_value, wlc_on,
@@ -1029,7 +1075,7 @@ static int max77759_mode_callback(struct gvotable_election *el,
 	       !cb_data.chgr_on && !cb_data.buck_on && ! cb_data.boost_on &&
 	       !cb_data.otg_on && !cb_data.uno_on && !cb_data.wlc_tx &&
 	       !cb_data.wlc_rx && !cb_data.wlcin_off && !cb_data.chgin_off &&
-	       !cb_data.usb_wlc;
+	       !cb_data.usb_wlc && !cb_data.pogo_vout && !cb_data.pogo_vin;
 	if (nope) {
 		pr_debug("%s: nope callback\n", __func__);
 		goto unlock_done;
@@ -1037,12 +1083,13 @@ static int max77759_mode_callback(struct gvotable_election *el,
 
 	dev_info(data->dev, "%s:%s full=%d raw=%d stby_on=%d, dc_on=%d, chgr_on=%d, buck_on=%d,"
 		" boost_on=%d, otg_on=%d, uno_on=%d wlc_tx=%d wlc_rx=%d usb_wlc=%d"
-		" chgin_off=%d wlcin_off=%d frs_on=%d\n",
+		" chgin_off=%d wlcin_off=%d frs_on=%d pogo_vout=%d pogo_vin=%d\n",
 		__func__, trigger ? trigger : "<>",
 		data->charge_done, cb_data.use_raw, cb_data.stby_on, cb_data.dc_on,
 		cb_data.chgr_on, cb_data.buck_on, cb_data.boost_on, cb_data.otg_on,
 		cb_data.uno_on, cb_data.wlc_tx, cb_data.wlc_rx, cb_data.usb_wlc,
-		cb_data.chgin_off, cb_data.wlcin_off, cb_data.frs_on);
+		cb_data.chgin_off, cb_data.wlcin_off, cb_data.frs_on, cb_data.pogo_vout,
+		cb_data.pogo_vin);
 
 	/* just use raw "as is", no changes to switches etc */
 	if (cb_data.use_raw) {

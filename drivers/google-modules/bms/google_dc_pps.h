@@ -106,7 +106,7 @@ struct tcpm_port *chg_get_tcpm_port(struct power_supply *tcpm_psy);
 
 struct dentry;
 int pps_init(struct pd_pps_data *pps_data, struct device *dev,
-	     struct power_supply *pps_psy);
+	     struct power_supply *pps_psy, const char *pps_ws_name);
 int pps_init_fs(struct pd_pps_data *pps_data, struct dentry *de);
 /* reset state and leave in DISABLED  */
 void pps_init_state(struct pd_pps_data *pps_data);

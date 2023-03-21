@@ -380,6 +380,9 @@ int heatmap_probe(struct v4l2_heatmap *v4l2)
 	return 0;
 
 err_video_device_release:
+	mutex_lock(&v4l2->lock);
+	vb2_queue_release(&v4l2->queue);
+	mutex_unlock(&v4l2->lock);
 	video_device_release(&v4l2->vdev);
 
 err_unreg_v4l2:
@@ -395,6 +398,11 @@ void heatmap_remove(struct v4l2_heatmap *v4l2)
 {
 	if (v4l2->frame) {
 		video_unregister_device(&v4l2->vdev);
+
+		mutex_lock(&v4l2->lock);
+		vb2_queue_release(&v4l2->queue);
+		mutex_unlock(&v4l2->lock);
+
 		v4l2_device_unregister(&v4l2->device);
 		devm_kfree(v4l2->parent_dev, v4l2->frame);
 		v4l2->frame = NULL;

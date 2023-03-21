@@ -296,6 +296,11 @@ int exynos_drm_connector_create_properties(struct drm_device *dev)
 	if (IS_ERR(p->panel_idle_support))
 		return PTR_ERR(p->panel_idle_support);
 
+	p->vrr_switch_duration = drm_property_create_range(dev, DRM_MODE_PROP_IMMUTABLE,
+						"vrr_switch_duration", 0, UINT_MAX);
+	if (IS_ERR(p->vrr_switch_duration))
+		return PTR_ERR(p->vrr_switch_duration);
+
 	ret = exynos_drm_connector_create_luminance_properties(dev);
 	if (ret)
 		return ret;

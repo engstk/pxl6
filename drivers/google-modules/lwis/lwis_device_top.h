@@ -28,9 +28,9 @@ struct lwis_top_device {
 	/* Hash table of event subscribers keyed by trigger event id */
 	DECLARE_HASHTABLE(event_subscribers, EVENT_HASH_BITS);
 
-	/* Subscription tasklet */
-	struct tasklet_struct subscribe_tasklet;
-	struct list_head emitted_event_list_tasklet;
+	/* Subscription work */
+	struct kthread_work subscribe_work;
+	struct list_head emitted_event_list_work;
 };
 
 int lwis_top_device_deinit(void);

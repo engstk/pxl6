@@ -25,6 +25,7 @@
 #include "mali_kbase_config_platform.h"
 #include "pixel_gpu_control.h"
 #include "pixel_gpu_dvfs.h"
+#include "mali_power_gpu_frequency_trace.h"
 
 static void *enumerate_gpu_clk(struct kbase_device *kbdev, unsigned int index)
 {
@@ -85,7 +86,6 @@ static void gpu_dvfs_metrics_trace_clock(struct kbase_device *kbdev, int old_lev
 	struct pixel_context *pc = kbdev->platform_context;
 	struct kbase_gpu_clk_notifier_data nd;
 	int c;
-	int proc = raw_smp_processor_id();
 	int clks[GPU_DVFS_CLK_COUNT];
 
 	for (c = 0; c < GPU_DVFS_CLK_COUNT; c++) {
@@ -103,9 +103,8 @@ static void gpu_dvfs_metrics_trace_clock(struct kbase_device *kbdev, int old_lev
 
 	}
 
-	/* TODO: Remove reporting clocks this way when we transition to Perfetto */
-	trace_clock_set_rate("gpu0", clks[GPU_DVFS_CLK_TOP_LEVEL], proc);
-	trace_clock_set_rate("gpu1", clks[GPU_DVFS_CLK_SHADERS], proc);
+	trace_gpu_frequency(clks[GPU_DVFS_CLK_TOP_LEVEL], 0);
+	trace_gpu_frequency(clks[GPU_DVFS_CLK_SHADERS], 1);
 }
 
 /**
@@ -114,61 +113,44 @@ static void gpu_dvfs_metrics_trace_clock(struct kbase_device *kbdev, int old_lev
  * @kbdev:       The &struct kbase_device for the GPU.
  * @event_time:  The time of the clock change event in nanoseconds.
  *
- * Called when the operating point is changing so that the per-UID time in state data for in-flight
- * atoms can be updated. Note that this function need only be called when the operating point is
- * changing _and_ the GPU is powered on. This is because no atoms will be in-flight when the GPU is
- * powered down.
+ * Called when the operating point is changing so that the per-UID time in state
+ * data for active work can be updated. Note that this function need only be
+ * called when the operating point is changing _and_ the GPU is powered on.
+ * This is because no work will be active when the GPU is powered down.
  *
- * Context: Called in process context, invokes an IRQ context and takes the per-UID metrics spin
- *          lock.
+ * Context: Called in process context. Requires the dvfs.lock & dvfs.metrics.lock to be held.
  */
 static void gpu_dvfs_metrics_uid_level_change(struct kbase_device *kbdev, u64 event_time)
 {
 	struct pixel_context *pc = kbdev->platform_context;
 	struct gpu_dvfs_metrics_uid_stats *stats;
-	unsigned long flags;
 	int i;
+	int const nr_slots = ARRAY_SIZE(pc->dvfs.metrics.work_uid_stats);
 
 	lockdep_assert_held(&pc->dvfs.lock);
+	lockdep_assert_held(&pc->dvfs.metrics.lock);
 
-	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
-
-	for (i = 0; i < BASE_JM_MAX_NR_SLOTS; i++) {
-		stats = pc->dvfs.metrics.js_uid_stats[i];
+	for (i = 0; i < nr_slots; i++) {
+		stats = pc->dvfs.metrics.work_uid_stats[i];
 		if (stats && stats->period_start != event_time) {
-			WARN_ON(stats->period_start == 0);
+			WARN_ON_ONCE(stats->period_start == 0);
 			stats->tis_stats[pc->dvfs.level].time_total +=
 				(event_time - stats->period_start);
 			stats->period_start = event_time;
 		}
 	}
-
-	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 }
 
-/**
- * gpu_dvfs_metrics_update() - Updates GPU metrics on level or power change.
- *
- * @kbdev:       The &struct kbase_device for the GPU.
- * @old_level:   The level that the GPU has just moved from. Can be the same as &new_level.
- * @new_level:   The level that the GPU has just moved to. Can be the same as &old_level. This
- *               parameter is ignored if &power_state is false.
- * @power_state: The current power state of the GPU. Can be the same as the current power state.
- *
- * This function should be called (1) right after a change in power state of the GPU, or (2) just
- * after changing the level of a powered on GPU. It will update the metrics for each of the GPU
- * DVFS level metrics and the power metrics as appropriate.
- *
- * Context: Expects the caller to hold the DVFS lock.
- */
 void gpu_dvfs_metrics_update(struct kbase_device *kbdev, int old_level, int new_level,
 	bool power_state)
 {
 	struct pixel_context *pc = kbdev->platform_context;
 	const u64 prev = pc->dvfs.metrics.last_time;
 	u64 curr = ktime_get_ns();
+	unsigned long flags;
 
 	lockdep_assert_held(&pc->dvfs.lock);
+	spin_lock_irqsave(&pc->dvfs.metrics.lock, flags);
 
 	if (pc->dvfs.metrics.last_power_state) {
 		if (power_state) {
@@ -210,74 +192,123 @@ void gpu_dvfs_metrics_update(struct kbase_device *kbdev, int old_level, int new_
 	pc->dvfs.metrics.last_power_state = power_state;
 	pc->dvfs.metrics.last_time = curr;
 	pc->dvfs.metrics.last_level = new_level;
+	spin_unlock_irqrestore(&pc->dvfs.metrics.lock, flags);
 
 	gpu_dvfs_metrics_trace_clock(kbdev, old_level, new_level, power_state);
 }
 
-/**
- * gpu_dvfs_metrics_job_start() - Notification of when an atom starts on the GPU
- *
- * @atom: The &struct kbase_jd_atom that has just been submitted to the GPU.
- *
- * This function is called when an atom is submitted to the GPU by way of writing to the
- * JSn_HEAD_NEXTn register.
- *
- * Context: May be in IRQ context, assumes that the hwaccess lock is held, and in turn takes and
- *          releases the metrics UID spin lock.
- */
-void gpu_dvfs_metrics_job_start(struct kbase_jd_atom *atom)
+void gpu_dvfs_metrics_work_begin(void* param)
 {
-	struct kbase_device *kbdev = atom->kctx->kbdev;
-	struct pixel_context *pc = kbdev->platform_context;
-	struct gpu_dvfs_metrics_uid_stats *stats = atom->kctx->platform_data;
-	int js = atom->slot_nr;
+#if !MALI_USE_CSF
+	struct kbase_jd_atom* unit = param;
+	const int slot = unit->slot_nr;
+#else
+	struct kbase_queue_group* unit = param;
+	const int slot = unit->csg_nr;
+#endif
+	struct kbase_context* kctx = unit->kctx;
+	struct kbase_device* kbdev = kctx->kbdev;
+	struct pixel_context* pc = kbdev->platform_context;
+	struct gpu_dvfs_metrics_uid_stats* uid_stats = kctx->platform_data;
+	struct gpu_dvfs_metrics_uid_stats** work_stats = &pc->dvfs.metrics.work_uid_stats[slot];
+	const u64 curr = ktime_get_ns();
+	unsigned long flags;
 
-	lockdep_assert_held(&kbdev->hwaccess_lock);
+	dev_dbg(kbdev->dev, "work_begin, slot: %d, uid: %d", slot, uid_stats->uid.val);
 
-	if (stats->atoms_in_flight == 0) {
-		/* This is the start of a new period */
-		WARN_ON(stats->period_start != 0);
-		stats->period_start = ktime_get_ns();
+	spin_lock_irqsave(&pc->dvfs.metrics.lock, flags);
+
+#if !MALI_USE_CSF
+	/*
+	* JM slots can have 2 Atoms submitted per slot, with different UIDs
+	* Use the secondary slot if the first is occupied
+	*/
+	if (*work_stats != NULL) {
+		work_stats = &pc->dvfs.metrics.work_uid_stats[slot + BASE_JM_MAX_NR_SLOTS];
 	}
+#endif
 
-	stats->atoms_in_flight++;
-	pc->dvfs.metrics.js_uid_stats[js] = stats;
+	/* Nothing should be mapped to this slot */
+	WARN_ON_ONCE(*work_stats != NULL);
+
+	/*
+	 * First new work associated with this UID, start tracking the per UID
+	 * time now
+	 */
+	if (uid_stats->active_work_count == 0)
+	{
+		/*
+		 * This is the start of a new period, the start time shouldn't have
+		 * been set or should have been cleared.
+		 */
+		WARN_ON_ONCE(uid_stats->period_start != 0);
+		uid_stats->period_start = curr;
+	}
+	++uid_stats->active_work_count;
+
+	/* Link the UID stats to the stream slot */
+	*work_stats = uid_stats;
+
+	spin_unlock_irqrestore(&pc->dvfs.metrics.lock, flags);
 }
 
-/**
- * gpu_dvfs_metrics_job_end() - Notification of when an atom stops running on the GPU
- *
- * @atom: The &struct kbase_jd_atom that has just stopped running on the GPU
- *
- * This function is called when an atom is no longer running on the GPU, either due to successful
- * completion, failure, preemption, or GPU reset.
- *
- * Context: May be in IRQ context, assumes that the hwaccess lock is held, and in turn takes and
- *          releases the metrics UID spin lock.
- */
-void gpu_dvfs_metrics_job_end(struct kbase_jd_atom *atom)
+void gpu_dvfs_metrics_work_end(void *param)
 {
-	struct kbase_device *kbdev = atom->kctx->kbdev;
-	struct pixel_context *pc = kbdev->platform_context;
-	struct gpu_dvfs_metrics_uid_stats *stats = atom->kctx->platform_data;
-	int js = atom->slot_nr;
-	u64 curr = ktime_get_ns();
+#if !MALI_USE_CSF
+	struct kbase_jd_atom* unit = param;
+	const int slot = unit->slot_nr;
+#else
+	struct kbase_queue_group* unit = param;
+	const int slot = unit->csg_nr;
+#endif
+	struct kbase_context* kctx = unit->kctx;
+	struct kbase_device* kbdev = kctx->kbdev;
+	struct pixel_context* pc = kbdev->platform_context;
+	struct gpu_dvfs_metrics_uid_stats* uid_stats = kctx->platform_data;
+	struct gpu_dvfs_metrics_uid_stats** work_stats = &pc->dvfs.metrics.work_uid_stats[slot];
+	const u64 curr = ktime_get_ns();
+	unsigned long flags;
 
-	lockdep_assert_held(&kbdev->hwaccess_lock);
+	dev_dbg(kbdev->dev, "work_end, slot: %d, uid: %d", slot, uid_stats->uid.val);
 
-	WARN_ON(stats->period_start == 0);
-	WARN_ON(stats->atoms_in_flight == 0);
+	spin_lock_irqsave(&pc->dvfs.metrics.lock, flags);
 
-	stats->atoms_in_flight--;
-	stats->tis_stats[pc->dvfs.level].time_total += (curr - stats->period_start);
+#if !MALI_USE_CSF
+	/*
+	* JM slots can have 2 Atoms submitted per slot, with different UIDs
+	* If the primary slot is not for this uid, then check the secondary slot
+	*/
+	if (*work_stats != uid_stats) {
+		work_stats = &pc->dvfs.metrics.work_uid_stats[slot + BASE_JM_MAX_NR_SLOTS];
+	}
+#endif
 
-	if (stats->atoms_in_flight == 0)
-		/* This is the end of a period */
-		stats->period_start = 0;
-	else
-		stats->period_start = curr;
+	/* We should have something mapped to this slot */
+	WARN_ON_ONCE(*work_stats == NULL);
+	/* Should be the same stats */
+	WARN_ON_ONCE(uid_stats != *work_stats);
+	/* Forgot to init the start time? */
+	WARN_ON_ONCE(uid_stats->period_start == 0);
+	/* No jobs so how could have something have completed? */
+	if (!WARN_ON_ONCE(uid_stats->active_work_count == 0))
+		--uid_stats->active_work_count;
+	/*
+	 * We could only update this when the work count equals zero, and
+	 * avoid updating the period_start often. However we get more timely
+	 * updates this way.
+	 */
+	uid_stats->tis_stats[pc->dvfs.level].time_total += (curr - uid_stats->period_start);
 
-	pc->dvfs.metrics.js_uid_stats[js] = NULL;
+	/*
+	 * Reset the period start time when there is no work associated with
+	 * this UID, or update it to prevent double counting.
+	 */
+	uid_stats->period_start = uid_stats->active_work_count == 0 ? 0 : curr;
+
+	/* Unlink the UID stats from the slot stats */
+	*work_stats = NULL;
+
+	spin_unlock_irqrestore(&pc->dvfs.metrics.lock, flags);
 }
 
 /**
@@ -405,7 +436,7 @@ done:
 }
 
 /**
- * gpu_dvfs_kctx_init() - Called when a kernel context is terminated
+ * gpu_dvfs_kctx_term() - Called when a kernel context is terminated
  *
  * @kctx: The &struct kbase_context that is being terminated
  *
@@ -424,21 +455,13 @@ void gpu_dvfs_kctx_term(struct kbase_context *kctx)
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 }
 
-/**
- * gpu_dvfs_metrics_init() - Initializes DVFS metrics.
- *
- * @kbdev: The &struct kbase_device for the GPU.
- *
- * Context: Process context. Takes and releases the DVFS lock.
- *
- * Return: On success, returns 0 otherwise returns an error code.
- */
 int gpu_dvfs_metrics_init(struct kbase_device *kbdev)
 {
 	struct pixel_context *pc = kbdev->platform_context;
 	int c;
 
 	mutex_lock(&pc->dvfs.lock);
+	spin_lock_init(&pc->dvfs.metrics.lock);
 
 	pc->dvfs.metrics.last_time = ktime_get_ns();
 	pc->dvfs.metrics.last_power_state = gpu_pm_get_power_state(kbdev);
@@ -460,14 +483,11 @@ int gpu_dvfs_metrics_init(struct kbase_device *kbdev)
 	/* Initialize per-UID metrics */
 	INIT_LIST_HEAD(&pc->dvfs.metrics.uid_stats_list);
 
+	memset(pc->dvfs.metrics.work_uid_stats, 0, sizeof(pc->dvfs.metrics.work_uid_stats));
+
 	return 0;
 }
 
-/**
- * gpu_dvfs_metrics_term() - Terminates DVFS metrics
- *
- * @kbdev: The &struct kbase_device for the GPU.
- */
 void gpu_dvfs_metrics_term(struct kbase_device *kbdev)
 {
 	struct pixel_context *pc = kbdev->platform_context;

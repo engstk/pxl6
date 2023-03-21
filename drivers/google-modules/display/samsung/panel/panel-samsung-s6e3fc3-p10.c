@@ -360,6 +360,17 @@ static void s6e3fc3_p10_lhbm_gamma_write(struct exynos_panel *ctx)
 		EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x03, 0xD7, 0x65); /* global para */
 		exynos_dcs_write(ctx, aod_cmd, LHBM_GAMMA_CMD_SIZE); /* write gamma */
 	}
+
+	/* workaround of higher LHBM brightness with enabling HBM */
+	if (ctx->panel_rev >= PANEL_REV_DVT1) {
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x01, 0x6C, 0x66);
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0x66, 0x39, 0x39, 0x39, 0x3C, 0x3C, 0x3C);
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x01, 0x90, 0x66);
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0x66, 0x2C, 0x2C, 0x2C, 0x32, 0x32, 0x32);
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x01, 0xB4, 0x66);
+		EXYNOS_DCS_WRITE_SEQ(ctx, 0x66, 0x1E, 0x1E, 0x1E, 0x15, 0x15, 0x15);
+	}
+
 	EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x00, 0x28, 0xF2); /* global para */
 	EXYNOS_DCS_WRITE_SEQ(ctx, 0xF2, 0xC4); /* 8 bit */
 	EXYNOS_DCS_WRITE_TABLE(ctx, test_key_off_f0);
@@ -620,37 +631,12 @@ static void s6e3fc3_p10_set_dimming_on(struct exynos_panel *exynos_panel,
 static void s6e3fc3_p10_set_local_hbm_mode(struct exynos_panel *exynos_panel,
 				 bool local_hbm_en)
 {
-	const struct exynos_panel_mode *pmode;
-
-	if (exynos_panel->hbm.local_hbm.enabled == local_hbm_en)
-		return;
-
-	pmode = exynos_panel->current_mode;
-	if (unlikely(pmode == NULL)) {
-		dev_err(exynos_panel->dev, "%s: unknown current mode\n", __func__);
-		return;
-	}
-
-	if (local_hbm_en) {
-		const int vrefresh = drm_mode_vrefresh(&pmode->mode);
-		/* Add check to turn on LHBM @ 90hz only to comply with HW requirement */
-		if (vrefresh != 90) {
-			dev_err(exynos_panel->dev, "unexpected mode `%s` while enabling LHBM, give up\n",
-				pmode->mode.name);
-			return;
-		}
-	}
-
-	exynos_panel->hbm.local_hbm.enabled = local_hbm_en;
 	s6e3fc3_p10_update_wrctrld(exynos_panel);
 }
 
 static void s6e3fc3_p10_mode_set(struct exynos_panel *ctx,
 			     const struct exynos_panel_mode *pmode)
 {
-	if (!ctx->enabled)
-		return;
-
 	s6e3fc3_p10_change_frequency(ctx, drm_mode_vrefresh(&pmode->mode));
 }
 
@@ -713,6 +699,7 @@ static const struct exynos_panel_mode s6e3fc3_p10_modes[] = {
 	{
 		/* 1080x2400 @ 60Hz */
 		.mode = {
+			.name = "1080x2400x60",
 			.clock = 168498,
 			.hdisplay = 1080,
 			.hsync_start = 1080 + 32, // add hfp
@@ -747,6 +734,7 @@ static const struct exynos_panel_mode s6e3fc3_p10_modes[] = {
 	{
 		/* 1080x2400 @ 90Hz */
 		.mode = {
+			.name = "1080x2400x90",
 			.clock = 252747,
 			.hdisplay = 1080,
 			.hsync_start = 1080 + 32, // add hfp
@@ -857,7 +845,7 @@ const struct brightness_capability s6e3fc3_p10_brightness_capability = {
 	},
 	.hbm = {
 		.nits = {
-			.min = 550,
+			.min = 500,
 			.max = 1000,
 		},
 		.level = {

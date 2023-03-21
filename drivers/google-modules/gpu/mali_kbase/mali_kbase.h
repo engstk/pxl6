@@ -87,14 +87,7 @@
 
 #if MALI_USE_CSF
 #include "csf/mali_kbase_csf.h"
-#endif
 
-#ifndef u64_to_user_ptr
-/* Introduced in Linux v4.6 */
-#define u64_to_user_ptr(x) ((void __user *)(uintptr_t)x)
-#endif
-
-#if MALI_USE_CSF
 /* Physical memory group ID for CSF user I/O.
  */
 #define KBASE_MEM_GROUP_CSF_IO BASE_MEM_GROUP_DEFAULT
@@ -266,7 +259,7 @@ void kbase_jd_cancel(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_zap_context(struct kbase_context *kctx);
 
 /*
- * jd_done_nolock - Perform the necessary handling of an atom that has completed
+ * kbase_jd_done_nolock - Perform the necessary handling of an atom that has completed
  *                  the execution.
  *
  * @katom: Pointer to the atom that completed the execution
@@ -282,7 +275,7 @@ void kbase_jd_zap_context(struct kbase_context *kctx);
  *
  * The caller must hold the kbase_jd_context.lock.
  */
-bool jd_done_nolock(struct kbase_jd_atom *katom, bool post_immediately);
+bool kbase_jd_done_nolock(struct kbase_jd_atom *katom, bool post_immediately);
 
 void kbase_jd_free_external_resources(struct kbase_jd_atom *katom);
 void kbase_jd_dep_clear_locked(struct kbase_jd_atom *katom);
@@ -559,6 +552,21 @@ static inline bool kbase_pm_is_active(struct kbase_device *kbdev)
 }
 
 /**
+ * kbase_pm_lowest_gpu_freq_init() - Find the lowest frequency that the GPU can
+ *                                run as using the device tree, and save this
+ *                                within kbdev.
+ * @kbdev: Pointer to kbase device.
+ *
+ * This function could be called from kbase_clk_rate_trace_manager_init,
+ * but is left separate as it can be called as soon as
+ * dev_pm_opp_of_add_table() has been called to initialize the OPP table,
+ * which occurs in power_control_init().
+ *
+ * Return: 0 in any case.
+ */
+int kbase_pm_lowest_gpu_freq_init(struct kbase_device *kbdev);
+
+/**
  * kbase_pm_metrics_start - Start the utilization metrics timer
  * @kbdev: Pointer to the kbase device for which to start the utilization
  *         metrics calculation thread.
@@ -575,6 +583,40 @@ void kbase_pm_metrics_start(struct kbase_device *kbdev);
  * Stop the timer that drives the metrics calculation, runs the custom DVFS.
  */
 void kbase_pm_metrics_stop(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_init_event_log - Initialize the event log and make it discoverable
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ */
+void kbase_pm_init_event_log(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_max_event_log_size - Get the largest size of the power management event log
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ *
+ * Return: The size of a buffer large enough to contain the log at any time.
+ */
+u64 kbase_pm_max_event_log_size(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_copy_event_log - Retrieve a copy of the power management event log
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @buffer: If non-NULL, a buffer of @size bytes to copy the data into
+ * @size: The size of buffer (should be at least as large as returned by
+ *        kbase_pm_event_max_log_size())
+ *
+ * This function is called when dumping a debug log of all recent events in the
+ * power management backend.
+ *
+ * Return: 0 if the log could be copied successfully, otherwise an error code.
+ *
+ * Requires kbdev->pmaccess_lock to be held.
+ */
+int kbase_pm_copy_event_log(struct kbase_device *kbdev,
+		void *buffer, u64 size);
 
 #if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
 /**
@@ -614,6 +656,12 @@ int kbase_pm_handle_runtime_suspend(struct kbase_device *kbdev);
  * Return: 0 if the wake up was successful.
  */
 int kbase_pm_force_mcu_wakeup_after_sleep(struct kbase_device *kbdev);
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+void kbase_pm_turn_on_sc_power_rails_locked(struct kbase_device *kbdev);
+void kbase_pm_turn_on_sc_power_rails(struct kbase_device *kbdev);
+void kbase_pm_turn_off_sc_power_rails(struct kbase_device *kbdev);
+#endif
 #endif
 
 #if !MALI_USE_CSF
@@ -767,16 +815,23 @@ void kbase_device_pcm_dev_term(struct kbase_device *const kbdev);
  *
  * @kbdev:    the kbase device
  * @threadfn: the function the realtime thread will execute
- * @data:     pointer to the thread's data
+ * @worker:   pointer to the thread's kworker
  * @namefmt:  a name for the thread.
  *
  * Creates a realtime kthread with priority &KBASE_RT_THREAD_PRIO and restricted
  * to cores defined by &KBASE_RT_THREAD_CPUMASK_MIN and &KBASE_RT_THREAD_CPUMASK_MAX.
  *
- * Return: A valid &struct task_struct pointer on success, or an ERR_PTR on failure.
+ * Return: Zero on success, or an PTR_ERR on failure.
  */
-struct task_struct * kbase_create_realtime_thread(struct kbase_device *kbdev,
-	int (*threadfn)(void *data), void *data, const char namefmt[]);
+int kbase_create_realtime_thread(struct kbase_device *kbdev,
+	int (*threadfn)(void *data), struct kthread_worker *worker, const char namefmt[], ...);
+
+/**
+ * kbase_destroy_kworker_stack - Destroy a kthread_worker and it's thread on the stack
+ *
+ * @worker:   pointer to the thread's kworker
+ */
+void kbase_destroy_kworker_stack(struct kthread_worker *worker);
 
 #if !defined(UINT64_MAX)
 	#define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFULL)
