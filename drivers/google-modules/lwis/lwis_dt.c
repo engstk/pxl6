@@ -670,12 +670,12 @@ static void parse_bitwidths(struct lwis_device *lwis_dev)
 
 	of_property_read_u32(dev_node, "reg-addr-bitwidth", &addr_bitwidth);
 #ifdef LWIS_DT_DEBUG
-	pr_info("Addr bitwidth set to%s: %d\n", ret ? " default" : "", addr_bitwidth);
+	pr_info("Addr bitwidth set to: %d\n", addr_bitwidth);
 #endif
 
 	of_property_read_u32(dev_node, "reg-value-bitwidth", &value_bitwidth);
 #ifdef LWIS_DT_DEBUG
-	pr_info("Value bitwidth set to%s: %d\n", ret ? " default" : "", value_bitwidth);
+	pr_info("Value bitwidth set to: %d\n", value_bitwidth);
 #endif
 
 	lwis_dev->native_addr_bitwidth = addr_bitwidth;

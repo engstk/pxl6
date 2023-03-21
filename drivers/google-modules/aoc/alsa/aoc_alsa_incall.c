@@ -115,14 +115,14 @@ static int snd_aoc_pcm_open(struct snd_soc_component *component,
 	int idx;
 	int err;
 
-	dev_dbg(component->dev, "stream (%d)\n", substream->number); /* Playback or capture */
+	dev_notice(component->dev, "stream (%d)\n", substream->number); /* Playback or capture */
 	if (mutex_lock_interruptible(&chip->audio_mutex)) {
 		dev_err(component->dev, "ERR: interrupted whilst waiting for lock\n");
 		return -EINTR;
 	}
 
 	idx = substream->pcm->device;
-	dev_dbg(component->dev, "pcm device open (%d)\n", idx);
+	dev_notice(component->dev, "pcm device open (%d)\n", idx);
 	dev_dbg(component->dev, "chip open (%d)\n", chip->opened);
 
 	/* Find the corresponding aoc audio service */

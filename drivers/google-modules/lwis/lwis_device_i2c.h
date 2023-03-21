@@ -16,6 +16,8 @@
 
 #include "lwis_device.h"
 
+#define MAX_I2C_LOCK_NUM 8
+
 /*
  *  struct lwis_i2c_device
  *  "Derived" lwis_device struct, with added i2c related elements.

@@ -72,10 +72,18 @@ int kbase_pm_runtime_init(struct kbase_device *kbdev)
 					callbacks->power_runtime_idle_callback;
 		kbdev->pm.backend.callback_soft_reset =
 					callbacks->soft_reset_callback;
+		kbdev->pm.backend.callback_hardware_reset =
+					callbacks->hardware_reset_callback;
 		kbdev->pm.backend.callback_power_runtime_gpu_idle =
 					callbacks->power_runtime_gpu_idle_callback;
 		kbdev->pm.backend.callback_power_runtime_gpu_active =
 					callbacks->power_runtime_gpu_active_callback;
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+		kbdev->pm.backend.callback_power_on_sc_rails =
+					callbacks->power_on_sc_rails_callback;
+		kbdev->pm.backend.callback_power_off_sc_rails =
+					callbacks->power_off_sc_rails_callback;
+#endif
 
 		if (callbacks->power_runtime_init_callback)
 			return callbacks->power_runtime_init_callback(kbdev);
@@ -93,8 +101,13 @@ int kbase_pm_runtime_init(struct kbase_device *kbdev)
 	kbdev->pm.backend.callback_power_runtime_off = NULL;
 	kbdev->pm.backend.callback_power_runtime_idle = NULL;
 	kbdev->pm.backend.callback_soft_reset = NULL;
+	kbdev->pm.backend.callback_hardware_reset = NULL;
 	kbdev->pm.backend.callback_power_runtime_gpu_idle = NULL;
 	kbdev->pm.backend.callback_power_runtime_gpu_active = NULL;
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	kbdev->pm.backend.callback_power_on_sc_rails = NULL;
+	kbdev->pm.backend.callback_power_off_sc_rails = NULL;
+#endif
 
 	return 0;
 }
@@ -141,6 +154,8 @@ int kbase_hwaccess_pm_init(struct kbase_device *kbdev)
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
 	mutex_init(&kbdev->pm.lock);
+
+	kbase_pm_init_event_log(kbdev);
 
 	kbdev->pm.backend.gpu_poweroff_wait_wq = alloc_workqueue("kbase_pm_poweroff_wait",
 			WQ_HIGHPRI | WQ_UNBOUND, 1);
@@ -422,8 +437,7 @@ static void kbase_pm_l2_clock_slow(struct kbase_device *kbdev)
 		return;
 
 	/* Stop the metrics gathering framework */
-	if (kbase_pm_metrics_is_active(kbdev))
-		kbase_pm_metrics_stop(kbdev);
+	kbase_pm_metrics_stop(kbdev);
 
 	/* Keep the current freq to restore it upon resume */
 	kbdev->previous_frequency = clk_get_rate(clk);
@@ -865,7 +879,7 @@ void kbase_pm_power_changed(struct kbase_device *kbdev)
 	kbase_pm_update_state(kbdev);
 
 #if !MALI_USE_CSF
-		kbase_backend_slot_update(kbdev);
+	kbase_backend_slot_update(kbdev);
 #endif /* !MALI_USE_CSF */
 
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
@@ -975,7 +989,7 @@ void kbase_hwaccess_pm_resume(struct kbase_device *kbdev)
 void kbase_pm_handle_gpu_lost(struct kbase_device *kbdev)
 {
 	unsigned long flags;
-	ktime_t end_timestamp = ktime_get();
+	ktime_t end_timestamp = ktime_get_raw();
 	struct kbase_arbiter_vm_state *arb_vm_state = kbdev->pm.arb_vm_state;
 
 	if (!kbdev->arb.arb_if)
@@ -1050,6 +1064,7 @@ static int pm_handle_mcu_sleep_on_runtime_suspend(struct kbase_device *kbdev)
 	lockdep_assert_held(&kbdev->csf.scheduler.lock);
 	lockdep_assert_held(&kbdev->pm.lock);
 
+#ifdef CONFIG_MALI_DEBUG
 	/* In case of no active CSG on slot, powering up L2 could be skipped and
 	 * proceed directly to suspend GPU.
 	 * ToDo: firmware has to be reloaded after wake-up as no halt command
@@ -1059,6 +1074,7 @@ static int pm_handle_mcu_sleep_on_runtime_suspend(struct kbase_device *kbdev)
 		dev_info(
 			kbdev->dev,
 			"No active CSGs. Can skip the power up of L2 and go for suspension directly");
+#endif
 
 	ret = kbase_pm_force_mcu_wakeup_after_sleep(kbdev);
 	if (ret) {
@@ -1233,5 +1249,48 @@ out:
 	}
 
 	return ret;
+}
+#endif
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+void kbase_pm_turn_on_sc_power_rails_locked(struct kbase_device *kbdev)
+{
+	unsigned long flags;
+
+	lockdep_assert_held(&kbdev->pm.lock);
+	WARN_ON(!kbdev->pm.backend.gpu_powered);
+	if (kbdev->pm.backend.sc_power_rails_off) {
+		if (kbdev->pm.backend.callback_power_on_sc_rails)
+			kbdev->pm.backend.callback_power_on_sc_rails(kbdev);
+		spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+		kbdev->pm.backend.sc_power_rails_off = false;
+		spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+	}
+}
+
+void kbase_pm_turn_on_sc_power_rails(struct kbase_device *kbdev)
+{
+	kbase_pm_lock(kbdev);
+	kbase_pm_turn_on_sc_power_rails_locked(kbdev);
+	kbase_pm_unlock(kbdev);
+}
+
+void kbase_pm_turn_off_sc_power_rails(struct kbase_device *kbdev)
+{
+	unsigned long flags;
+
+	kbase_pm_lock(kbdev);
+	WARN_ON(!kbdev->pm.backend.gpu_powered);
+	if (!kbdev->pm.backend.sc_power_rails_off) {
+		bool abort;
+		spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+		kbdev->pm.backend.sc_power_rails_off = true;
+		/* Work around for b/234962632 */
+		abort = WARN_ON(!kbdev->pm.backend.sc_pwroff_safe);
+		spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+		if (kbdev->pm.backend.callback_power_off_sc_rails && !abort)
+			kbdev->pm.backend.callback_power_off_sc_rails(kbdev);
+	}
+	kbase_pm_unlock(kbdev);
 }
 #endif

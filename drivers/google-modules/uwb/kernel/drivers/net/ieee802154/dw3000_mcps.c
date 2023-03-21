@@ -1488,8 +1488,9 @@ void dw3000_mcps_free(struct dw3000 *dw)
 {
 	dev_dbg(dw->dev, "%s called\n", __func__);
 	if (dw->llhw) {
-		mcps802154_free_llhw(dw->llhw);
+		struct mcps802154_llhw *llhw = dw->llhw;
 		dw->llhw = NULL;
+		mcps802154_free_llhw(llhw);
 	}
 }
 

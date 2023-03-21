@@ -191,9 +191,7 @@ static u64 select_job_chain(struct kbase_jd_atom *katom)
 	return jc;
 }
 
-void kbase_job_hw_submit(struct kbase_device *kbdev,
-				struct kbase_jd_atom *katom,
-				int js)
+int kbase_job_hw_submit(struct kbase_device *kbdev, struct kbase_jd_atom *katom, int js)
 {
 	struct kbase_context *kctx;
 	u32 cfg;
@@ -202,13 +200,13 @@ void kbase_job_hw_submit(struct kbase_device *kbdev,
 	struct slot_rb *ptr_slot_rb = &kbdev->hwaccess.backend.slot_rb[js];
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	KBASE_DEBUG_ASSERT(kbdev);
-	KBASE_DEBUG_ASSERT(katom);
 
 	kctx = katom->kctx;
 
 	/* Command register must be available */
-	KBASE_DEBUG_ASSERT(kbasep_jm_is_js_free(kbdev, js, kctx));
+	if (WARN(!kbasep_jm_is_js_free(kbdev, js, kctx),
+		 "Attempting to assign to occupied slot %d in kctx %pK\n", js, (void *)kctx))
+		return -EPERM;
 
 	dev_dbg(kctx->kbdev->dev, "Write JS_HEAD_NEXT 0x%llx for atom %pK\n",
 		jc_head, (void *)katom);
@@ -226,36 +224,47 @@ void kbase_job_hw_submit(struct kbase_device *kbdev,
 	 */
 	cfg = kctx->as_nr;
 
-	if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_FLUSH_REDUCTION) &&
-			!(kbdev->serialize_jobs & KBASE_SERIALIZE_RESET))
-		cfg |= JS_CONFIG_ENABLE_FLUSH_REDUCTION;
+	if(!kbase_jd_katom_is_protected(katom)) {
+		if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_FLUSH_REDUCTION) &&
+		    !(kbdev->serialize_jobs & KBASE_SERIALIZE_RESET))
+			cfg |= JS_CONFIG_ENABLE_FLUSH_REDUCTION;
 
-	if (0 != (katom->core_req & BASE_JD_REQ_SKIP_CACHE_START)) {
-		/* Force a cache maintenance operation if the newly submitted
-		 * katom to the slot is from a different kctx. For a JM GPU
-		 * that has the feature BASE_HW_FEATURE_FLUSH_INV_SHADER_OTHER,
-		 * applies a FLUSH_INV_SHADER_OTHER. Otherwise, do a
-		 * FLUSH_CLEAN_INVALIDATE.
-		 */
-		u64 tagged_kctx = ptr_slot_rb->last_kctx_tagged;
+		if (0 != (katom->core_req & BASE_JD_REQ_SKIP_CACHE_START)) {
+			/* Force a cache maintenance operation if the newly submitted
+			 * katom to the slot is from a different kctx. For a JM GPU
+			 * that has the feature BASE_HW_FEATURE_FLUSH_INV_SHADER_OTHER,
+			 * applies a FLUSH_INV_SHADER_OTHER. Otherwise, do a
+			 * FLUSH_CLEAN_INVALIDATE.
+			 */
+			u64 tagged_kctx = ptr_slot_rb->last_kctx_tagged;
 
-		if (tagged_kctx != SLOT_RB_NULL_TAG_VAL && tagged_kctx != SLOT_RB_TAG_KCTX(kctx)) {
-			if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_FLUSH_INV_SHADER_OTHER))
-				cfg |= JS_CONFIG_START_FLUSH_INV_SHADER_OTHER;
-			else
-				cfg |= JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE;
+			if (tagged_kctx != SLOT_RB_NULL_TAG_VAL &&
+			    tagged_kctx != SLOT_RB_TAG_KCTX(kctx)) {
+				if (kbase_hw_has_feature(kbdev,
+							 BASE_HW_FEATURE_FLUSH_INV_SHADER_OTHER))
+					cfg |= JS_CONFIG_START_FLUSH_INV_SHADER_OTHER;
+				else
+					cfg |= JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE;
+			} else
+				cfg |= JS_CONFIG_START_FLUSH_NO_ACTION;
 		} else
-			cfg |= JS_CONFIG_START_FLUSH_NO_ACTION;
-	} else
-		cfg |= JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE;
+			cfg |= JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE;
 
-	if (0 != (katom->core_req & BASE_JD_REQ_SKIP_CACHE_END) &&
-			!(kbdev->serialize_jobs & KBASE_SERIALIZE_RESET))
-		cfg |= JS_CONFIG_END_FLUSH_NO_ACTION;
-	else if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_CLEAN_ONLY_SAFE))
+		if (0 != (katom->core_req & BASE_JD_REQ_SKIP_CACHE_END) &&
+		    !(kbdev->serialize_jobs & KBASE_SERIALIZE_RESET))
+			cfg |= JS_CONFIG_END_FLUSH_NO_ACTION;
+		else if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_CLEAN_ONLY_SAFE))
+			cfg |= JS_CONFIG_END_FLUSH_CLEAN;
+		else
+			cfg |= JS_CONFIG_END_FLUSH_CLEAN_INVALIDATE;
+	} else {
+		/* Force cache flush on job chain start/end if katom is protected.
+		 * Valhall JM GPUs have BASE_HW_FEATURE_CLEAN_ONLY_SAFE feature,
+		 * so DDK set JS_CONFIG_END_FLUSH_CLEAN config
+		 */
+		cfg |= JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE;
 		cfg |= JS_CONFIG_END_FLUSH_CLEAN;
-	else
-		cfg |= JS_CONFIG_END_FLUSH_CLEAN_INVALIDATE;
+	}
 
 	cfg |= JS_CONFIG_THREAD_PRI(8);
 
@@ -281,7 +290,7 @@ void kbase_job_hw_submit(struct kbase_device *kbdev,
 	/* Write an approximate start timestamp.
 	 * It's approximate because there might be a job in the HEAD register.
 	 */
-	katom->start_timestamp = ktime_get();
+	katom->start_timestamp = ktime_get_raw();
 
 	/* GO ! */
 	dev_dbg(kbdev->dev, "JS: Submitting atom %pK from ctx %pK to js[%d] with head=0x%llx",
@@ -329,6 +338,8 @@ void kbase_job_hw_submit(struct kbase_device *kbdev,
 
 	kbase_reg_write(kbdev, JOB_SLOT_REG(js, JS_COMMAND_NEXT),
 						JS_COMMAND_START);
+
+	return 0;
 }
 
 /**
@@ -393,11 +404,9 @@ void kbase_job_done(struct kbase_device *kbdev, u32 done)
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
-	KBASE_DEBUG_ASSERT(kbdev);
-
 	KBASE_KTRACE_ADD_JM(kbdev, JM_IRQ, NULL, NULL, 0, done);
 
-	end_timestamp = ktime_get();
+	end_timestamp = ktime_get_raw();
 
 	while (done) {
 		u32 failed = done >> 16;
@@ -409,7 +418,8 @@ void kbase_job_done(struct kbase_device *kbdev, u32 done)
 		 * numbered interrupts before the higher numbered ones.
 		 */
 		i = ffs(finished) - 1;
-		KBASE_DEBUG_ASSERT(i >= 0);
+		if (WARN(i < 0, "%s: called without receiving any interrupts\n", __func__))
+			break;
 
 		do {
 			int nr_done;
@@ -590,7 +600,7 @@ void kbase_job_done(struct kbase_device *kbdev, u32 done)
 			failed = done >> 16;
 			finished = (done & 0xFFFF) | failed;
 			if (done)
-				end_timestamp = ktime_get();
+				end_timestamp = ktime_get_raw();
 		} while (finished & (1 << i));
 
 		kbasep_job_slot_update_head_start_timestamp(kbdev, i,
@@ -619,7 +629,7 @@ void kbasep_job_slot_soft_or_hard_stop_do_action(struct kbase_device *kbdev,
 	u64 job_in_head_before;
 	u32 status_reg_after;
 
-	KBASE_DEBUG_ASSERT(!(action & (~JS_COMMAND_MASK)));
+	WARN_ON(action & (~JS_COMMAND_MASK));
 
 	/* Check the head pointer */
 	job_in_head_before = ((u64) kbase_reg_read(kbdev,
@@ -697,7 +707,8 @@ void kbasep_job_slot_soft_or_hard_stop_do_action(struct kbase_device *kbdev,
 			KBASE_KTRACE_ADD_JM_SLOT(kbdev, JM_HARDSTOP_1, head_kctx, head, head->jc, js);
 			break;
 		default:
-			BUG();
+			WARN(1, "Unknown action %d on atom %pK in kctx %pK\n", action,
+			     (void *)target_katom, (void *)target_katom->kctx);
 			break;
 		}
 	} else {
@@ -726,7 +737,8 @@ void kbasep_job_slot_soft_or_hard_stop_do_action(struct kbase_device *kbdev,
 			KBASE_KTRACE_ADD_JM_SLOT(kbdev, JM_HARDSTOP_1, NULL, NULL, 0, js);
 			break;
 		default:
-			BUG();
+			WARN(1, "Unknown action %d on atom %pK in kctx %pK\n", action,
+			     (void *)target_katom, (void *)target_katom->kctx);
 			break;
 		}
 	}
@@ -752,9 +764,7 @@ void kbase_job_slot_ctx_priority_check_locked(struct kbase_context *kctx,
 	int i;
 	bool stop_sent = false;
 
-	KBASE_DEBUG_ASSERT(kctx != NULL);
 	kbdev = kctx->kbdev;
-	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
@@ -934,7 +944,11 @@ void kbase_job_slot_softstop_swflags(struct kbase_device *kbdev, int js,
 	dev_dbg(kbdev->dev, "Soft-stop atom %pK with flags 0x%x (s:%d)\n",
 		target_katom, sw_flags, js);
 
-	KBASE_DEBUG_ASSERT(!(sw_flags & JS_COMMAND_MASK));
+	if (sw_flags & JS_COMMAND_MASK) {
+		WARN(true, "Atom %pK in kctx %pK received non-NOP flags %d\n", (void *)target_katom,
+		     target_katom ? (void *)target_katom->kctx : NULL, sw_flags);
+		sw_flags &= ~((u32)JS_COMMAND_MASK);
+	}
 	kbase_backend_soft_hard_stop_slot(kbdev, NULL, js, target_katom,
 			JS_COMMAND_SOFT_STOP | sw_flags);
 }
@@ -1052,17 +1066,14 @@ static void kbasep_reset_timeout_worker(struct work_struct *data)
 {
 	unsigned long flags;
 	struct kbase_device *kbdev;
-	ktime_t end_timestamp = ktime_get();
+	ktime_t end_timestamp = ktime_get_raw();
 	struct kbasep_js_device_data *js_devdata;
 	bool silent = false;
 	u32 max_loops = KBASE_CLEAN_CACHE_MAX_LOOPS;
 
-	KBASE_DEBUG_ASSERT(data);
-
 	kbdev = container_of(data, struct kbase_device,
 						hwaccess.backend.reset_work);
 
-	KBASE_DEBUG_ASSERT(kbdev);
 	js_devdata = &kbdev->js_data;
 
 	if (atomic_read(&kbdev->hwaccess.backend.reset_gpu) ==
@@ -1097,7 +1108,7 @@ static void kbasep_reset_timeout_worker(struct work_struct *data)
 		return;
 	}
 
-	KBASE_DEBUG_ASSERT(kbdev->irq_reset_flush == false);
+	WARN(kbdev->irq_reset_flush, "%s: GPU reset already in flight\n", __func__);
 
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 	spin_lock(&kbdev->mmu_mask_change);
@@ -1138,7 +1149,8 @@ static void kbasep_reset_timeout_worker(struct work_struct *data)
 
 	mutex_lock(&kbdev->pm.lock);
 	/* We hold the pm lock, so there ought to be a current policy */
-	KBASE_DEBUG_ASSERT(kbdev->pm.backend.pm_current_policy);
+	if (unlikely(!kbdev->pm.backend.pm_current_policy))
+		dev_warn(kbdev->dev, "No power policy set!");
 
 	/* All slot have been soft-stopped and we've waited
 	 * SOFT_STOP_RESET_TIMEOUT for the slots to clear, at this point we
@@ -1235,8 +1247,6 @@ static enum hrtimer_restart kbasep_reset_timer_callback(struct hrtimer *timer)
 	struct kbase_device *kbdev = container_of(timer, struct kbase_device,
 						hwaccess.backend.reset_timer);
 
-	KBASE_DEBUG_ASSERT(kbdev);
-
 	/* Reset still pending? */
 	if (atomic_cmpxchg(&kbdev->hwaccess.backend.reset_gpu,
 			KBASE_RESET_GPU_COMMITTED, KBASE_RESET_GPU_HAPPENING) ==
@@ -1256,8 +1266,6 @@ static void kbasep_try_reset_gpu_early_locked(struct kbase_device *kbdev)
 {
 	int i;
 	int pending_jobs = 0;
-
-	KBASE_DEBUG_ASSERT(kbdev);
 
 	/* Count the number of jobs */
 	for (i = 0; i < kbdev->gpu_props.num_job_slots; i++)
@@ -1316,8 +1324,6 @@ bool kbase_prepare_to_reset_gpu_locked(struct kbase_device *kbdev,
 {
 	int i;
 
-	KBASE_DEBUG_ASSERT(kbdev);
-
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
 	if (kbase_pm_is_gpu_lost(kbdev)) {
 		/* GPU access has been removed, reset will be done by
@@ -1371,13 +1377,11 @@ KBASE_EXPORT_TEST_API(kbase_prepare_to_reset_gpu);
  */
 void kbase_reset_gpu(struct kbase_device *kbdev)
 {
-	KBASE_DEBUG_ASSERT(kbdev);
-
 	/* Note this is an assert/atomic_set because it is a software issue for
 	 * a race to be occurring here
 	 */
-	KBASE_DEBUG_ASSERT(atomic_read(&kbdev->hwaccess.backend.reset_gpu) ==
-						KBASE_RESET_GPU_PREPARED);
+	if (WARN_ON(atomic_read(&kbdev->hwaccess.backend.reset_gpu) != KBASE_RESET_GPU_PREPARED))
+		return;
 	atomic_set(&kbdev->hwaccess.backend.reset_gpu,
 						KBASE_RESET_GPU_COMMITTED);
 
@@ -1395,13 +1399,11 @@ KBASE_EXPORT_TEST_API(kbase_reset_gpu);
 
 void kbase_reset_gpu_locked(struct kbase_device *kbdev)
 {
-	KBASE_DEBUG_ASSERT(kbdev);
-
 	/* Note this is an assert/atomic_set because it is a software issue for
 	 * a race to be occurring here
 	 */
-	KBASE_DEBUG_ASSERT(atomic_read(&kbdev->hwaccess.backend.reset_gpu) ==
-						KBASE_RESET_GPU_PREPARED);
+	if (WARN_ON(atomic_read(&kbdev->hwaccess.backend.reset_gpu) != KBASE_RESET_GPU_PREPARED))
+		return;
 	atomic_set(&kbdev->hwaccess.backend.reset_gpu,
 						KBASE_RESET_GPU_COMMITTED);
 

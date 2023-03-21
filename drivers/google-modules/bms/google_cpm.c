@@ -167,9 +167,13 @@ struct gcpm_drv  {
 	int chg_psy_retries;
 	struct power_supply *chg_psy_avail[GCPM_MAX_CHARGERS];
 	const char *chg_psy_names[GCPM_MAX_CHARGERS];
+	struct gvotable_election *dc_chg_avail_votable;
 	struct mutex chg_psy_lock;
 	int chg_psy_active;
 	int chg_psy_count;
+
+	/* wakelock */
+	struct wakeup_source *gcpm_ws;
 
 	/* force a charger, this might have side effects */
 	int force_active;
@@ -411,6 +415,11 @@ static int gcpm_chg_offline(struct gcpm_drv *gcpm, int index)
 	const int active_index = gcpm->chg_psy_active;
 	struct power_supply *chg_psy;
 	int ret;
+
+	ret = gcpm_update_gcpm_fcc(gcpm, "CC_MAX", gcpm->cc_max, false);
+	if (ret < 0)
+		pr_debug("PPS_DC: offline cannot update cp_fcc (%d)\n", ret);
+
 
 	chg_psy = gcpm_chg_get_charger(gcpm, index);
 	if (!chg_psy)
@@ -698,6 +707,10 @@ static int gcpm_dc_start(struct gcpm_drv *gcpm, int index)
 	if (ret < 0)
 		pr_debug("PPS_DC: start cannot update votes (%d)\n", ret);
 
+	ret = gcpm_update_gcpm_fcc(gcpm, "CC_MAX", gcpm->cc_max, true);
+	if (ret < 0)
+		pr_debug("PPS_DC: start cannot update cp_fcc (%d)\n", ret);
+
 	/* this is the CP */
 	dc_psy = gcpm_chg_get_active_cp(gcpm);
 	if (!dc_psy) {
@@ -808,7 +821,7 @@ static int gcpm_chg_select_by_demand(struct gcpm_drv *gcpm)
 	 * done holding a lock on &gcpm->chg_psy_lock (cc_max will become the
 	 * same as gcpm->cp_fcc_hold_limit on exit).
 	 */
-	if (gcpm->cp_fcc_hold && gcpm->cp_fcc_hold_limit >= 0) {
+	if (gcpm->cp_fcc_hold && gcpm->cp_fcc_hold_limit >= 0 && cc_max != 0) {
 		/*
 		 * ->cp_fcc_hold is set when a thermal limit caused the switch
 		 * from CP to main-charger. In this case ->cp_fcc_hold_limit
@@ -899,11 +912,6 @@ static int gcpm_chg_select_by_soc(struct power_supply *psy,
 		 gcpm->dc_index, index, ret, pval.intval,
 		 gcpm->dc_limit_soc_high);
 
-	if (index != gcpm->dc_index)
-		logbuffer_log(gcpm->log, "by_s: index=%d->%d soc=%d soc_high=%d",
-			      gcpm->dc_index, index, pval.intval,
-			      gcpm->dc_limit_soc_high);
-
 	return index;
 }
 
@@ -956,12 +964,6 @@ exit_done:
 		 __func__, gcpm->dc_index, index, vbatt, vbatt_low, vbatt_min,
 		vbatt_high, vbatt_max);
 
-	if (index != gcpm->dc_index)
-		logbuffer_log(gcpm->log,
-			"by_v: index=%d->%d vbatt=%d: low=%d min=%d high=%d max=%d\n",
-			gcpm->dc_index, index, vbatt, vbatt_low, vbatt_min,
-			vbatt_high, vbatt_max);
-
 	return index;
 }
 
@@ -969,6 +971,7 @@ exit_done:
 static int gcpm_chg_select(struct gcpm_drv *gcpm)
 {
 	int index = GCPM_DEFAULT_CHARGER;
+	int ret;
 
 	if (!gcpm->dc_init_complete)
 		goto exit_done; /* index == GCPM_DEFAULT_CHARGER; */
@@ -980,6 +983,11 @@ static int gcpm_chg_select(struct gcpm_drv *gcpm)
 	/* kill switch */
 	if (gcpm->dc_ctl == GCPM_DC_CTL_DISABLE_BOTH)
 		goto exit_done; /* index == GCPM_DEFAULT_CHARGER; */
+
+	ret = gvotable_get_current_int_vote(gcpm->dc_chg_avail_votable);
+	dev_dbg(gcpm->device, "%s: dc_chg_avail vote: %d\n", __func__, ret);
+	if (ret <= 0)
+		goto exit_done;
 
 	/*
 	 * check demand first to react to thermal engine, then voltage to
@@ -1389,6 +1397,9 @@ static int gcpm_chg_select_logic(struct gcpm_drv *gcpm)
 		/* grace period of 500ms, PPS Work not called during grace */
 		gcpm->dc_start_time = dc_start_time;
 		schedule_pps_interval = DC_ENABLE_DELAY_MS;
+
+		__pm_stay_awake(gcpm->gcpm_ws);
+		pr_debug("%s: pm gcpm stay awake\n", __func__);
 	}
 
 	if (schedule_pps_interval >= 0) {
@@ -1552,8 +1563,8 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 		 gcpm->dc_index, gcpm->dc_state, gcpm->dc_start_time);
 
 	if (!gcpm->resume_complete || !gcpm->init_complete) {
-		/* TODO: should probably reschedule */
-		goto pps_dc_done;
+		pps_ui = DC_ERROR_RETRY_MS;
+		goto pps_dc_reschedule;
 	}
 
 	/* disconnect, gcpm_chg_check() and most errors reset ->dc_index */
@@ -1585,6 +1596,9 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 				     dc_disable ? "for the session " : " ",
 				     elap, gcpm->dc_state, active_index,
 				     gcpm->chg_psy_active);
+
+		pr_debug("%s: pm gcpm relax\n", __func__);
+		__pm_relax(gcpm->gcpm_ws);
 
 		/* TODO: send a ps event? */
 		goto pps_dc_done;
@@ -1639,7 +1653,6 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 			pps_ui = DC_ERROR_RETRY_MS;
 		} else {
 			pr_err("PPS_Work: ping DC failed, elap=%lld (%d)\n", elap, ret);
-
 			ret = gcpm_chg_offline(gcpm, gcpm->dc_index);
 			if (ret == 0)
 				ret = gcpm_enable_default(gcpm);
@@ -1649,6 +1662,9 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 			 } else {
 				pr_err("PPS_Work: dc offline\n");
 				pps_ui = 0;
+
+				pr_debug("%s: pm gcpm relax\n", __func__);
+				__pm_relax(gcpm->gcpm_ws);
 			}
 		}
 
@@ -1755,6 +1771,9 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 		} else if (pps_ui > DC_ERROR_RETRY_MS) {
 			pps_ui = DC_ERROR_RETRY_MS;
 		}
+
+		pr_debug("%s: pm gcpm relax\n", __func__);
+		__pm_relax(gcpm->gcpm_ws);
 	} else {
 		struct power_supply *pps_psy = pps_data->pps_psy;
 
@@ -1843,6 +1862,21 @@ static int gcpm_dc_fcc_callback(struct gvotable_election *el,
 				 msecs_to_jiffies(DC_ENABLE_DELAY_MS));
 
 	mutex_unlock(&gcpm->chg_psy_lock);
+	return 0;
+}
+
+static int gcpm_dc_chg_avail_callback(struct gvotable_election *el,
+				      const char *reason, void *value)
+{
+	struct gcpm_drv *gcpm = gvotable_get_data(el);
+	const int dc_chg_avail = GVOTABLE_PTR_TO_INT(value);
+
+	if (!gcpm->init_complete)
+		return 0;
+
+	mod_delayed_work(system_wq, &gcpm->select_work, 0);
+	pr_debug("DC_CHG_AVAIL: dc_avail=%d, reason=%s\n", dc_chg_avail, reason);
+
 	return 0;
 }
 
@@ -2544,8 +2578,9 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 {
 	struct mdis_thermal_device *tdev = tcd->devdata;
 	struct gcpm_drv *gcpm = tdev->gcpm;
-	int online = 0, budget = -1, in_idx = -1;
+	int online = 0, in_idx = -1;
 	int msc_fcc, dc_icl, cp_fcc, ret;
+	bool mdis_crit_lvl;
 
 	if (tdev->thermal_levels <= 0 || lvl < 0 || lvl > tdev->thermal_levels)
 		return -EINVAL;
@@ -2555,19 +2590,17 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 	dev_dbg(gcpm->device, "MSC_THERM_MDIS lvl=%d->%d\n", tdev->current_level, (int)lvl);
 
 	tdev->current_level = lvl;
-	if (lvl == tdev->thermal_levels || tdev->thermal_mitigation[lvl] == 0) {
-		budget = msc_fcc = dc_icl = cp_fcc = 0;
+	mdis_crit_lvl = lvl == tdev->thermal_levels || tdev->thermal_mitigation[lvl] == 0;
+	if (mdis_crit_lvl) {
+		msc_fcc = dc_icl = cp_fcc = 0;
 		gcpm->cp_fcc_hold_limit = gcpm_chg_select_check_cp_limit(gcpm);
 		gcpm->cp_fcc_hold = true;
 	} else if (tdev->current_level == 0) {
-		budget = tdev->thermal_mitigation[0];
 		msc_fcc = dc_icl = cp_fcc = -1;
 		/* mdis callback will clear hold and re-evaluate PPS */
 		gcpm->cp_fcc_hold_limit = -1;
 	} else {
 		int cp_min = -1;
-
-		budget = tdev->thermal_mitigation[lvl];
 
 		/* 0 always is the main-charger */
 		dc_icl = gcpm->mdis_out_limits[0][lvl + tdev->thermal_levels];
@@ -2648,6 +2681,10 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 		lvl, in_idx, online, cp_fcc, gcpm->cp_fcc_hold,
 		gcpm->cp_fcc_hold_limit);
 
+	ret = gvotable_cast_int_vote(gcpm->dc_chg_avail_votable, REASON_MDIS,
+				     !mdis_crit_lvl, 1);
+	if (ret < 0)
+		dev_err(gcpm->device, "Unable to cast vote for DC Chg avail (%d)\n", ret);
 	/*
 	 * this might be in the callback for mdis_votable
 	 * . cp_fcc == 0 will apply msc_fcc, dc_icl and must cause the
@@ -2662,9 +2699,9 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 	/*  fix the disable, run another charging loop */
 	if (gcpm->mdis_votable) {
 		ret = gvotable_cast_int_vote(gcpm->mdis_votable, "MDIS",
-					     budget, budget >= 0);
+					     lvl, lvl >= 0);
 		if (ret < 0)
-			pr_err("%s: cannot update budget (%d)", __func__, ret);
+			pr_err("%s: cannot update MDIS level (%d)", __func__, ret);
 
 	}
 
@@ -2672,9 +2709,6 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 
 	return 0;
 }
-
-#define to_cooling_device(_dev)	\
-	container_of(_dev, struct thermal_cooling_device, device)
 
 static ssize_t
 state2power_table_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -2704,7 +2738,7 @@ mdis_out_table_show(struct device *dev, struct device_attribute *attr, char *buf
 	struct thermal_cooling_device *tdev = to_cooling_device(dev);
 	struct mdis_thermal_device *mdev = tdev->devdata;
 	struct gcpm_drv *gcpm = mdev->gcpm;
-	const int entries = mdev->thermal_levels * gcpm->mdis_out_count;
+	const int entries = mdev->thermal_levels * gcpm->mdis_in_count;
 	ssize_t count = 0;
 	int i, j;
 
@@ -2733,13 +2767,6 @@ static const struct thermal_cooling_device_ops chg_mdis_tcd_ops = {
 };
 
 #ifdef CONFIG_DEBUG_FS
-
-#define DEBUG_ATTRIBUTE_WO(name) \
-static const struct file_operations name ## _fops = {	\
-	.open	= simple_open,			\
-	.llseek	= no_llseek,			\
-	.write	= name ## _store,			\
-}
 
 static ssize_t mdis_tm_store(struct file *filp, const char __user *user_buf,
 			     size_t count, loff_t *ppos)
@@ -2809,7 +2836,7 @@ static ssize_t mdis_out_store(struct file *filp, const char __user *user_buf,
 		if (index < 0 || index >= levels)
 			break;
 
-		for (i = 0; i < levels * gcpm->mdis_out_count; i++) {
+		for (i = 0; i < levels * gcpm->mdis_in_count; i++) {
 			str = strsep(&saved_ptr, " ");
 			if (!str)
 				goto error_done;
@@ -3085,7 +3112,7 @@ static int gcpm_init_mdis(struct gcpm_drv *gcpm)
 	 * mdis_out_sel mode.
 	 */
 	for (i = 0; i < gcpm->mdis_out_count; i++) {
-		int len = tdev->thermal_levels * gcpm->mdis_out_count;
+		int len = tdev->thermal_levels * gcpm->mdis_in_count;
 		char of_name[36];
 		u32 *limits;
 
@@ -3115,7 +3142,7 @@ static int gcpm_init_mdis(struct gcpm_drv *gcpm)
 
 	gvotable_set_default(gcpm->mdis_votable, (void *)-1);
 	gvotable_set_vote2str(gcpm->mdis_votable, gvotable_v2s_int);
-	gvotable_election_set_name(gcpm->mdis_votable, "CHG_MDIS");
+	gvotable_election_set_name(gcpm->mdis_votable, VOTABLE_MDIS);
 
 	/* race with above */
 	ret = mdis_tdev_register(MDIS_OF_CDEV_NAME, MDIS_CDEV_NAME,
@@ -3177,7 +3204,7 @@ static void gcpm_init_work(struct work_struct *work)
 
 			/* PPS charging: needs an APDO */
 			ret = pps_init(&gcpm->tcpm_pps_data, gcpm->device,
-				       gcpm->tcpm_psy);
+				       gcpm->tcpm_psy, "wired-pps");
 			if (ret == 0 && gcpm->debug_entry)
 				pps_init_fs(&gcpm->tcpm_pps_data, gcpm->debug_entry);
 			if (ret < 0) {
@@ -3215,7 +3242,7 @@ static void gcpm_init_work(struct work_struct *work)
 
 			/* PPS charging: needs an APDO */
 			ret = pps_init(&gcpm->wlc_pps_data, gcpm->device,
-					gcpm->wlc_dc_psy);
+					gcpm->wlc_dc_psy, "wireless-pps");
 			if (ret == 0 && gcpm->debug_entry)
 				pps_init_fs(&gcpm->wlc_pps_data, gcpm->debug_entry);
 			if (ret < 0) {
@@ -3847,6 +3874,12 @@ static int google_cpm_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&gcpm->init_work, gcpm_init_work);
 	mutex_init(&gcpm->chg_psy_lock);
 
+	gcpm->gcpm_ws = wakeup_source_register(NULL, "google-cpm");
+	if (!gcpm->gcpm_ws) {
+		dev_err(gcpm->device, "Failed to register wakeup source\n");
+		return -ENODEV;
+	}
+
 	/* this is my name */
 	ret = of_property_read_string(pdev->dev.of_node, "google,psy-name",
 				      &tmp_name);
@@ -4014,6 +4047,21 @@ static int google_cpm_probe(struct platform_device *pdev)
 	gvotable_set_vote2str(gcpm->dc_fcc_votable, gvotable_v2s_int);
 	gvotable_election_set_name(gcpm->dc_fcc_votable, "DC_FCC");
 
+	gcpm->dc_chg_avail_votable = gvotable_create_int_election(
+			NULL, gvotable_comparator_int_min,
+			gcpm_dc_chg_avail_callback, gcpm);
+
+	if (IS_ERR_OR_NULL(gcpm->dc_chg_avail_votable)) {
+		ret = PTR_ERR(gcpm->dc_chg_avail_votable);
+		dev_err(gcpm->device, "no DC chg avail votable %d\n", ret);
+		return ret;
+	}
+
+	gvotable_set_default(gcpm->dc_chg_avail_votable, (void *)1);
+	gvotable_set_vote2str(gcpm->dc_chg_avail_votable, gvotable_v2s_int);
+	gvotable_election_set_name(gcpm->dc_chg_avail_votable, VOTABLE_DC_CHG_AVAIL);
+	gvotable_use_default(gcpm->dc_chg_avail_votable, true);
+
 	/* sysfs & debug */
 	gcpm->debug_entry = gcpm_init_fs(gcpm);
 	if (!gcpm->debug_entry)
@@ -4104,6 +4152,8 @@ static int google_cpm_remove(struct platform_device *pdev)
 
 	pps_free(&gcpm->wlc_pps_data);
 	pps_free(&gcpm->tcpm_pps_data);
+
+	wakeup_source_unregister(gcpm->gcpm_ws);
 
 	if (gcpm->wlc_dc_psy)
 		power_supply_put(gcpm->wlc_dc_psy);

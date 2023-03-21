@@ -370,6 +370,7 @@ void decon_reg_set_bpc_and_dither_path(u32 id, struct decon_config *config);
 
 /* DECON window control */
 void decon_reg_set_win_enable(u32 id, u32 win_idx, u32 en);
+int decon_reg_get_win_ch(u32 id, u32 win_idx, u32 *ch);
 void decon_reg_win_enable_and_update(u32 id, u32 win_idx, u32 en);
 void decon_reg_all_win_shadow_update_req(u32 id);
 void decon_reg_set_window_control(u32 id, int win_idx,

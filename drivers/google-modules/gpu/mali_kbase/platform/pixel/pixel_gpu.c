@@ -21,10 +21,14 @@
 #ifdef CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING
 #include <device/mali_kbase_device_internal.h>
 #endif /* CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING */
+#if MALI_USE_CSF
+#include <csf/mali_kbase_csf_firmware_cfg.h>
+#endif
 
 /* Pixel integration includes */
 #include "mali_kbase_config_platform.h"
 #include "pixel_gpu_control.h"
+#include "pixel_gpu_sscd.h"
 
 #define CREATE_TRACE_POINTS
 #include "pixel_gpu_trace.h"
@@ -34,6 +38,10 @@
  * GPU_SMC_TZPC_OK -  SMC CALL return value on success
  */
 #define GPU_SMC_TZPC_OK 0
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+#define HOST_CONTROLS_SC_RAILS_CFG_ENTRY_NAME "Host controls SC rails"
+#endif
 
 /**
  * pixel_gpu_secure_mode_enable() - Enables secure mode for the GPU
@@ -118,6 +126,50 @@ struct protected_mode_ops pixel_protected_ops = {
 
 #endif /* CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING */
 
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+/**
+ * gpu_pixel_enable_host_ctrl_sc_rails() - Enable the config in FW to support host based
+ *                                         control of SC power rails
+ *
+ * Look for the config entry that enables support in FW for the Host based
+ * control of shader core power rails and set it before the initial boot
+ * or reload of firmware.
+ *
+ * @kbdev:     Kbase device structure
+ *
+ * Return: 0 if successful, negative error code on failure
+ */
+static int gpu_pixel_enable_host_ctrl_sc_rails(struct kbase_device *kbdev)
+{
+	u32 addr;
+	int ec = kbase_csf_firmware_cfg_find_config_address(
+		kbdev, HOST_CONTROLS_SC_RAILS_CFG_ENTRY_NAME, &addr);
+
+	if (!ec) {
+		kbase_csf_update_firmware_memory(kbdev, addr, 1);
+	}
+
+	return ec;
+}
+#endif
+
+static int gpu_fw_cfg_init(struct kbase_device *kbdev) {
+	int ec = 0;
+
+#if MALI_USE_CSF
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	ec = gpu_pixel_enable_host_ctrl_sc_rails(kbdev);
+	if (ec)
+		dev_warn(kbdev->dev, "pixel: failed to enable SC rail host-control");
+#endif
+	if (gpu_sscd_fw_log_init(kbdev, 0)) {
+		dev_warn(kbdev->dev, "pixel: failed to enable FW log");
+	}
+#endif
+
+	return ec;
+}
+
 /**
  * gpu_pixel_init() - Initializes the Pixel integration for the Mali GPU.
  *
@@ -142,10 +194,8 @@ static int gpu_pixel_init(struct kbase_device *kbdev)
 	pc->kbdev = kbdev;
 
 	ret = gpu_pm_init(kbdev);
-	if (ret) {
-		dev_err(kbdev->dev, "power management init failed\n");
+	if (ret)
 		goto done;
-	}
 
 #ifdef CONFIG_MALI_MIDGARD_DVFS
 	ret = gpu_dvfs_init(kbdev);
@@ -158,6 +208,12 @@ static int gpu_pixel_init(struct kbase_device *kbdev)
 	ret = gpu_sysfs_init(kbdev);
 	if (ret) {
 		dev_err(kbdev->dev, "sysfs init failed\n");
+		goto done;
+	}
+
+	ret = gpu_sscd_init(kbdev);
+	if (ret) {
+		dev_err(kbdev->dev, "SSCD init failed\n");
 		goto done;
 	}
 	ret = 0;
@@ -175,6 +231,7 @@ static void gpu_pixel_term(struct kbase_device *kbdev)
 {
 	struct pixel_context *pc = kbdev->platform_context;
 
+	gpu_sscd_term(kbdev);
 	gpu_sysfs_term(kbdev);
 	gpu_dvfs_term(kbdev);
 	gpu_pm_term(kbdev);
@@ -188,6 +245,8 @@ struct kbase_platform_funcs_conf platform_funcs = {
 	.platform_term_func = &gpu_pixel_term,
 	.platform_handler_context_init_func = &gpu_dvfs_kctx_init,
 	.platform_handler_context_term_func = &gpu_dvfs_kctx_term,
-	.platform_handler_atom_submit_func = &gpu_dvfs_metrics_job_start,
-	.platform_handler_atom_complete_func = &gpu_dvfs_metrics_job_end,
+	.platform_handler_work_begin_func = &gpu_dvfs_metrics_work_begin,
+	.platform_handler_work_end_func = &gpu_dvfs_metrics_work_end,
+	.platform_fw_cfg_init_func = &gpu_fw_cfg_init,
+	.platform_handler_core_dump_func = &gpu_sscd_dump,
 };

@@ -57,10 +57,10 @@ exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 	if (dqe->force_atc_config.dirty) {
 		if (dqe->force_atc_config.en) {
 			dqe_reg_set_atc(id, &dqe->force_atc_config);
-			dqe->force_atc_config.dirty = false;
 		} else {
 			dqe_reg_set_atc(id, NULL);
 		}
+		dqe->force_atc_config.dirty = false;
 	}
 
 	if (dqe->verbose_atc)
@@ -75,7 +75,7 @@ static struct exynos_drm_pending_histogram_event *create_histogram_event(
 
 	e = kzalloc(sizeof(*e), GFP_KERNEL);
 	if (!e)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	e->event.base.type = EXYNOS_DRM_HISTOGRAM_EVENT;
 	e->event.base.length = sizeof(e->event);
@@ -97,6 +97,7 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	struct decon_device *decon;
 	struct exynos_dqe *dqe;
 	uint32_t *crtc_id = data;
+	struct exynos_drm_pending_histogram_event *e;
 	unsigned long flags;
 
 	obj = drm_mode_object_find(dev, file, *crtc_id, DRM_MODE_OBJECT_CRTC);
@@ -115,6 +116,13 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 		return -ENODEV;
 	}
 
+
+	e = create_histogram_event(dev, file);
+	if (IS_ERR(e)) {
+		pr_err("failed to create a histogram event\n");
+		return PTR_ERR(e);
+	}
+
 	/*
 	 * TODO: Now only one observer is allowed at a time at the moment.
 	 * This will be allowed for multiple observer in the future.
@@ -122,16 +130,11 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
 	if (dqe->state.event) {
 		pr_warn("decon%u histogram already registered\n", decon->id);
+		drm_event_cancel_free(dev, &e->base);
 		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 		return -EBUSY;
 	}
-	dqe->state.event = create_histogram_event(dev, file);
-	if (IS_ERR_OR_NULL(dqe->state.event)) {
-		dqe->state.event = NULL;
-		pr_err("failed to create a histogram event\n");
-		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
-		return -EINVAL;
-	}
+	dqe->state.event = e;
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
 	pr_debug("created histogram event(0x%pK) of decon%u\n",

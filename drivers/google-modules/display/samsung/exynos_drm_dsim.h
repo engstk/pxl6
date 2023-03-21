@@ -31,6 +31,7 @@ enum dsim_state {
 	DSIM_STATE_ULPS,	/* low power state */
 	DSIM_STATE_SUSPEND,	/* inactive */
 	DSIM_STATE_BYPASS,	/* bypass mode, dsim shouldn't be used */
+	DSIM_STATE_HANDOVER,
 };
 
 enum dsim_dual_dsi {
@@ -76,6 +77,7 @@ struct dsim_device {
 	enum exynos_drm_output_type output_type;
 	int te_from;
 	int te_gpio;
+	int err_fg_gpio;
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *te_on;
 	struct pinctrl_state *te_off;
@@ -90,6 +92,7 @@ struct dsim_device {
 #endif
 
 	int irq;
+	int irq_err_fg;
 	int id;
 	spinlock_t slock;
 	struct mutex cmd_lock;

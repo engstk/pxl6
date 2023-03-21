@@ -28,6 +28,7 @@
 #include <drm/exynos_drm.h>
 
 #include "exynos_drm_crtc.h"
+#include "exynos_drm_connector.h"
 #include "exynos_drm_decon.h"
 #include "exynos_drm_drv.h"
 #include "exynos_drm_dsim.h"
@@ -420,16 +421,21 @@ static int exynos_atomic_helper_wait_for_fences(struct drm_device *dev,
 			pr_err("%s: timeout of waiting for fence, name:%s idx:%d\n",
 				__func__, plane->name ? : "NA", plane->index);
 			if (crtc) {
-				struct exynos_drm_crtc_state *exynos_crtc_state;
-				struct drm_crtc_state *crtc_state;
+				const struct decon_device *decon = crtc_to_decon(crtc);
+				const struct decon_config *cfg = &decon->config;
+				struct exynos_drm_crtc_state *new_exynos_crtc_state;
+				struct drm_crtc_state *new_crtc_state;
 
-				crtc_state = drm_atomic_get_crtc_state(state, crtc);
-				if (IS_ERR(crtc_state) || !crtc_state->enable || !crtc_state->active)
+				new_crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+				if (!new_crtc_state ||
+					!new_crtc_state->enable || !new_crtc_state->active)
 					continue;
-				exynos_crtc_state = to_exynos_crtc_state(crtc_state);
-				if (!exynos_crtc_state->skip_update) {
-					exynos_crtc_state->skip_update = true;
-					pr_warn("%s: skip frame update at %s\n", __func__, crtc->name);
+				new_exynos_crtc_state = to_exynos_crtc_state(new_crtc_state);
+				if (!new_exynos_crtc_state->skip_update &&
+					   cfg->mode.op_mode != DECON_VIDEO_MODE) {
+					new_exynos_crtc_state->skip_update = true;
+					pr_warn("%s: skip frame update at %s\n",
+									__func__, crtc->name);
 				}
 			}
 			print_drm_plane_state_info(&p, new_plane_state);
@@ -465,10 +471,25 @@ static int exynos_atomic_helper_wait_for_fences(struct drm_device *dev,
 
 static void commit_tail(struct drm_atomic_state *old_state)
 {
-	struct drm_device *dev = old_state->dev;
+	int i;
 	const struct drm_mode_config_helper_funcs *funcs;
+	struct decon_device *decon;
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
+	struct drm_device *dev = old_state->dev;
+	unsigned int hibernation_crtc_mask = 0;
 
 	funcs = dev->mode_config.helper_private;
+
+	for_each_oldnew_crtc_in_state(old_state, crtc, old_crtc_state,
+			new_crtc_state, i) {
+		decon = crtc_to_decon(crtc);
+		if (new_crtc_state->active || old_crtc_state->active) {
+			hibernation_block(decon->hibernation);
+
+			hibernation_crtc_mask |= drm_crtc_mask(crtc);
+		}
+	}
 
 	DPU_ATRACE_BEGIN("wait_for_fences");
 	exynos_atomic_helper_wait_for_fences(dev, old_state, false);
@@ -480,6 +501,12 @@ static void commit_tail(struct drm_atomic_state *old_state)
 		funcs->atomic_commit_tail(old_state);
 	else
 		drm_atomic_helper_commit_tail(old_state);
+
+	for_each_new_crtc_in_state(old_state, crtc, new_crtc_state, i) {
+		decon = crtc_to_decon(crtc);
+		if (hibernation_crtc_mask & drm_crtc_mask(crtc))
+			hibernation_unblock_enter(decon->hibernation);
+	}
 
 	drm_atomic_helper_commit_cleanup_done(old_state);
 
@@ -542,12 +569,17 @@ int exynos_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state,
 	DPU_ATRACE_BEGIN("exynos_atomic_commit");
 
 	/*
-	 * if self refresh was activated on last commit, it's okay to stall instead
-	 * of failing since commit should finish rather quickly
+	 * if self refresh was activated on last commit or coming out of self refresh/hibernation,
+	 * it's okay to stall instead of failing since commit should finish rather quickly
 	 */
 	if (!stall) {
+		const struct exynos_drm_crtc_state *old_exynos_crtc_state;
+
 		for_each_old_crtc_in_state(state, crtc, old_crtc_state, i) {
-			if (old_crtc_state->self_refresh_active) {
+			old_exynos_crtc_state = to_exynos_crtc_state(old_crtc_state);
+
+			if (old_crtc_state->self_refresh_active ||
+			    old_exynos_crtc_state->hibernation_exit) {
 				stall = true;
 				break;
 			}
@@ -711,6 +743,12 @@ int exynos_atomic_enter_tui(void)
 		    (conn->connector_type != DRM_MODE_CONNECTOR_WRITEBACK)) {
 			pr_warn("%s: %s doesn't support self refresh\n", __func__, conn->name);
 			goto err;
+		}
+		if (is_exynos_drm_connector(conn)) {
+			struct exynos_drm_connector_state *exynos_conn_state =
+				to_exynos_connector_state(conn_state);
+
+			exynos_conn_state->blanked_mode = true;
 		}
 	}
 

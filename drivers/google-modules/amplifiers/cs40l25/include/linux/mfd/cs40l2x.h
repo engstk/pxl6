@@ -1460,6 +1460,7 @@ struct cs40l2x_private {
 	struct wt_type10_comp pbq_comp;
 	unsigned int pbq_index;
 	unsigned int pbq_state;
+	size_t pbq_str_size;
 	int pbq_inner_mark;
 	int pbq_inner_loop;
 	int pbq_outer_loop;

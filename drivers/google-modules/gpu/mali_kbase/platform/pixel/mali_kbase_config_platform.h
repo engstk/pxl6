@@ -45,7 +45,10 @@
  * Attached value: pointer to @ref kbase_clk_rate_trace_op_conf
  * Default value: See @ref kbase_clk_rate_trace_op_conf
  */
+#ifdef CONFIG_MALI_MIDGARD_DVFS
 #define CLK_RATE_TRACE_OPS (&pixel_clk_rate_trace_ops)
+extern struct kbase_clk_rate_trace_op_conf pixel_clk_rate_trace_ops;
+#endif
 
 /**
  * Platform specific configuration functions
@@ -56,20 +59,12 @@
 #define PLATFORM_FUNCS (&platform_funcs)
 
 extern struct kbase_pm_callback_conf pm_callbacks;
-extern struct kbase_clk_rate_trace_op_conf pixel_clk_rate_trace_ops;
 extern struct kbase_platform_funcs_conf platform_funcs;
 
 #ifdef CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING
 #define PLATFORM_PROTECTED_CALLBACKS (&pixel_protected_ops);
 extern struct protected_mode_ops pixel_protected_ops;
 #endif /* CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING */
-
-/**
- * Autosuspend delay
- *
- * The delay time (in milliseconds) to be used for autosuspend
- */
-#define AUTO_SUSPEND_DELAY (100)
 
 /**
  * DVFS Utilization evaluation period
@@ -87,7 +82,9 @@ extern struct protected_mode_ops pixel_protected_ops;
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 
 /* SOC level includes */
+#if IS_ENABLED(CONFIG_GOOGLE_BCL)
 #include <soc/google/bcl.h>
+#endif
 #if IS_ENABLED(CONFIG_EXYNOS_PD)
 #include <soc/google/exynos-pd.h>
 #endif
@@ -103,7 +100,7 @@ extern struct protected_mode_ops pixel_protected_ops;
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 
 /* All port specific fields go here */
-#define OF_DATA_NUM_MAX 128
+#define OF_DATA_NUM_MAX 140
 #define CPU_FREQ_MAX INT_MAX
 
 enum gpu_power_state {
@@ -116,14 +113,15 @@ enum gpu_power_state {
 	 * The power state can thus be defined as the highest-level domain that
 	 * is currently powered on.
 	 *
-	 * GLOBAL: The frontend (JM, CSF), including registers.
-	 * COREGROUP: The L2 and AXI interface, Tiler, and MMU.
-	 * STACKS: The shader cores.
+	 * GLOBAL: JM, CSF: The frontend (JM, CSF), including registers.
+	 *         CSF: The L2 and AXI interface, Tiler, and MMU.
+	 * STACKS: JM, CSF: The shader cores.
+	 *         JM: The L2 and AXI interface, Tiler, and MMU.
 	 */
 	GPU_POWER_LEVEL_OFF       = 0,
 	GPU_POWER_LEVEL_GLOBAL    = 1,
-	GPU_POWER_LEVEL_COREGROUP = 2,
-	GPU_POWER_LEVEL_STACKS    = 3,
+	GPU_POWER_LEVEL_STACKS    = 2,
+	GPU_POWER_LEVEL_NUM
 };
 
 /**
@@ -231,7 +229,9 @@ struct gpu_dvfs_metrics_uid_stats;
  * @pm.domain:                  The power domain the GPU is in.
  * @pm.status_reg_offset:       Register offset to the G3D status in the PMU. Set via DT.
  * @pm.status_local_power_mask: Mask to extract power status of the GPU. Set via DT.
- * @pm.autosuspend_delay:       Delay (in ms) before PM runtime should trigger auto suspend.
+ * @pm.use_autosuspend:         Use autosuspend on the TOP domain if true, sync suspend if false.
+ * @pm.autosuspend_delay:       Delay (in ms) before PM runtime should trigger auto suspend on TOP
+ *                              domain if use_autosuspend is true.
  * @pm.bcl_dev:                 Pointer to the Battery Current Limiter device.
  *
  * @tz_protection_enabled:      Storing the secure rendering state of the GPU. Access to this is
@@ -271,9 +271,9 @@ struct gpu_dvfs_metrics_uid_stats;
  * @dvfs.metrics.last_power_state: The GPU's power state when the DVFS metric logic was last run.
  * @dvfs.metrics.last_level:       The GPU's level when the DVFS metric logic was last run.
  * @dvfs.metrics.transtab:         Pointer to the DVFS transition table.
- * @dvfs.metrics.js_uid_stats:     An array of pointers to the per-UID stats blocks currently
- *                                 resident in each of the GPU's job slots. Access is controlled by
- *                                 the hwaccess lock.
+ * @dvfs.metrics.work_uid_stats:   An array of pointers to the per-UID stats blocks currently
+ *                                 resident in each of the GPU's job slots, or CSG slots.
+ *                                 Access is controlled by the dvfs.metrics.lock.
  * @dvfs.metrics.uid_stats_list:   List head pointer to the linked list of per-UID stats blocks.
  *                                 Modification to the linked list itself (not its elements) is
  *                                 protected by the kctx_list lock.
@@ -303,10 +303,10 @@ struct pixel_context {
 
 		struct device *domain_devs[GPU_PM_DOMAIN_COUNT];
 		struct device_link *domain_links[GPU_PM_DOMAIN_COUNT];
-
 		struct exynos_pm_domain *domain;
 		unsigned int status_reg_offset;
 		unsigned int status_local_power_mask;
+		bool use_autosuspend;
 		unsigned int autosuspend_delay;
 #ifdef CONFIG_MALI_MIDGARD_DVFS
 		struct gpu_dvfs_opp_metrics power_off_metrics;
@@ -314,6 +314,10 @@ struct pixel_context {
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
 		struct bcl_device *bcl_dev;
+#endif
+		struct pixel_rail_state_log *rail_state_log;
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+		bool ifpo_enabled;
 #endif
 	} pm;
 
@@ -328,17 +332,21 @@ struct pixel_context {
 		struct workqueue_struct *control_wq;
 		struct work_struct control_work;
 		atomic_t util;
+#if !MALI_USE_CSF
 		atomic_t util_gl;
 		atomic_t util_cl;
+#endif
 
 		struct workqueue_struct *clockdown_wq;
 		struct delayed_work clockdown_work;
 		unsigned int clockdown_hysteresis;
 
+		bool updates_enabled;
 		struct gpu_dvfs_clk clks[GPU_DVFS_CLK_COUNT];
 
 		struct gpu_dvfs_opp *table;
 		int table_size;
+		int step_up_val;
 		int level;
 		int level_target;
 		int level_max;
@@ -354,11 +362,16 @@ struct pixel_context {
 		} governor;
 
 		struct {
+			spinlock_t lock;
 			u64 last_time;
 			bool last_power_state;
 			int last_level;
 			int *transtab;
-			struct gpu_dvfs_metrics_uid_stats *js_uid_stats[BASE_JM_MAX_NR_SLOTS];
+#if !MALI_USE_CSF
+			struct gpu_dvfs_metrics_uid_stats *work_uid_stats[BASE_JM_MAX_NR_SLOTS * SLOT_RB_SIZE];
+#else
+			struct gpu_dvfs_metrics_uid_stats *work_uid_stats[MAX_SUPPORTED_CSGS];
+#endif /* !MALI_USE_CSF */
 			struct list_head uid_stats_list;
 		} metrics;
 

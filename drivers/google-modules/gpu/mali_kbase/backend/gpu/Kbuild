@@ -31,6 +31,7 @@ mali_kbase-y += \
     backend/gpu/mali_kbase_pm_coarse_demand.o \
     backend/gpu/mali_kbase_pm_adaptive.o \
     backend/gpu/mali_kbase_pm_policy.o \
+    backend/gpu/mali_kbase_pm_event_log.o \
     backend/gpu/mali_kbase_time.o \
     backend/gpu/mali_kbase_l2_mmu_config.o \
     backend/gpu/mali_kbase_clk_rate_trace_mgr.o

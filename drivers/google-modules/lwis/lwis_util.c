@@ -96,17 +96,22 @@ const char *lwis_device_type_to_string(int32_t type)
 	}
 }
 
-int lwis_create_kthread_workers(struct lwis_device *lwis_dev, const char *transaction_worker_name,
-				const char *periodic_io_worker_name)
+int lwis_create_kthread_workers(struct lwis_device *lwis_dev)
 {
+	char t_name[LWIS_MAX_NAME_STRING_LEN];
+	char p_name[LWIS_MAX_NAME_STRING_LEN];
+
 	if (!lwis_dev) {
 		pr_err("lwis_create_kthread_workers: lwis_dev is NULL\n");
 		return -ENODEV;
 	}
 
+	scnprintf(t_name, LWIS_MAX_NAME_STRING_LEN, "lwis_t_%s", lwis_dev->name);
+	scnprintf(p_name, LWIS_MAX_NAME_STRING_LEN, "lwis_p_%s", lwis_dev->name);
+
 	kthread_init_worker(&lwis_dev->transaction_worker);
 	lwis_dev->transaction_worker_thread = kthread_run(kthread_worker_fn,
-			&lwis_dev->transaction_worker, transaction_worker_name);
+			&lwis_dev->transaction_worker, t_name);
 	if (IS_ERR(lwis_dev->transaction_worker_thread)) {
 		dev_err(lwis_dev->dev, "transaction kthread_run failed\n");
 		return -EINVAL;
@@ -114,7 +119,7 @@ int lwis_create_kthread_workers(struct lwis_device *lwis_dev, const char *transa
 
 	kthread_init_worker(&lwis_dev->periodic_io_worker);
 	lwis_dev->periodic_io_worker_thread = kthread_run(kthread_worker_fn,
-			&lwis_dev->periodic_io_worker, periodic_io_worker_name);
+			&lwis_dev->periodic_io_worker, p_name);
 	if (IS_ERR(lwis_dev->periodic_io_worker_thread)) {
 		dev_err(lwis_dev->dev, "periodic_io kthread_run failed\n");
 		return -EINVAL;

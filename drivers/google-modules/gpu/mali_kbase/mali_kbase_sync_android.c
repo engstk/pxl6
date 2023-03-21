@@ -441,7 +441,7 @@ void kbase_sync_fence_in_cancel_wait(struct kbase_jd_atom *katom)
 	kbasep_remove_waiting_soft_job(katom);
 	kbase_finish_soft_job(katom);
 
-	if (jd_done_nolock(katom, true))
+	if (kbase_jd_done_nolock(katom, true))
 		kbase_js_sched_all(katom->kctx->kbdev);
 }
 

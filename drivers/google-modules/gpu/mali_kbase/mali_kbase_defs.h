@@ -154,8 +154,7 @@
 /* Maximum number of pages of memory that require a permanent mapping, per
  * kbase_context
  */
-#define KBASE_PERMANENTLY_MAPPED_MEM_LIMIT_PAGES ((32 * 1024ul * 1024ul) >> \
-								PAGE_SHIFT)
+#define KBASE_PERMANENTLY_MAPPED_MEM_LIMIT_PAGES ((64 * 1024ul * 1024ul) >> PAGE_SHIFT)
 /* Minimum threshold period for hwcnt dumps between different hwcnt virtualizer
  * clients, to reduce undesired system load.
  * If a virtualizer client requests a dump within this threshold period after
@@ -978,11 +977,8 @@ struct kbase_process {
  *                          @total_gpu_pages for both native and dma-buf imported
  *                          allocations.
  * @job_done_worker:        Worker for job_done work.
- * @job_done_worker_thread: Thread for job_done work.
  * @event_worker:           Worker for event work.
- * @event_worker_thread:    Thread for event work.
  * @apc.worker:             Worker for async power control work.
- * @apc.thread:             Thread for async power control work.
  * @apc.power_on_work:      Work struct for powering on the GPU.
  * @apc.power_off_work:     Work struct for powering off the GPU.
  * @apc.end_ts:             The latest end timestamp to power off the GPU.
@@ -1189,11 +1185,8 @@ struct kbase_device {
 #endif
 	bool poweroff_pending;
 
-#if (KERNEL_VERSION(4, 4, 0) <= LINUX_VERSION_CODE)
 	bool infinite_cache_active_default;
-#else
-	u32 infinite_cache_active_default;
-#endif
+
 	struct kbase_mem_pool_group_config mem_pool_defaults;
 
 	u32 current_gpu_coherency_mode;
@@ -1242,9 +1235,7 @@ struct kbase_device {
 	struct kbasep_js_device_data js_data;
 
 	struct kthread_worker job_done_worker;
-	struct task_struct *job_done_worker_thread;
 	struct kthread_worker event_worker;
-	struct task_struct *event_worker_thread;
 
 	/* See KBASE_JS_*_PRIORITY_MODE for details. */
 	u32 js_ctx_scheduling_mode;
@@ -1260,7 +1251,6 @@ struct kbase_device {
 
 	struct {
 		struct kthread_worker worker;
-		struct task_struct *thread;
 		struct kthread_work power_on_work;
 		struct kthread_work power_off_work;
 		ktime_t end_ts;
@@ -1941,9 +1931,7 @@ struct kbase_context {
 
 	u64 limited_core_mask;
 
-#if !MALI_USE_CSF
 	void *platform_data;
-#endif
 };
 
 #ifdef CONFIG_MALI_CINSTR_GWT
@@ -2043,6 +2031,8 @@ static inline u64 kbase_get_lock_region_min_size_log2(struct kbase_gpu_props con
 /* Maximum number of loops polling the GPU for a cache flush before we assume it must have completed */
 #define KBASE_CLEAN_CACHE_MAX_LOOPS     100000
 /* Maximum number of loops polling the GPU for an AS command to complete before we assume the GPU has hung */
-#define KBASE_AS_INACTIVE_MAX_LOOPS     100000000
+#define KBASE_AS_INACTIVE_MAX_LOOPS     100000
+/* Maximum number of loops polling the GPU PRFCNT_ACTIVE bit before we assume the GPU has hung */
+#define KBASE_PRFCNT_ACTIVE_MAX_LOOPS   100000000
 
 #endif /* _KBASE_DEFS_H_ */

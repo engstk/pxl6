@@ -33,6 +33,7 @@
 #define TLV_U32_LEN (4 + 1) /* u32 + ack/nack. */
 #define TLV_SLOTS_LEN(nbslots) \
 	(1 + (8 * (nbslots)) + 1) /* nslots + slots + ack/nack. */
+#define TLV_SLOTS_LIST_SIZE_MAX (1 + (8 * (TLV_MAX_NB_SLOTS)))
 #define MSG_NEXT_TLV(buffer, offset) \
 	(struct dw3000_nfcc_coex_tlv *)((buffer)->msg.tlvs + (offset))
 
@@ -271,6 +272,9 @@ dw3000_nfcc_coex_tlvs_check(struct dw3000 *dw,
 		if (tlv->type == DW3000_NFCC_COEX_TLV_TYPE_SLOT_LIST_UUS) {
 			/* Reject a new TLV with same type. Behavior not defined. */
 			if (slot_list)
+				return -EINVAL;
+			/* Check if the tlv size isn't exceeding the list max size */
+			if (tlv->len > TLV_SLOTS_LIST_SIZE_MAX)
 				return -EINVAL;
 			slot_list = (const struct dw3000_nfcc_coex_tlv_slot_list
 					     *)&tlv->tlv;

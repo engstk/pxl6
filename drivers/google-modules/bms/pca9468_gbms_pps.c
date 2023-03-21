@@ -144,7 +144,7 @@ int pca9468_usbpd_setup(struct pca9468_charger *pca9468)
 	}
 
 	/* not needed if tcpm-power-supply is not there */
-	ret = pps_init(&pca9468->pps_data, pca9468->dev, tcpm_psy);
+	ret = pps_init(&pca9468->pps_data, pca9468->dev, tcpm_psy, "pca-pps");
 	if (ret == 0) {
 		pps_set_logbuffer(&pca9468->pps_data, pca9468->log);
 		pps_init_state(&pca9468->pps_data);

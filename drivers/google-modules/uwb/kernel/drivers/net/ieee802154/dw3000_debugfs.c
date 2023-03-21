@@ -762,10 +762,12 @@ int dw3000_debugsfs_init(struct dw3000 *dw)
  */
 void dw3000_debugfs_remove(struct dw3000 *dw)
 {
-	struct dw3000_debugfs_file *cur;
-
-	list_for_each_entry (cur, &dw->debugfs.dbgfile_list, ll) {
+	while (!list_empty(&dw->debugfs.dbgfile_list)) {
+		struct dw3000_debugfs_file *cur =
+			list_first_entry(&dw->debugfs.dbgfile_list,
+					struct dw3000_debugfs_file, ll);
 		debugfs_remove(cur->file);
+		list_del(&cur->ll);
 		kfree(cur);
 	}
 

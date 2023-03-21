@@ -158,7 +158,7 @@ static int lwis_cleanup_client(struct lwis_client *lwis_client)
 	/* Clean up all periodic io state for the client */
 	lwis_periodic_io_client_cleanup(lwis_client);
 
-	/* Cancel all pending transactions for the client and destory workqueue*/
+	/* Cancel all pending transactions for the client */
 	lwis_transaction_clear(lwis_client);
 
 	/* Run cleanup transactions. */
@@ -1105,6 +1105,18 @@ static struct lwis_device *find_top_dev()
 	return NULL;
 }
 
+static void event_heartbeat_timer(struct timer_list *t)
+{
+	struct lwis_device *lwis_dev = from_timer(lwis_dev, t, heartbeat_timer);
+	int64_t event_id = LWIS_EVENT_ID_HEARTBEAT | (int64_t)lwis_dev->id
+							     << LWIS_EVENT_ID_EVENT_CODE_LEN;
+
+	lwis_device_event_emit(lwis_dev, event_id, NULL, 0,
+			       /*in_irq=*/false);
+
+	mod_timer(t, jiffies + msecs_to_jiffies(1000));
+}
+
 /*
  *  lwis_find_dev_by_id: Find LWIS device by id.
  */
@@ -1192,9 +1204,6 @@ int lwis_base_probe(struct lwis_device *lwis_dev, struct platform_device *plat_d
 	/* Initialize client mutex */
 	mutex_init(&lwis_dev->client_lock);
 
-	/* Initialize register access mutex */
-	mutex_init(&lwis_dev->reg_rw_lock);
-
 	/* Initialize an empty list of clients */
 	INIT_LIST_HEAD(&lwis_dev->clients);
 
@@ -1226,13 +1235,6 @@ int lwis_base_probe(struct lwis_device *lwis_dev, struct platform_device *plat_d
 		goto error_init;
 	}
 
-	/* Initialize device i2c lock */
-	if (lwis_dev->type == DEVICE_TYPE_I2C) {
-		struct lwis_i2c_device *i2c_dev;
-		i2c_dev = container_of(lwis_dev, struct lwis_i2c_device, base_dev);
-		i2c_dev->group_i2c_lock = &core.group_i2c_lock[i2c_dev->i2c_lock_group_id];
-	}
-
 	/* Upon success initialization, create device for this instance */
 	lwis_dev->dev = device_create(core.dev_class, NULL, MKDEV(core.device_major, lwis_dev->id),
 				      lwis_dev, LWIS_DEVICE_NAME "-%s", lwis_dev->name);
@@ -1249,6 +1251,8 @@ int lwis_base_probe(struct lwis_device *lwis_dev, struct platform_device *plat_d
 
 	lwis_device_debugfs_setup(lwis_dev, core.dbg_root);
 	memset(&lwis_dev->debug_info, 0, sizeof(lwis_dev->debug_info));
+
+	timer_setup(&lwis_dev->heartbeat_timer, event_heartbeat_timer, 0);
 
 	dev_info(lwis_dev->dev, "Base Probe: Success\n");
 
@@ -1326,6 +1330,9 @@ void lwis_base_unprobe(struct lwis_device *unprobe_lwis_dev)
 					       MKDEV(core.device_major, lwis_dev->id));
 			}
 			list_del(&lwis_dev->dev_list);
+
+			if (timer_pending(&lwis_dev->heartbeat_timer))
+				del_timer(&lwis_dev->heartbeat_timer);
 		}
 	}
 	mutex_unlock(&core.lock);
@@ -1446,16 +1453,12 @@ static void lwis_unregister_base_device(void)
 static int __init lwis_base_device_init(void)
 {
 	int ret = 0;
-	int i;
 
 	pr_info("LWIS device initialization\n");
 
 	/* Initialize the core struct */
 	memset(&core, 0, sizeof(struct lwis_core));
 	mutex_init(&core.lock);
-	for (i = 0; i < MAX_I2C_LOCK_NUM; ++i) {
-		mutex_init(&core.group_i2c_lock[i]);
-	}
 
 	ret = lwis_register_base_device();
 	if (ret) {

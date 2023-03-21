@@ -71,7 +71,7 @@ endif
 #
 
 # Driver version string which is returned to userspace via an ioctl
-MALI_RELEASE_NAME ?= '"r36p0-01eac0"'
+MALI_RELEASE_NAME ?= '"r38p1-01eac0"'
 
 # We are building for Pixel
 CONFIG_MALI_PLATFORM_NAME="pixel"
@@ -89,9 +89,17 @@ MALI_COVERAGE ?= 0
 # Kconfig passes in the name with quotes for in-tree builds - remove them.
 MALI_PLATFORM_DIR := $(shell echo $(CONFIG_MALI_PLATFORM_NAME))
 
+ifneq ($(CONFIG_SOC_GS101),y)
+    CONFIG_MALI_CSF_SUPPORT ?= y
+endif
+
 ifeq ($(CONFIG_MALI_CSF_SUPPORT),y)
     MALI_JIT_PRESSURE_LIMIT_BASE = 0
     MALI_USE_CSF = 1
+    ccflags-y += -DCONFIG_MALI_PIXEL_GPU_SSCD
+ifeq ($(CONFIG_SOC_GS201),y)
+#    ccflags-y += -DCONFIG_MALI_HOST_CONTROLS_SC_RAILS
+endif
 else
     MALI_JIT_PRESSURE_LIMIT_BASE ?= 1
     MALI_USE_CSF ?= 0
@@ -110,12 +118,12 @@ endif
 #
 # Experimental features must default to disabled, e.g.:
 # MALI_EXPERIMENTAL_FEATURE ?= 0
-MALI_INCREMENTAL_RENDERING ?= 0
+MALI_INCREMENTAL_RENDERING_JM ?= 0
 
 #
 # ccflags
 #
-ccflags-y = \
+ccflags-y += \
     -DMALI_CUSTOMER_RELEASE=$(MALI_CUSTOMER_RELEASE) \
     -DMALI_USE_CSF=$(MALI_USE_CSF) \
     -DMALI_KERNEL_TEST_API=$(MALI_KERNEL_TEST_API) \
@@ -123,9 +131,8 @@ ccflags-y = \
     -DMALI_COVERAGE=$(MALI_COVERAGE) \
     -DMALI_RELEASE_NAME=$(MALI_RELEASE_NAME) \
     -DMALI_JIT_PRESSURE_LIMIT_BASE=$(MALI_JIT_PRESSURE_LIMIT_BASE) \
-    -DMALI_INCREMENTAL_RENDERING=$(MALI_INCREMENTAL_RENDERING) \
+    -DMALI_INCREMENTAL_RENDERING_JM=$(MALI_INCREMENTAL_RENDERING_JM) \
     -DMALI_PLATFORM_DIR=$(MALI_PLATFORM_DIR)
-
 
 ifeq ($(KBUILD_EXTMOD),)
 # in-tree
@@ -182,6 +189,7 @@ mali_kbase-y := \
     mali_kbase_mem_profile_debugfs.o \
     mali_kbase_disjoint_events.o \
     mali_kbase_debug_mem_view.o \
+    mali_kbase_debug_mem_zones.o \
     mali_kbase_smc.o \
     mali_kbase_mem_pool.o \
     mali_kbase_mem_pool_debugfs.o \

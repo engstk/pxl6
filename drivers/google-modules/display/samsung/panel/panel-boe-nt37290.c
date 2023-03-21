@@ -9,11 +9,13 @@
  * published by the Free Software Foundation.
  */
 
+#include <drm/drm_file.h>
 #include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <trace/dpu_trace.h>
 #include <video/mipi_display.h>
+#include <drm/drm_vblank.h>
 
 #include "panel-samsung-drv.h"
 
@@ -142,7 +144,7 @@ static const struct exynos_dsi_cmd nt37290_lp_high_cmds[] = {
 static const struct exynos_binned_lp nt37290_binned_lp[] = {
 	BINNED_LP_MODE("off", 0, nt37290_lp_off_cmds),
 	/* rising = 0, falling = 48 */
-	BINNED_LP_MODE_TIMING("low", 80, nt37290_lp_low_cmds, 0, 48),
+	BINNED_LP_MODE_TIMING("low", 360, nt37290_lp_low_cmds, 0, 48),
 	BINNED_LP_MODE_TIMING("high", 3584, nt37290_lp_high_cmds, 0, 48),
 };
 
@@ -387,6 +389,21 @@ static const struct exynos_dsi_cmd nt37290_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0xF0, 0x55, 0xAA, 0x52, 0x08, 0x00),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0x6F, 0x14),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0xC2, 0x00, 0x50),
+	/* CMD2 Page 3: tune internal power on sequence */
+	EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x03),
+	EXYNOS_DSI_CMD_SEQ(0x6F, 0x10),
+	EXYNOS_DSI_CMD_SEQ(0xB6, 0x1F),
+	/* CMD2 Page 5: tune internal power on sequence */
+	EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x05),
+	EXYNOS_DSI_CMD_SEQ(0xB8, 0x04, 0x00, 0x00, 0x02),
+	EXYNOS_DSI_CMD_SEQ(0xB9, 0x04, 0x00, 0x00, 0x02),
+	EXYNOS_DSI_CMD_SEQ(0xBA, 0x84, 0x00, 0x00, 0x02),
+	/* CMD2 Page 3: tune internal power on sequence */
+	EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x03),
+	EXYNOS_DSI_CMD_SEQ(0x6F, 0x12),
+	EXYNOS_DSI_CMD_SEQ(0xD8, 0x14),
+	EXYNOS_DSI_CMD_SEQ(0x6F, 0x34),
+	EXYNOS_DSI_CMD_SEQ(0xB6, 0x0F, 0x00, 0x3C, 0x00, 0x3C, 0x00, 0x3C, 0x00, 0x3C),
 	/* CMD2 Page 8: IRC IP settings */
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0xF0, 0x55, 0xAA, 0x52, 0x08, 0x08),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0x6F, 0x10),
@@ -395,6 +412,9 @@ static const struct exynos_dsi_cmd nt37290_init_cmds[] = {
 					       0x00),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0x6F, 0x28),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_DVT1, 0xB8, 0x08, 0x00, 0x08, 0x00, 0x08, 0x00),
+	/* CMD2 Page 5: remove long TE2 pulse */
+	EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x05),
+	EXYNOS_DSI_CMD_SEQ(0xB6, 0x06, 0x03),
 
 	/* CMD3 Page 0 */
 	EXYNOS_DSI_CMD_SEQ(0xFF, 0xAA, 0x55, 0xA5, 0x80),
@@ -429,6 +449,8 @@ static const struct exynos_dsi_cmd nt37290_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ_DELAY(120, 0x11),
 };
 static DEFINE_EXYNOS_CMD_SET(nt37290_init);
+
+static void nt37290_set_local_hbm_mode(struct exynos_panel *ctx, bool local_hbm_en);
 
 static u8 nt37290_get_te2_option(struct exynos_panel *ctx)
 {
@@ -718,6 +740,26 @@ static bool nt37290_change_frequency(struct exynos_panel *ctx,
 	return updated;
 }
 
+
+static void nt37290_panel_idle_notification(struct exynos_panel *ctx,
+				u32 display_id, u32 vrefresh, u32 idle_te_vrefresh)
+{
+	char event_string[64];
+	char *envp[] = { event_string, NULL };
+	struct drm_device *dev = ctx->bridge.dev;
+
+	if (vrefresh == idle_te_vrefresh)
+		return;
+
+	if (!dev) {
+		dev_warn(ctx->dev, "%s: drm_device is null\n", __func__);
+	} else {
+		snprintf(event_string, sizeof(event_string),
+			"PANEL_IDLE_ENTER=%u,%u,%u", display_id, vrefresh, idle_te_vrefresh);
+		kobject_uevent_env(&dev->primary->kdev->kobj, KOBJ_CHANGE, envp);
+	}
+}
+
 static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
 {
 	const struct exynos_panel_mode *pmode = ctx->current_mode;
@@ -742,9 +784,14 @@ static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
 	updated = nt37290_change_frequency(ctx, pmode);
 
 	if (pmode->idle_mode == IDLE_MODE_ON_SELF_REFRESH) {
+		const int vrefresh = drm_mode_vrefresh(&pmode->mode);
+
+		if (enable && ctx->panel_idle_vrefresh)
+			nt37290_panel_idle_notification(ctx, 0, vrefresh, 120);
+
 		dev_dbg(ctx->dev, "%s: %s idle (%dHz) for mode %s\n",
 			__func__, enable ? "enter" : "exit",
-			ctx->panel_idle_vrefresh ? : drm_mode_vrefresh(&pmode->mode),
+			ctx->panel_idle_vrefresh ? : vrefresh,
 			pmode->mode.name);
 	}
 
@@ -771,15 +818,16 @@ static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
  * Sends a command to panel to indicate a frame is about to come in case its been a while since
  * the last frame update and auto mode may have started to take effect and lowering refresh rate
  */
-static void nt37290_trigger_early_exit(struct exynos_panel *ctx)
+static bool nt37290_trigger_early_exit(struct exynos_panel *ctx)
 {
 	const ktime_t delta = ktime_sub(ktime_get(), ctx->last_commit_ts);
 	const s64 delta_us = ktime_to_us(delta);
+	bool updated = false;
 
 	if (delta_us < EARLY_EXIT_THRESHOLD_US) {
 		dev_dbg(ctx->dev, "skip early exit. %lldus since last commit\n",
 			delta_us);
-		return;
+		return false;
 	}
 
 	/* triggering early exit causes a switch to 120hz */
@@ -793,18 +841,22 @@ static void nt37290_trigger_early_exit(struct exynos_panel *ctx)
 
 		dev_dbg(ctx->dev, "%s: disable auto idle mode for %s\n",
 			 __func__, pmode->mode.name);
-		nt37290_change_frequency(ctx, pmode);
+		updated = nt37290_change_frequency(ctx, pmode);
 	} else {
 		EXYNOS_DCS_WRITE_TABLE(ctx, stream_2c);
 	}
 
 	DPU_ATRACE_END(__func__);
+
+	return updated;
 }
 
+/* TODO: move update te2 to common display driver for other panel drivers */
 static void nt37290_commit_done(struct exynos_panel *ctx)
 {
 	struct nt37290_panel *spanel = to_spanel(ctx);
 	const struct exynos_panel_mode *pmode = ctx->current_mode;
+	bool updated = false;
 
 	if (!is_panel_active(ctx) || !pmode)
 		return;
@@ -816,14 +868,17 @@ static void nt37290_commit_done(struct exynos_panel *ctx)
 	}
 
 	if (test_bit(G10_FEAT_EARLY_EXIT, spanel->feat))
-		nt37290_trigger_early_exit(ctx);
+		updated = nt37290_trigger_early_exit(ctx);
 	/**
 	 * For IDLE_MODE_ON_INACTIVITY, we should go back to auto mode again
 	 * after the delay time has elapsed.
 	 */
 	else if (pmode->idle_mode == IDLE_MODE_ON_INACTIVITY &&
 		 spanel->delayed_idle && !ctx->hbm.local_hbm.enabled)
-		nt37290_change_frequency(ctx, pmode);
+		updated = nt37290_change_frequency(ctx, pmode);
+
+	if (updated)
+		nt37290_update_te2(ctx);
 }
 
 static void nt37290_set_lp_mode(struct exynos_panel *ctx,
@@ -837,9 +892,35 @@ static void nt37290_set_lp_mode(struct exynos_panel *ctx,
 	EXYNOS_DCS_BUF_ADD(ctx, 0x5A, 0x00);
 	EXYNOS_DCS_BUF_ADD_SET(ctx, cmd2_page0);
 	EXYNOS_DCS_BUF_ADD(ctx, 0x6F, 0x1C);
-	EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, 0xBA, 0x95, 0x02, 0x02, 0x00, 0x11, 0x02, 0x02, 0x00);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xBA, 0x95, 0x02, 0x02, 0x00, 0x11, 0x02, 0x02, 0x00);
+	/* make sure TE timing is no shift in AOD */
+	EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, 0x44, 0x00, 0x00);
 
 	dev_dbg(ctx->dev, "%s: done\n", __func__);
+}
+
+static void nt37290_wait_one_vblank(struct exynos_panel *ctx,
+				    const struct exynos_panel_mode *pmode)
+{
+	struct drm_crtc *crtc = NULL;
+
+	if (ctx->exynos_connector.base.state)
+		crtc = ctx->exynos_connector.base.state->crtc;
+
+	DPU_ATRACE_BEGIN(__func__);
+
+	if (crtc && !drm_crtc_vblank_get(crtc)) {
+		drm_crtc_wait_one_vblank(crtc);
+		drm_crtc_vblank_put(crtc);
+	} else {
+		int vrefresh = drm_mode_vrefresh(&pmode->mode);
+		u32 delay_us = mult_frac(1000, 1020, vrefresh);
+
+		dev_warn(ctx->dev, "%s: failed to get vblank for %dhz\n", __func__, vrefresh);
+		usleep_range(delay_us, delay_us + 10);
+	}
+
+	DPU_ATRACE_END(__func__);
 }
 
 static void nt37290_set_nolp_mode(struct exynos_panel *ctx,
@@ -848,15 +929,22 @@ static void nt37290_set_nolp_mode(struct exynos_panel *ctx,
 	if (!is_panel_active(ctx))
 		return;
 
+	DPU_ATRACE_BEGIN(__func__);
+
 	/* exit AOD */
-	EXYNOS_DCS_WRITE_SEQ_DELAY(ctx, 34, 0x38);
+	EXYNOS_DCS_WRITE_SEQ(ctx, 0x38);
+	nt37290_wait_one_vblank(ctx, ctx->current_mode);
 
 	nt37290_change_frequency(ctx, pmode);
 
 	/* 2Ch needs to be sent twice in next 2 vsync */
-	EXYNOS_DCS_WRITE_TABLE_DELAY(ctx, 34, stream_2c);
 	EXYNOS_DCS_WRITE_TABLE(ctx, stream_2c);
+	nt37290_wait_one_vblank(ctx, pmode);
+	EXYNOS_DCS_WRITE_TABLE(ctx, stream_2c);
+
 	EXYNOS_DCS_WRITE_TABLE(ctx, display_on);
+
+	DPU_ATRACE_END(__func__);
 
 	dev_info(ctx->dev, "exit LP mode\n");
 }
@@ -918,18 +1006,35 @@ static int nt37290_disable(struct drm_panel *panel)
 	spanel->hw_vrefresh = 60;
 	spanel->hw_idle_vrefresh = 0;
 
+	if (ctx->hbm.local_hbm.enabled) {
+		dev_warn(ctx->dev, "%s: lhbm is still enabled while disabling panel\n",
+			 __func__);
+		mutex_lock(&ctx->mode_lock);
+		/* disable lhbm immediately */
+		nt37290_set_local_hbm_mode(ctx, false);
+		mutex_unlock(&ctx->mode_lock);
+	}
+
 	return exynos_panel_disable(panel);
 }
 
 /**
- * struct brightness_data - nits and DBV in each brightness band
+ * struct brightness_data - nits, DBV, and coefficients in each brightness band
  *
  * @nits: brightness in nits.
  * @level: brightness in DBV.
+ *
+ * @coef_a: coefficient a in the equation of a nonlinear curve
+ * @coef_b: coefficient b in the equation of a nonlinear curve
+ * @coef_c: coefficient c in the equation of a nonlinear curve
  */
 struct brightness_data {
 	u16 nits;
 	u16 level;
+
+	s64 coef_a;
+	s64 coef_b;
+	s64 coef_c;
 };
 
 /**
@@ -939,12 +1044,19 @@ struct brightness_data {
  * @num_of_hbm_bands: number of brightness bands in hbm.
  * @normal_band_data: pointer to brightness data in normal bands.
  * @num_of_normal_bands: number of brightness bands in normal mode.
+ *
+ * @nonlinear_range_data: pointer to nonlinear data in all ranges. If hbm_band_data
+ *                        and normal_band_data are not defined, this should be specified.
+ * @num_of_nonlinear_ranges: number of nonlinear brightness ranges.
  */
 struct brightness_settings {
 	const struct brightness_data * const hbm_band_data;
 	const unsigned int num_of_hbm_bands;
 	const struct brightness_data * const normal_band_data;
 	const unsigned int num_of_normal_bands;
+
+	const struct brightness_data * const nonlinear_range_data;
+	const unsigned int num_of_nonlinear_ranges;
 };
 
 static const struct brightness_data evt1_1_hbm_band_data[] = {
@@ -962,6 +1074,26 @@ static const struct brightness_data evt1_1_normal_band_data[] = {
 	{ .nits = 25, .level = 512 },   /* band 6 */
 	{ .nits = 5, .level = 256 },    /* band 7 */
 	{ .nits = 2, .level = 3 },      /* band 8 */
+};
+
+/**
+ * All coefficients are multiplied by 10^6 to have sufficient accuracy.
+ * For example, the original equation of range 0 is:
+ *
+ * y = 0.0001123*x^2 - 0.06496*x - 611.79
+ */
+static const struct brightness_data dvt1_range_data[] = {
+	/* nits, level, coef_a, coef_b, coef_c*/
+	{ 1000, 4094, 112, -64960, -611790000 }, /* range 0: HBM ~ band 0 */
+	{ 600, 3584, 271, -1227200, 1520800000 }, /* range 1: band 0 ~ band 1 */
+	{ 300, 3072, 72, -213700, 276570000 }, /* range 2: band 1 ~ band 2 */
+	{ 200, 2560, 53, -87800, 77395000 }, /* range 3: band 2 ~ band 3 */
+	{ 120, 2048, 26, -17300, 45440000 }, /* range 4: band 3 ~ band 4 */
+	{ 80, 1536, 28, -12700, 34007000 }, /* range 5: band 4 ~ band 5 */
+	{ 50, 1024, 20, 16300, 11355000 }, /* range 6: band 5 ~ band 6 */
+	{ 25, 512, 186, -68900, 10625000 }, /* range 7: band 6 ~ band 7 */
+	{ 5, 256, 17, 7293, 1989200 }, /* range 8: band 7 ~ band 8 */
+	{ 2, 3 }, /* range 9: band 8 */
 };
 
 static const struct brightness_settings evt1_1_br_settings = {
@@ -989,6 +1121,11 @@ static const struct brightness_settings evt1_br_settings = {
 	.num_of_normal_bands = ARRAY_SIZE(evt1_normal_band_data),
 };
 
+static const struct brightness_settings dvt1_br_settings = {
+	.nonlinear_range_data = dvt1_range_data,
+	.num_of_nonlinear_ranges = ARRAY_SIZE(dvt1_range_data),
+};
+
 /**
  * linear_interpolation - linear interpolation for given x
  * @x1: x coordinate
@@ -1000,8 +1137,7 @@ static const struct brightness_settings evt1_br_settings = {
  * Given x, do linear interpolation according to x1, x2, y1, and y2.
  * Return a new value after calculation. Return negative if the inputs are invalid.
  */
-
-static inline u16 linear_interpolation(x1, x2, y1, y2, x)
+static inline u64 linear_interpolation(u64 x1, u64 x2, u64 y1, u64 y2, u64 x)
 {
 	if (x == x1)
 		return y1;
@@ -1009,6 +1145,37 @@ static inline u16 linear_interpolation(x1, x2, y1, y2, x)
 		return y2;
 	else
 		return (y1 + DIV_ROUND_CLOSEST((x - x1) * (y2 - y1), x2 - x1));
+}
+
+/**
+ * nonlinear_calculation - nonlinear calculation for given y
+ * @a: coefficient a in the equation
+ * @b: coefficient b in the equation
+ * @c: coefficient c in the equation
+ * @y: y coordinate
+ * @x: pointer of x coordinate
+ *
+ * Given y, do the calculation for equation y = a*x^2 + b*x + c for a nonlinear curve.
+ * The x can be obtained by int_sqrt(((y - c) / a) + (b / a / 2)^2) - b / a / 2
+ * Only positive square root is considered for x. Return negative while invalid.
+ */
+static inline int nonlinear_calculation(s64 a, s64 b, s64 c, s64 y, s64 *x)
+{
+	s64 p, q, r;
+
+	if (!a)
+		return -EINVAL;
+
+	p = DIV_ROUND_CLOSEST(y - c, a);
+	q = DIV_ROUND_CLOSEST(b * b, a * a * 4);
+	r = DIV_ROUND_CLOSEST(b, a * 2);
+
+	if ((p + q) < 0)
+		return -EINVAL;
+
+	*x = int_sqrt(p + q) - r;
+
+	return 0;
 }
 
 static u16 nt37290_convert_to_evt1_1_nonlinear_br(struct exynos_panel *ctx, u16 br)
@@ -1064,31 +1231,109 @@ static u16 nt37290_convert_to_evt1_br(struct exynos_panel *ctx, u16 br)
 	return level;
 }
 
+static u16 nt37290_convert_to_dvt1_nonlinear_br(struct exynos_panel *ctx, u16 br)
+{
+	u16 i, range = 0;
+	u16 num_range = dvt1_br_settings.num_of_nonlinear_ranges;
+	u16 min_br_nbm = dvt1_br_settings.nonlinear_range_data[num_range - 1].level;
+	u16 max_br_nbm = dvt1_br_settings.nonlinear_range_data[1].level;
+	u16 min_br_hbm = max_br_nbm + 1;
+	u16 max_br_hbm = dvt1_br_settings.nonlinear_range_data[0].level;
+	u64 x1, x2, y1, y2, x;
+	s64 y, a, b, c, level = br;
+	int ret;
+
+	if (br <= min_br_nbm || br == max_br_nbm || br >= max_br_hbm) {
+		dev_dbg(ctx->dev, "%s: level %u\n", __func__, br);
+		return br;
+	}
+
+	/**
+	 * x is level (DBV), y is brightness (nits). Multiplied by 10^5 to
+	 * have sufficient accuracy without overflow.
+	 */
+	if (br <= max_br_nbm ) {
+		x1 = min_br_nbm * 100000;
+		x2 = max_br_nbm * 100000;
+		y1 = (dvt1_br_settings.nonlinear_range_data[num_range - 1].nits) * 100000;
+		y2 = (dvt1_br_settings.nonlinear_range_data[1].nits) * 100000;
+	} else {
+		x1 = min_br_hbm * 100000;
+		x2 = max_br_hbm * 100000;
+		y1 = (dvt1_br_settings.nonlinear_range_data[1].nits) * 100000;
+		y2 = (dvt1_br_settings.nonlinear_range_data[0].nits) * 100000;
+	}
+	x = br * 100000;
+	y = linear_interpolation(x1, x2, y1, y2, x);
+	/**
+	 * Multiplied by 10 to have the same accuracy as nonlinear
+	 * coefficients without overflow for data type long. */
+	y *= 10;
+
+	/* find the range for the calculated nits (y) */
+	for (i = 1; i < num_range; i++) {
+		u64 nits = dvt1_br_settings.nonlinear_range_data[i].nits * 1000000;
+
+		if (y > nits) {
+			range = i - 1;
+			break;
+		}
+	}
+
+	/**
+	 * level is DBV, y is brightness (nits). The coefficients are varied
+	 * according to different ranges.
+	 */
+	a = dvt1_br_settings.nonlinear_range_data[range].coef_a;
+	b = dvt1_br_settings.nonlinear_range_data[range].coef_b;
+	c = dvt1_br_settings.nonlinear_range_data[range].coef_c;
+	ret = nonlinear_calculation(a, b, c, y, &level);
+	if (ret || level < min_br_nbm || level > max_br_hbm) {
+		dev_warn(ctx->dev, "%s: failed to convert for brightness %u, ret %d\n",
+			 __func__, br, ret);
+		if (!ret)
+			br = (level < min_br_nbm) ? min_br_nbm : max_br_hbm;
+		return br;
+	}
+
+	dev_dbg(ctx->dev, "%s: nits %lld, range %u, level %u->%lld\n",
+		__func__, DIV_ROUND_CLOSEST(y, 1000000), range, br, level);
+
+	return level;
+}
+
 static int nt37290_set_brightness(struct exynos_panel *ctx, u16 br)
 {
 	u16 brightness;
 	struct nt37290_panel *spanel = to_spanel(ctx);
-
-	if (ctx->current_mode->exynos_mode.is_lp_mode) {
-		const struct exynos_panel_funcs *funcs;
-
-		funcs = ctx->desc->exynos_panel_func;
-		if (funcs && funcs->set_binned_lp)
-			funcs->set_binned_lp(ctx, br);
-		return 0;
-	}
+	const bool lp_mode = ctx->current_mode->exynos_mode.is_lp_mode;
 
 	spanel->hw_dbv = br;
-	if (spanel->hw_dbv == 0) {
+
+	if (!lp_mode && spanel->hw_dbv == 0) {
 		// turn off panel and set brightness directly.
 		return exynos_dcs_set_brightness(ctx, 0);
 	}
 
-	if (ctx->panel_rev >= PANEL_REV_EVT1_1) {
-		if (br <= evt1_1_br_settings.normal_band_data[0].level)
-			spanel->hw_dbv = nt37290_convert_to_evt1_1_nonlinear_br(ctx, br);
-	} else {
-		spanel->hw_dbv = nt37290_convert_to_evt1_br(ctx, br);
+	if (spanel->hw_dbv) {
+		if (ctx->panel_rev >= PANEL_REV_DVT1) {
+			spanel->hw_dbv = nt37290_convert_to_dvt1_nonlinear_br(ctx, br);
+		} else if (ctx->panel_rev == PANEL_REV_EVT1_1) {
+			if (br <= evt1_1_br_settings.normal_band_data[0].level)
+				spanel->hw_dbv =
+					nt37290_convert_to_evt1_1_nonlinear_br(ctx, br);
+		} else {
+			spanel->hw_dbv = nt37290_convert_to_evt1_br(ctx, br);
+		}
+	}
+
+	if (lp_mode) {
+		const struct exynos_panel_funcs *funcs;
+
+		funcs = ctx->desc->exynos_panel_func;
+		if (funcs && funcs->set_binned_lp)
+			funcs->set_binned_lp(ctx, spanel->hw_dbv);
+		return 0;
 	}
 
 	if (ctx->panel_rev >= PANEL_REV_EVT1 && ctx->hbm.local_hbm.enabled) {
@@ -1120,11 +1365,18 @@ static void nt37290_set_hbm_mode(struct exynos_panel *ctx,
 	}
 
 	if (IS_HBM_ON_IRC_OFF(ctx->hbm_mode) != IS_HBM_ON_IRC_OFF(mode)) {
-		EXYNOS_DCS_BUF_ADD(ctx, 0xFF, 0xAA, 0x55, 0xA5, 0x84);
-		EXYNOS_DCS_BUF_ADD(ctx, 0x6F, 0x02);
-		EXYNOS_DCS_BUF_ADD(ctx, 0xF5, 0x01);
-		EXYNOS_DCS_BUF_ADD(ctx, 0xF0, 0x55, 0xAA, 0x52, 0x08, 0x08);
-		EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, 0xB9, IS_HBM_ON_IRC_OFF(mode) ? 0x00 : 0x01);
+		if (ctx->panel_rev >= PANEL_REV_DVT1) {
+			EXYNOS_DCS_BUF_ADD(ctx, 0x5F, IS_HBM_ON_IRC_OFF(mode) ? 0x01 : 0x00);
+			EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, 0x26,
+				 IS_HBM_ON_IRC_OFF(mode) ? 0x03 : 0x00);
+		} else {
+			EXYNOS_DCS_BUF_ADD(ctx, 0xFF, 0xAA, 0x55, 0xA5, 0x84);
+			EXYNOS_DCS_BUF_ADD(ctx, 0x6F, 0x02);
+			EXYNOS_DCS_BUF_ADD(ctx, 0xF5, 0x01);
+			EXYNOS_DCS_BUF_ADD(ctx, 0xF0, 0x55, 0xAA, 0x52, 0x08, 0x08);
+			EXYNOS_DCS_BUF_ADD_AND_FLUSH(ctx, 0xB9,
+				 IS_HBM_ON_IRC_OFF(mode) ? 0x00 : 0x01);
+		}
 	}
 
 	ctx->hbm_mode = mode;
@@ -1135,29 +1387,6 @@ static void nt37290_set_hbm_mode(struct exynos_panel *ctx,
 static void nt37290_set_local_hbm_mode(struct exynos_panel *ctx,
 				       bool local_hbm_en)
 {
-	const struct exynos_panel_mode *pmode;
-
-	if (ctx->hbm.local_hbm.enabled == local_hbm_en)
-		return;
-
-	pmode = ctx->current_mode;
-	if (unlikely(pmode == NULL)) {
-		dev_err(ctx->dev, "%s: unknown current mode\n", __func__);
-		return;
-	}
-
-	if (local_hbm_en) {
-		const int vrefresh = drm_mode_vrefresh(&pmode->mode);
-		/* Add check to turn on LHBM @ 120hz only to comply with HW requirement */
-		if (vrefresh != 120) {
-			dev_err(ctx->dev, "unexpected mode `%s` while enabling LHBM, give up\n",
-				pmode->mode.name);
-			return;
-		}
-	}
-
-	ctx->hbm.local_hbm.enabled = local_hbm_en;
-
 	if (local_hbm_en) {
 		if (ctx->panel_rev >= PANEL_REV_EVT1) {
 			struct nt37290_panel *spanel = to_spanel(ctx);
@@ -1195,9 +1424,6 @@ static void nt37290_set_local_hbm_mode(struct exynos_panel *ctx,
 static void nt37290_mode_set(struct exynos_panel *ctx,
 			     const struct exynos_panel_mode *pmode)
 {
-	if (!is_panel_active(ctx))
-		return;
-
 	nt37290_change_frequency(ctx, pmode);
 }
 

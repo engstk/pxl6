@@ -18,9 +18,6 @@
 #include <linux/mfd/samsung/s2mpg12.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
-#if IS_ENABLED(CONFIG_GS_ACPM)
-#include <soc/google/acpm_ipc_ctrl.h>
-#endif
 #include <soc/google/exynos-el3_mon.h>
 #include "../../bms/google_bms.h"
 
@@ -86,8 +83,8 @@ static void exynos_reboot_parse(const char *cmd)
 			value = REBOOT_MODE_DMVERITY_CORRUPTED;
 		} else if (!strcmp(cmd, "rescue")) {
 			value = REBOOT_MODE_RESCUE;
-		} else if (!strcmp(cmd, "shutdown-thermal") ||
-			   !strcmp(cmd, "shutdown,thermal")) {
+		} else if (!strncmp(cmd, "shutdown-thermal", strlen("shutdown-thermal")) ||
+			   !strncmp(cmd, "shutdown,thermal", strlen("shutdown,thermal"))) {
 			if (force_warm_reboot_on_thermal_shutdown)
 				force_warm_reboot = true;
 			value = REBOOT_MODE_SHUTDOWN_THERMAL;
@@ -117,27 +114,6 @@ static int exynos_reboot_handler(struct notifier_block *nb, unsigned long mode, 
 {
 	exynos_reboot_parse(cmd);
 
-	if (mode != SYS_POWER_OFF)
-		return NOTIFY_DONE;
-
-	while (1) {
-		/* wait for power button release */
-		if (!pmic_read_pwrkey_status()) {
-#if IS_ENABLED(CONFIG_GS_ACPM)
-			acpm_prepare_reboot();
-#endif
-			pr_info("ready to do power off.\n");
-			break;
-		} else {
-			/*
-			 * if power button is not released,
-			 * wait and check TA again
-			 */
-			pr_info("PWR Key is not released.\n");
-		}
-		mdelay(1000);
-	}
-
 	return NOTIFY_DONE;
 }
 
@@ -148,10 +124,6 @@ static struct notifier_block exynos_reboot_nb = {
 
 static int exynos_restart_handler(struct notifier_block *this, unsigned long mode, void *cmd)
 {
-#if IS_ENABLED(CONFIG_GS_ACPM)
-	acpm_prepare_reboot();
-#endif
-
 	pr_info("ready to do restart.\n");
 
 	return NOTIFY_DONE;

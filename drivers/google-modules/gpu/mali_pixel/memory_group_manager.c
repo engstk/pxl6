@@ -24,6 +24,9 @@
 
 #include <soc/google/pt.h>
 
+#define ORDER_SMALL_PAGE 0
+#define ORDER_LARGE_PAGE 9
+
 #define PBHA_BIT_POS  (36)
 #define PBHA_BIT_MASK (0xf)
 
@@ -254,10 +257,9 @@ static int mgm_debugfs_init(struct mgm_groups *mgm_data)
 /*
  * Pixel Stats sysfs
  */
-extern struct kobject *pixel_stat_gpu_kobj;
+#ifdef CONFIG_MALI_PIXEL_STATS
 
-#define ORDER_SMALL_PAGE 0
-#define ORDER_LARGE_PAGE 9
+extern struct kobject *pixel_stat_gpu_kobj;
 
 #define MGM_ATTR_RO(_name) \
 	static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
@@ -342,6 +344,19 @@ static void mgm_sysfs_term(struct mgm_groups *data)
 {
 	kobject_put(&data->kobj);
 }
+
+#else /* CONFIG_MALI_PIXEL_STATS */
+
+static int mgm_sysfs_init(struct mgm_groups *data)
+{
+	return 0;
+}
+
+static void mgm_sysfs_term(struct mgm_groups *data)
+{}
+
+#endif /* CONFIG_MALI_PIXEL_STATS */
+
 
 static atomic64_t total_gpu_pages = ATOMIC64_INIT(0);
 
@@ -534,7 +549,7 @@ static u64 mgm_update_gpu_pte(
 
 	switch (group_id) {
 	case MGM_RESERVED_GROUP_ID:
-	case  MGM_IMPORTED_MEMORY_GROUP_ID:
+	case MGM_IMPORTED_MEMORY_GROUP_ID:
 		/* The reserved group doesn't set PBHA bits */
 		/* TODO: Determine what to do with imported memory */
 		break;
@@ -730,13 +745,14 @@ static int memory_group_manager_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mgm_dev->owner = THIS_MODULE;
-	mgm_dev->ops.mgm_alloc_page = mgm_alloc_page;
-	mgm_dev->ops.mgm_free_page = mgm_free_page;
-	mgm_dev->ops.mgm_get_import_memory_id =
-			mgm_get_import_memory_id;
-	mgm_dev->ops.mgm_vmf_insert_pfn_prot = mgm_vmf_insert_pfn_prot;
-	mgm_dev->ops.mgm_update_gpu_pte = mgm_update_gpu_pte;
-	mgm_dev->ops.mgm_pte_to_original_pte = mgm_pte_to_original_pte;
+	mgm_dev->ops = (struct memory_group_manager_ops){
+		.mgm_alloc_page = mgm_alloc_page,
+		.mgm_free_page = mgm_free_page,
+		.mgm_get_import_memory_id = mgm_get_import_memory_id,
+		.mgm_update_gpu_pte = mgm_update_gpu_pte,
+		.mgm_pte_to_original_pte = mgm_pte_to_original_pte,
+		.mgm_vmf_insert_pfn_prot = mgm_vmf_insert_pfn_prot,
+	};
 
 	mgm_data = kzalloc(sizeof(*mgm_data), GFP_KERNEL);
 	if (!mgm_data) {

@@ -75,12 +75,14 @@ enum kbase_mmu_op_type {
 };
 
 /**
- * struct kbase_mmu_hw_op_param  - parameters for kbase_mmu_hw_do_operation()
- * @vpfn:          MMU Virtual Page Frame Number to start the operation on.
- * @nr:            Number of pages to work on.
- * @op:            Operation type (written to ASn_COMMAND).
- * @kctx_id:       Kernel context ID for MMU command tracepoint
- * @mmu_sync_info: Indicates whether this call is synchronous wrt MMU ops.
+ * struct kbase_mmu_hw_op_param  - parameters for kbase_mmu_hw_do_* functions
+ * @vpfn:           MMU Virtual Page Frame Number to start the operation on.
+ * @nr:             Number of pages to work on.
+ * @op:             Operation type (written to ASn_COMMAND).
+ * @kctx_id:        Kernel context ID for MMU command tracepoint.
+ * @mmu_sync_info:  Indicates whether this call is synchronous wrt MMU ops.
+ * @flush_skip_levels: Page table levels to skip flushing. (Only
+ *                     applicable if GPU supports feature)
  */
 struct kbase_mmu_hw_op_param {
 	u64 vpfn;
@@ -88,6 +90,7 @@ struct kbase_mmu_hw_op_param {
 	enum kbase_mmu_op_type op;
 	u32 kctx_id;
 	enum kbase_caller_mmu_sync_info mmu_sync_info;
+	u64 flush_skip_levels;
 };
 
 /**
@@ -111,13 +114,11 @@ void kbase_mmu_hw_configure(struct kbase_device *kbdev,
  * @op_param:  Pointer to struct containing information about the MMU
  *             operation to perform.
  *
- * This function should be called for GPU where GPU command is used to flush
- * the cache(s) instead of MMU command.
- *
  * Return: 0 if issuing the command was successful, otherwise an error code.
  */
 int kbase_mmu_hw_do_unlock_no_addr(struct kbase_device *kbdev, struct kbase_as *as,
 				   const struct kbase_mmu_hw_op_param *op_param);
+
 /**
  * kbase_mmu_hw_do_unlock - Issue UNLOCK command to the MMU and wait for it
  *                          to complete before returning.
@@ -144,10 +145,13 @@ int kbase_mmu_hw_do_unlock(struct kbase_device *kbdev, struct kbase_as *as,
  * GPUs where MMU command to flush the cache(s) is deprecated.
  * mmu_hw_mutex needs to be held when calling this function.
  *
- * Return: 0 if the operation was successful, non-zero otherwise.
+ * Context: Acquires the hwaccess_lock, expects the caller to hold the mmu_hw_mutex
+ *
+ * Return: Zero if the operation was successful, non-zero otherwise.
  */
 int kbase_mmu_hw_do_flush(struct kbase_device *kbdev, struct kbase_as *as,
 			  const struct kbase_mmu_hw_op_param *op_param);
+
 /**
  * kbase_mmu_hw_do_flush_locked - Issue a flush operation to the MMU.
  *
@@ -162,10 +166,27 @@ int kbase_mmu_hw_do_flush(struct kbase_device *kbdev, struct kbase_as *as,
  * Both mmu_hw_mutex and hwaccess_lock need to be held when calling this
  * function.
  *
- * Return: 0 if the operation was successful, non-zero otherwise.
+ * Return: Zero if the operation was successful, non-zero otherwise.
  */
 int kbase_mmu_hw_do_flush_locked(struct kbase_device *kbdev, struct kbase_as *as,
 				 const struct kbase_mmu_hw_op_param *op_param);
+
+/**
+ * kbase_mmu_hw_do_flush_on_gpu_ctrl - Issue a flush operation to the MMU.
+ *
+ * @kbdev:      Kbase device to issue the MMU operation on.
+ * @as:         Address space to issue the MMU operation on.
+ * @op_param:   Pointer to struct containing information about the MMU
+ *              operation to perform.
+ *
+ * Issue a flush operation on the address space as per the information
+ * specified inside @op_param. GPU command is used to flush the cache(s)
+ * instead of the MMU command.
+ *
+ * Return: Zero if the operation was successful, non-zero otherwise.
+ */
+int kbase_mmu_hw_do_flush_on_gpu_ctrl(struct kbase_device *kbdev, struct kbase_as *as,
+				      const struct kbase_mmu_hw_op_param *op_param);
 
 /**
  * kbase_mmu_hw_clear_fault - Clear a fault that has been previously reported by

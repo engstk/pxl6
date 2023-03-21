@@ -94,8 +94,8 @@ EXPORT_SYMBOL_GPL(gbms_chg_ev_adapter_s);
 static const char *gbms_get_code(const int index)
 {
 	const static char *codes[] = {"n", "s", "d", "l", "v", "vo", "p", "f",
-					"t", "dl", "st", "tc", "r", "w", "rs",
-					"n", "ny", "h", "hp", "ha"};
+				      "t", "dl", "st", "tc", "r", "w", "rs",
+				      "n", "ny", "h", "hp", "ha"};
 	const int len = ARRAY_SIZE(codes);
 
 	return (index >= 0 && index < len) ? codes[index] : "?";
@@ -725,10 +725,10 @@ void gbms_chg_stats_tier(struct gbms_ce_tier_stats *tier,
 }
 EXPORT_SYMBOL_GPL(gbms_chg_stats_tier);
 
- void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp,
-				ktime_t elap, int cc, union gbms_charger_state *chg_state,
-				enum gbms_msc_states_t msc_state, int soc_in,
-				struct gbms_ce_tier_stats *tier)
+ void gbms_stats_update_tier(int temp_idx, int ibatt_ma, int temp, ktime_t elap,
+			     int cc, union gbms_charger_state *chg_state,
+			     enum gbms_msc_states_t msc_state, int soc_in,
+			     struct gbms_ce_tier_stats *tier)
 {
 	const uint16_t icl_settled = chg_state->f.icl;
 
@@ -801,8 +801,8 @@ EXPORT_SYMBOL_GPL(gbms_stats_update_tier);
 
 /* Log only when elap != 0 */
 int gbms_tier_stats_cstr(char *buff, int size,
-				    const struct gbms_ce_tier_stats *tier_stat,
-				    bool verbose)
+			 const struct gbms_ce_tier_stats *tier_stat,
+			 bool verbose)
 {
 	const int soc_in = tier_stat->soc_in >> 8;
 	const long elap = tier_stat->time_fast + tier_stat->time_taper +

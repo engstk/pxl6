@@ -714,7 +714,8 @@ struct dw3000 {
 	/* Buffer for queued transfers */
 	char *msg_queue_buf;
 	char *msg_queue_buf_pos;
-
+	/* dw3000 thread clamp value  */
+	int min_clamp_value;
 	/* Insert new fields before this line */
 
 	/* Shared message protected by a mutex */

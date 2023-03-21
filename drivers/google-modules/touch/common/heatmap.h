@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
+#ifndef _HEATMAP_H_
+#define _HEATMAP_H_
+
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-v4l2.h>
@@ -53,3 +56,5 @@ void heatmap_remove(struct v4l2_heatmap *v4l2);
  * read_frame(..) provided by the driver to read the actual data.
  */
 void heatmap_read(struct v4l2_heatmap *v4l2, uint64_t timestamp);
+
+#endif // _HEATMAP_H_
