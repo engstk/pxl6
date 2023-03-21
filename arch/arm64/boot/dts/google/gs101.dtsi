@@ -469,6 +469,13 @@
 
 	acpm_mbox_test: mbox {
 		compatible = "google,acpm-mbox-test";
+		mfd-regulator-list-main =
+			<0x119 0x11C 0x11F 0x122
+			0x125 0x128 0x12B 0x134
+			0x14C 0x14E 0x151>;
+		mfd-regulator-list-sub =
+			<0x113 0x116 0x119 0x11C
+			0x11E 0x126 0x129 0x143>;
 	};
 
 	acpm {
@@ -496,7 +503,7 @@
 		dump-size = <0x3B000>;                  /* 236KB */
 		acpm-ipc-channel = <12>;
 		fvmap_addr = <0x31000>;
-		panic-action = <GO_WATCHDOG_ID>;
+		panic-action = <GO_PANIC_ID>;
 	};
 
 	acpm_stats {
@@ -665,6 +672,7 @@
 		/*	but refclk shouldn't be omitted */
 		phyclk_mux = "none";
 		phy_refclk = "phy_ref";
+		phy_ref_clock = <26000000>;
 
 		/*
 		 * if Main phy has the other phy,

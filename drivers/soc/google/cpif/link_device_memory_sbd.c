@@ -11,15 +11,14 @@
  */
 
 #include <soc/google/exynos-modem-ctrl.h>
+#include <soc/google/shm_ipc.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "link_device_memory.h"
 #include "include/sbd.h"
-#include <linux/shm_ipc.h>
 
 static void print_sbd_config(struct sbd_link_device *sl)
 {
-#ifdef DEBUG_MODEM_IF
 	int i, dir;
 	struct sbd_rb_channel *rb_ch;
 	struct sbd_rb_desc *rbd;
@@ -43,7 +42,6 @@ static void print_sbd_config(struct sbd_link_device *sl)
 				rbd->buff_size, rbd->payload_offset);
 		}
 	}
-#endif
 }
 
 /* sysfs */
@@ -120,19 +118,11 @@ static ssize_t status_show(struct device *dev,
 			"TX ch:%d len:%d buff_size:%d rp:%d wp:%d space:%d usage:%d\n",
 			rb_tx->ch, rb_tx->len, rb_rx->buff_size,
 			*rb_tx->rp, *rb_tx->wp, rb_space(rb_tx) + 1, rb_usage(rb_tx));
-
-		if (rb_rx->zerocopy)
-			count += scnprintf(&buf[count], PAGE_SIZE - count,
-				"RX ch:%d len:%d buff_size:%d rp:%d pre_rp:%d wp:%d, space:%d usage:%d\n",
-				rb_rx->ch, rb_rx->len, rb_rx->buff_size,
-				*rb_rx->rp, rb_rx->zdptr->pre_rp,
-				*rb_rx->wp, rb_space(rb_rx) + 1, rb_usage(rb_rx));
-		else
-			count += scnprintf(&buf[count], PAGE_SIZE - count,
-				"RX ch:%d len:%d buff_size:%d rp:%d wp:%d, space:%d usage:%d\n",
-				rb_rx->ch, rb_rx->len, rb_rx->buff_size,
-				*rb_rx->rp, *rb_rx->wp,
-				rb_space(rb_rx) + 1, rb_usage(rb_rx));
+		count += scnprintf(&buf[count], PAGE_SIZE - count,
+			"RX ch:%d len:%d buff_size:%d rp:%d wp:%d, space:%d usage:%d\n",
+			rb_rx->ch, rb_rx->len, rb_rx->buff_size,
+			*rb_rx->rp, *rb_rx->wp,
+			rb_space(rb_rx) + 1, rb_usage(rb_rx));
 	}
 
 	return count;
@@ -167,13 +157,6 @@ static void setup_link_attr(struct sbd_link_attr *link_attr, u16 id, u16 ch,
 	link_attr->buff_size[UL] = io_dev->ul_buffer_size;
 	link_attr->rb_len[DL] = io_dev->dl_num_buffers;
 	link_attr->buff_size[DL] = io_dev->dl_buffer_size;
-
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY)
-	if (io_dev->attrs & IO_ATTR_ZEROCOPY)
-		link_attr->zerocopy = true;
-	else
-		link_attr->zerocopy = false;
-#endif
 
 }
 
@@ -229,15 +212,6 @@ static unsigned int init_ctrl_tables(struct sbd_link_device *sl)
 		id++;
 	}
 
-#if !IS_ENABLED(CONFIG_MODEM_IF_QOS)
-	for (i = 0; i < sl->ld->mdm_data->num_iodevs; i++) {
-		int ch = iodevs[i]->ch;
-
-		if (sipc_ps_ch(ch))
-			sl->ch2id[ch] = sl->ch2id[QOS_HIPRIO];
-	}
-#endif
-
 	/* Finally, id has the number of actual link channels. */
 	return id;
 }
@@ -268,8 +242,6 @@ int init_sbd_link(struct sbd_link_device *sl)
 
 		ipc_dev->id = link_attr->id;
 		ipc_dev->ch = link_attr->ch;
-		atomic_set(&ipc_dev->config_done, 0);
-		ipc_dev->zerocopy = link_attr->zerocopy;
 
 		for (dir = 0; dir < ULDL; dir++) {
 			/*
@@ -279,7 +251,6 @@ int init_sbd_link(struct sbd_link_device *sl)
 
 			rb->sl = sl;
 			rb->lnk_hdr = link_attr->lnk_hdr;
-			rb->zerocopy = link_attr->zerocopy;
 			rb->more = false;
 			rb->total = 0;
 			rb->rcvd = 0;
@@ -288,7 +259,11 @@ int init_sbd_link(struct sbd_link_device *sl)
 			 * Initialize an SBD RB instance in the kernel space.
 			 */
 			rb->id = link_attr->id;
+#if IS_ENABLED(CONFIG_CH_EXTENSION)
+			rb->ch = link_attr->ch ?: SIPC_CH_EX_ID_PDP_0;
+#else
 			rb->ch = link_attr->ch ?: SIPC_CH_ID_PDP_0;
+#endif
 			rb->dir = dir;
 			rb->len = link_attr->rb_len[dir];
 			rb->buff_size = link_attr->buff_size[dir];
@@ -322,15 +297,6 @@ int init_sbd_link(struct sbd_link_device *sl)
 			rb->rb_ch->buff_pos_array_offset =
 				calc_offset(rb->buff_pos_array, sl->shmem);
 		}
-
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY)
-		/*
-		 * Setup zerocopy_adaptor if zerocopy ipc_dev
-		 */
-		ret = setup_zerocopy_adaptor(ipc_dev);
-		if (ret < 0)
-			return ret;
-#endif
 	}
 
 	print_sbd_config(sl);
@@ -403,17 +369,9 @@ int create_sbd_mem_map(struct sbd_link_device *sl)
 			for (idx = 0; idx < rb_len; idx++)
 				rb->buff[idx] = rb->buff_rgn + (idx * rb_buff_size);
 
-			mif_err("RB[%d:%d][%s] buff_rgn {addr:0x%pK offset:%d size:%u}\n",
+			mif_info("RB[%d:%d][%s] buff_rgn {addr:0x%pK offset:%d size:%u}\n",
 				i, sbd_id2ch(sl, i), udl_str(dir), rb->buff_rgn,
 				calc_offset(rb->buff_rgn, sl->shmem), (rb_len * rb_buff_size));
-
-#if IS_ENABLED(CONFIG_SBD_BOOTLOG)
-			if (rb->buff_rgn + (rb_len * rb_buff_size) >=
-				sl->shmem + sl->shmem_size - SHMEM_BOOTSBDLOG_SIZE) {
-				mif_err("sbd buffer break boot log area\n");
-				return -ENOMEM;
-			}
-#endif
 
 			rb->rp = &sl->rp[dir][i];
 			rb->wp = &sl->wp[dir][i];
@@ -455,7 +413,6 @@ int create_sbd_link_device(struct link_device *ld, struct sbd_link_device *sl,
 	sl->zmb_offset = shmem_size;
 
 	sl->num_channels = init_ctrl_tables(sl);
-	sl->reset_zerocopy_done = 1;
 
 	ret = create_sbd_mem_map(sl);
 	if (ret < 0) {
@@ -484,14 +441,6 @@ int create_sbd_link_device(struct link_device *ld, struct sbd_link_device *sl,
 		mif_err("sysfs_create_group() sbd_group error %d\n", ret);
 		return ret;
 	}
-
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY)
-	ret = sysfs_create_group(&sl->ld->dev->kobj, &zerocopy_group);
-	if (ret != 0) {
-		mif_err("sysfs_create_group() zerocopy_group error %d\n", ret);
-		return ret;
-	}
-#endif
 
 	mif_info("Complete!!\n");
 
@@ -621,7 +570,7 @@ static inline void set_skb_priv(struct sbd_ring_buffer *rb, struct sk_buff *skb)
 
 	/* Record the IO device, the link device, etc. into &skb->cb */
 	if (sipc_ps_ch(rb->ch)) {
-		unsigned int ch = (rb->buff_len_array[out] >> 16) & 0xffff;
+		unsigned int ch = (rb->buff_len_array[out] >> 16) & 0xff;
 
 		skbpriv(skb)->iod = link_get_iod_with_channel(rb->ld, ch);
 		skbpriv(skb)->ld = rb->ld;
@@ -635,23 +584,27 @@ static inline void set_skb_priv(struct sbd_ring_buffer *rb, struct sk_buff *skb)
 	}
 }
 
-struct sk_buff *sbd_pio_rx(struct sbd_ring_buffer *rb)
+int sbd_pio_rx(struct sbd_ring_buffer *rb, struct sk_buff **skb)
 {
-	struct sk_buff *skb;
 	unsigned int qlen = rb->len;
 	unsigned int out = *rb->rp;
 
-	skb = recv_data(rb, out);
-	if (unlikely(!skb))
-		return NULL;
+	if (out >= qlen) {
+		mif_err("out value exceeds ring buffer size\n");
+		return -EFAULT;
+	}
 
-	set_lnk_hdr(rb, skb);
+	*skb = recv_data(rb, out);
+	if (unlikely(!(*skb)))
+		return -ENOMEM;
 
-	set_skb_priv(rb, skb);
+	set_lnk_hdr(rb, *skb);
 
-	check_more(rb, skb);
+	set_skb_priv(rb, *skb);
+
+	check_more(rb, *skb);
 
 	*rb->rp = circ_new_ptr(qlen, out, 1);
 
-	return skb;
+	return 0;
 }

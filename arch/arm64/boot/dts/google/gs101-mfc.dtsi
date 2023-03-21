@@ -24,9 +24,6 @@
 
 		samsung,tzmp;
 
-		/* for F/W buffer */
-		memory-region = <&mfc_fw_rmem>;
-
 		/* MFC version */
 		/* ip_ver is set in gs101-a0.dts and gs101-b0.dts */
 
@@ -186,6 +183,9 @@
 
 		/* need control for mfc idle clock */
 		idle_clk_ctrl = <0>;
+
+		/* Encoder RGB CSC formula by VUI from F/W */
+		enc_rgb_csc_by_fw = <1>;
 
 		/* Sub nodes for MFC core */
 		#address-cells = <2>;

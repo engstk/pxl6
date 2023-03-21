@@ -141,6 +141,9 @@ static unsigned int sink_discovery_delay_ms;
 /* Callback for data_active changes */
 void (*data_active_callback)(void *data_active_payload);
 void *data_active_payload;
+/* Callback for orientation changes */
+void (*orientation_callback)(void *orientation_payload);
+void *orientation_payload;
 
 struct tcpci {
 	struct device *dev;
@@ -492,6 +495,13 @@ void register_data_active_callback(void (*callback)(void *data_active_payload), 
 }
 EXPORT_SYMBOL_GPL(register_data_active_callback);
 
+void register_orientation_callback(void (*callback)(void *orientation_payload), void *data)
+{
+	orientation_callback = callback;
+	orientation_payload = data;
+}
+EXPORT_SYMBOL_GPL(register_orientation_callback);
+
 #ifdef CONFIG_GPIOLIB
 static int ext_bst_en_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
@@ -824,6 +834,7 @@ static void enable_vbus_work(struct kthread_work *work)
 	enum gbms_charger_modes vote = 0xff;
 	int ret;
 
+	logbuffer_log(chip->log, "%s", __func__);
 	if (IS_ERR_OR_NULL(chip->charger_mode_votable)) {
 		chip->charger_mode_votable = gvotable_election_get_handle(GBMS_MODE_VOTABLE);
 		if (IS_ERR_OR_NULL(chip->charger_mode_votable)) {
@@ -1331,8 +1342,10 @@ static irqreturn_t _max77759_irq_locked(struct max77759_plat *chip, u16 status,
 		if (chip->contaminant_detection && tcpm_is_toggling(tcpci->port)) {
 			ret = process_contaminant_alert(chip->contaminant, false, true,
 							&contaminant_cc_update_handled);
-			if (ret < 0)
+			if (ret < 0) {
+				mutex_unlock(&chip->rc_lock);
 				goto reschedule;
+			}
 			/*
 			 * Invoke TCPM when CC update not related to contaminant
 			 * detection.
@@ -1734,6 +1747,12 @@ static int max77759_usb_set_orientation(struct typec_switch *sw, enum typec_orie
 		      "Failed" : "Succeeded", polarity);
 	dev_info(chip->dev, "TCPM_DEBUG %s setting polarity USB %d", ret < 0 ? "Failed" :
 		 "Succeeded", polarity);
+
+	chip->polarity = polarity;
+
+	if (orientation_callback)
+		(*orientation_callback)(orientation_payload);
+
 	return ret;
 }
 
@@ -2360,7 +2379,7 @@ static int max77759_probe(struct i2c_client *client,
 {
 	int ret, i;
 	struct max77759_plat *chip;
-	char *usb_psy_name;
+	char *usb_psy_name, *chg_psy_name;
 	struct device_node *dn, *ovp_dn, *conn;
 	u8 power_status;
 	u16 device_id;
@@ -2385,13 +2404,6 @@ static int max77759_probe(struct i2c_client *client,
 		return PTR_ERR(chip->data.regmap);
 	}
 
-	chip->charger_mode_votable = gvotable_election_get_handle(GBMS_MODE_VOTABLE);
-	if (IS_ERR_OR_NULL(chip->charger_mode_votable)) {
-		dev_err(&client->dev, "TCPCI: GBMS_MODE_VOTABLE get failed: %ld",
-			PTR_ERR(chip->charger_mode_votable));
-		return -EPROBE_DEFER;
-	}
-
 	kthread_init_work(&chip->reenable_auto_ultra_low_power_mode_work,
 			  reenable_auto_ultra_low_power_mode_work_item);
 	alarm_init(&chip->reenable_auto_ultra_low_power_mode_alarm, ALARM_BOOTTIME,
@@ -2400,6 +2412,18 @@ static int max77759_probe(struct i2c_client *client,
 	if (!dn) {
 		dev_err(&client->dev, "of node not found\n");
 		return -EINVAL;
+	}
+
+	chip->charger_mode_votable = gvotable_election_get_handle(GBMS_MODE_VOTABLE);
+	if (IS_ERR_OR_NULL(chip->charger_mode_votable)) {
+		dev_err(&client->dev, "TCPCI: GBMS_MODE_VOTABLE get failed: %ld\n",
+			PTR_ERR(chip->charger_mode_votable));
+		chg_psy_name = (char *)of_get_property(dn, "chg-psy-name", NULL);
+		/*
+		 * Defer when chg psy is set. This implies mode votable should be present as well.
+		 */
+		if (chg_psy_name)
+			return -EPROBE_DEFER;
 	}
 
 	chip->in_switch_gpio = -EINVAL;

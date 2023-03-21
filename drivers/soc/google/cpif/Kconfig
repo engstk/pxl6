@@ -14,12 +14,14 @@ config SEC_MODEM_S5000AP
 	select MCU_IPC
 	select SHM_IPC
 	select CP_PMUCAL
+	select CPIF_PAGE_RECYCLING
 	default n
 
 config SEC_MODEM_S5100
 	tristate "Exynos S51xx"
 	select BOOT_DEVICE_SPI
 	select LINK_DEVICE_PCIE
+	select CPIF_PAGE_RECYCLING
 	default n
 
 menu "Configuration Description"
@@ -47,10 +49,6 @@ config LINK_DEVICE_WITH_SBD_ARCH
 	tristate "Link device with the SBD architecture from MIPI-LLI"
 	default n
 
-config CP_ZEROCOPY
-	tristate "Support zero memory copy"
-	default n
-
 config CP_PKTPROC
 	tristate "Support packet processor"
 	default n
@@ -69,10 +67,6 @@ config LINK_DEVICE_SHMEM
 
 config LINK_DEVICE_PCIE
 	tristate "modem driver link device PCIe"
-	default n
-
-config LINK_CONTROL_MSG_IOSM
-	tristate "Control Message Type: IPC Over Shared Memory (IOSM)"
 	default n
 
 config CP_SECURE_BOOT
@@ -101,27 +95,24 @@ config HW_REV_DETECT
 	default n
 
 config MODEM_IF_QOS
-	tristate "Implement QoS for sbd"
+	tristate "Implement QoS"
 	default n
 	help
-	  This enables QoS for SBD model
+	  This enables QoS
 
 config MODEM_IF_LEGACY_QOS
 	tristate "Implement QoS for legacy buffer"
+	select MODEM_IF_QOS
 	default n
 	help
 	  This enables QoS for legacy buffer model
 
 config SUSPEND_DURING_VOICE_CALL
-	tristate "control wake_lock by voice call start/end notification"
+	bool "control wake_lock by voice call start/end notification"
 	depends on LINK_DEVICE_PCIE
 	default n
 	help
 	  This enables AP suspend during PCM over PCIE
-
-config CACHED_LEGACY_RAW_RX_BUFFER
-	tristate "Set cached RX RAW buffer for high data performance"
-	default n
 
 config CPIF_TP_MONITOR
 	tristate "Support CP network throughput monitor"
@@ -129,12 +120,19 @@ config CPIF_TP_MONITOR
 	help
 	  This enables CP network throughput monitor
 
-config LINK_DEVICE_PCIE_S2MPU
-	tristate "Use PCIE S2MPU"
+config LINK_DEVICE_PCIE_IOCC
+	bool "Use PCIE IOCC"
 	depends on LINK_DEVICE_PCIE
 	default n
 	help
-	  Gate some addresses AP and CP shared
+	  This enables PCIe IOCC
+
+config LINK_DEVICE_PCIE_IOMMU
+	bool "Use PCIE IOMMU"
+	depends on LINK_DEVICE_PCIE && EXYNOS_PCIE_IOMMU
+	default n
+	help
+	  This enables PCIe IOMMU
 
 config CPIF_CHECK_SJTAG_STATUS
 	tristate "Check secure JTAG status to disable CP memory dump"
@@ -149,11 +147,18 @@ config CP_LCD_NOTIFIER
 	  This enables LCD notifier for CP
 
 config LINK_DEVICE_PCIE_GPIO_WA
-	tristate "Workaround for discarded GPIOs"
+	bool "Workaround for discarded GPIOs"
 	depends on LINK_DEVICE_PCIE
 	default n
 	help
 	  Use a GPIO for the other purpose instead
+
+config CP_WRESET_WA
+	bool "CP warm reset WA due to WRSTBI disabled"
+	depends on LINK_DEVICE_PCIE
+	default n
+	help
+	  CP warm reset WA
 
 config EXYNOS_DIT
 	tristate "Enable DIT"
@@ -161,12 +166,48 @@ config EXYNOS_DIT
 	help
 	  Enable DIT (Direct Internet Packet Transfer)
 
-config CP_WRESET_WA
-    tristate "CP warm reset WA due to WRSTBI disabled"
-    depends on LINK_DEVICE_PCIE
-    default n
-    help
-      CP warm reset WA
+config EXYNOS_DIT_VERSION
+	hex "DIT version"
+	depends on EXYNOS_DIT
+	default 0x02010000
+	help
+	  DIT version
+
+config CPIF_DIRECT_DM
+	tristate "Enable direct dm path"
+	default n
+	help
+	  This enables direct dm path
+
+config CH_EXTENSION
+	tristate "Enable Channel Extension"
+	default n
+	help
+	  Enable Channel Extension
+
+config CPIF_VENDOR_HOOK
+	tristate "Enable Android vendor hook"
+	default n
+	help
+	  This enables Android vendor hook
+
+config CPIF_PAGE_RECYCLING
+	tristate "Enable page recycling"
+	default n
+	help
+	  This enables page recycling to improve alloc overhead
+
+config CP_PKTPROC_CLAT
+	tristate "Enable HW PKTPROC CLAT"
+	default n
+	help
+	  Enable HW pktproc clat
+
+config CP_PKTPROC_LRO
+	tristate "Enable HW PKTPROC LRO"
+	default n
+	help
+	  Enable HW pktproc LRO
 
 config CP_THERMAL
     tristate "Enable CP thermal zones"
@@ -174,12 +215,6 @@ config CP_THERMAL
     help
       Enables support for reporting CP temperature sensor data to kernel thermal
       framework.
-
-config CH_EXTENSION
-	tristate "Enable Channel Extension"
-	default n
-	help
-	  Enable Channel Extension
 
 endmenu
 endif

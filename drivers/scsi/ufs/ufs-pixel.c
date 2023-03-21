@@ -571,6 +571,30 @@ static void __store_cmd_log(struct ufs_hba *hba, u8 event, u8 lun,
 	entry->queue_eh_work = queue_eh_work;
 }
 
+static void pixel_ufs_trace_fdeviceinit(struct ufs_hba *hba,
+					struct ufshcd_lrb *lrbp, u8 opcode)
+{
+	struct exynos_ufs *ufs = to_exynos_ufs(hba);
+	struct latency_metrics *metric = NULL;
+
+	if (opcode == UPIU_QUERY_OPCODE_SET_FLAG)
+		metric = &ufs->power_stats.fdevinit_set;
+	else if (opcode == UPIU_QUERY_OPCODE_READ_FLAG)
+		metric = &ufs->power_stats.fdevinit_read;
+
+	if (metric) {
+		s64 delta = ktime_to_us(ktime_sub(lrbp->compl_time_stamp,
+						  lrbp->issue_time_stamp));
+
+		WARN_ON(delta < 0);
+
+		metric->count++;
+		metric->time_spent_us += delta;
+		if (delta > metric->max_latency_us)
+			metric->max_latency_us = delta;
+	}
+}
+
 static void pixel_ufs_trace_upiu_cmd(struct ufs_hba *hba,
 		struct ufshcd_lrb *lrbp, bool is_start)
 {
@@ -598,6 +622,9 @@ static void pixel_ufs_trace_upiu_cmd(struct ufs_hba *hba,
 			event = (is_start) ? EVENT_QUERY_SEND : EVENT_QUERY_COMPL;
 			opcode = hba->dev_cmd.query.request.upiu_req.opcode;
 			idn = hba->dev_cmd.query.request.upiu_req.idn;
+			if (idn == QUERY_FLAG_IDN_FDEVICEINIT &&
+			    event == EVENT_QUERY_COMPL)
+				pixel_ufs_trace_fdeviceinit(hba, lrbp, opcode);
 		}
 	}
 
@@ -749,11 +776,13 @@ static void pixel_ufs_compl_command(void *data, struct ufs_hba *hba,
 static void pixel_ufs_prepare_command(void *data, struct ufs_hba *hba,
 			struct request *rq, struct ufshcd_lrb *lrbp, int *err)
 {
+	struct exynos_ufs *ufs = to_exynos_ufs(hba);
+
 	u8 opcode;
 
 	*err = 0;
 
-	if (!(rq->cmd_flags & (REQ_META | REQ_IDLE)))
+	if (!(rq->cmd_flags & (REQ_META | REQ_IDLE)) && !ufs->always_use_wb)
 		return;
 
 	if (hba->dev_info.wspecversion <= 0x300)
@@ -1099,6 +1128,41 @@ static ssize_t uic_link_state_show(struct device *dev,
 				hba->uic_link_state));
 }
 
+static ssize_t always_use_wb_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	struct exynos_ufs *ufs = to_exynos_ufs(hba);
+	u32 value = ufs->always_use_wb ? 1 : 0;
+
+	return snprintf(buf, PAGE_SIZE, "%x\n", value);
+}
+static ssize_t always_use_wb_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	struct exynos_ufs *ufs = to_exynos_ufs(hba);
+	bool always_use_wb;
+
+	if (kstrtobool(buf, &always_use_wb))
+		return -EINVAL;
+
+	if (always_use_wb != ufs->always_use_wb) {
+		enum query_opcode opcode = always_use_wb ?
+						UPIU_QUERY_OPCODE_SET_FLAG :
+						UPIU_QUERY_OPCODE_CLEAR_FLAG;
+		u8 index = ufshcd_wb_get_query_index(hba);
+
+		ufshcd_query_flag_retry(hba, opcode,
+				QUERY_FLAG_IDN_WB_BUFF_FLUSH_DURING_HIBERN8,
+				index, NULL);
+		ufs->always_use_wb = always_use_wb;
+	}
+
+	return count;
+}
+
 static DEVICE_ATTR_RO(vendor);
 static DEVICE_ATTR_RO(model);
 static DEVICE_ATTR_RO(rev);
@@ -1108,6 +1172,7 @@ static DEVICE_ATTR_RW(manual_gc_hold);
 static DEVICE_ATTR_RO(host_capabilities);
 static DEVICE_ATTR_RO(curr_dev_pwr_mode);
 static DEVICE_ATTR_RO(uic_link_state);
+static DEVICE_ATTR_RW(always_use_wb);
 SLOWIO_ATTR_RW(read, PIXEL_SLOWIO_READ);
 SLOWIO_ATTR_RW(write, PIXEL_SLOWIO_WRITE);
 SLOWIO_ATTR_RW(unmap, PIXEL_SLOWIO_UNMAP);
@@ -1123,6 +1188,7 @@ static struct attribute *pixel_sysfs_ufshcd_attrs[] = {
 	&dev_attr_host_capabilities.attr,
 	&dev_attr_curr_dev_pwr_mode.attr,
 	&dev_attr_uic_link_state.attr,
+	&dev_attr_always_use_wb.attr,
 	&ufs_slowio_read_us.attr.attr,
 	&ufs_slowio_read_cnt.attr.attr,
 	&ufs_slowio_write_us.attr.attr,
@@ -1667,6 +1733,41 @@ static const struct attribute_group pixel_sysfs_power_info_group = {
 	.attrs = pixel_sysfs_power_info,
 };
 
+#define PIXEL_POWER_STATS_ATTR(_name, _metric, _var)			\
+static ssize_t _name##_show(struct device *dev,				\
+	struct device_attribute *attr, char *buf)			\
+{									\
+	struct ufs_hba *hba = dev_get_drvdata(dev);			\
+	struct exynos_ufs *ufs = to_exynos_ufs(hba);			\
+	return sprintf(buf, "%llu\n", ufs->power_stats._metric._var);	\
+}									\
+static DEVICE_ATTR_RO(_name)
+
+PIXEL_POWER_STATS_ATTR(fdevinit_set_count, fdevinit_set, count);
+PIXEL_POWER_STATS_ATTR(fdevinit_set_time_spent_us, fdevinit_set, time_spent_us);
+PIXEL_POWER_STATS_ATTR(fdevinit_set_max_latency_us, fdevinit_set,
+		       max_latency_us);
+PIXEL_POWER_STATS_ATTR(fdevinit_read_count, fdevinit_read, count);
+PIXEL_POWER_STATS_ATTR(fdevinit_read_time_spent_us, fdevinit_read,
+		       time_spent_us);
+PIXEL_POWER_STATS_ATTR(fdevinit_read_max_latency_us, fdevinit_read,
+		       max_latency_us);
+
+static struct attribute *pixel_sysfs_power_stats[] = {
+	&dev_attr_fdevinit_set_count.attr,
+	&dev_attr_fdevinit_set_time_spent_us.attr,
+	&dev_attr_fdevinit_set_max_latency_us.attr,
+	&dev_attr_fdevinit_read_count.attr,
+	&dev_attr_fdevinit_read_time_spent_us.attr,
+	&dev_attr_fdevinit_read_max_latency_us.attr,
+	NULL,
+};
+
+static const struct attribute_group pixel_sysfs_power_stats_group = {
+	.name = "power_stats",
+	.attrs = pixel_sysfs_power_stats,
+};
+
 static const struct attribute_group *pixel_ufs_sysfs_groups[] = {
 	&pixel_sysfs_group,
 	&pixel_sysfs_req_stats_group,
@@ -1675,6 +1776,7 @@ static const struct attribute_group *pixel_ufs_sysfs_groups[] = {
 	&pixel_sysfs_ufs_stats_group,
 	&pixel_sysfs_hc_register_ifc_group,
 	&pixel_sysfs_power_info_group,
+	&pixel_sysfs_power_stats_group,
 	NULL,
 };
 
@@ -1746,7 +1848,9 @@ int pixel_init(struct ufs_hba *hba)
 	int ret;
 
 	memset(&ufs->ufs_stats, 0, sizeof(struct pixel_ufs_stats));
+	memset(&ufs->power_stats, 0, sizeof(struct pixel_power_stats));
 	ufs->ufs_stats.hibern8_flag = false;
+	ufs->always_use_wb = false;
 
 	ret = register_trace_android_vh_ufs_prepare_command(
 				pixel_ufs_prepare_command, NULL);

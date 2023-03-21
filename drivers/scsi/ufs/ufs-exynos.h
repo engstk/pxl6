@@ -162,6 +162,9 @@ struct exynos_ufs {
 	u64 slowio_min_us;
 	u64 slowio[PIXEL_SLOWIO_OP_MAX][PIXEL_SLOWIO_SYS_MAX];
 
+	/* pixel ufs power related statistics */
+	struct pixel_power_stats power_stats;
+
 	/* Pointer to GSA device */
 	struct device *gsa_dev;
 
@@ -171,6 +174,9 @@ struct exynos_ufs {
 	/* ufs command logging */
 	u8 enable_cmd_log;
 	struct pixel_cmd_log cmd_log;
+
+	/* Used to enable WB on all write requests */
+	bool always_use_wb;
 };
 
 static inline struct exynos_ufs *to_exynos_ufs(struct ufs_hba *hba)
@@ -200,4 +206,5 @@ static inline void pixel_ufs_crypto_resume(struct ufs_hba *hba)
 {
 }
 #endif /* !CONFIG_SCSI_UFS_CRYPTO */
+extern u32 gs_chipid_get_revision(void);
 #endif /* _UFS_EXYNOS_H_ */

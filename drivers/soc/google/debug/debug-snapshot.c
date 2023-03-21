@@ -319,7 +319,7 @@ void dbg_snapshot_output(void)
 	for (i = 0; i < ARRAY_SIZE(dss_items); i++) {
 		if (!dss_items[i].entry.enabled)
 			continue;
-		pr_info("%-16s: phys:%pa / virt:%pK / size:0x%zx / en:%d\n",
+		pr_info("%-16s: phys:0x%pa / virt:0x%pK / size:0x%zx / en:%d\n",
 				dss_items[i].name,
 				&dss_items[i].entry.paddr,
 				(void *) dss_items[i].entry.vaddr,
@@ -389,9 +389,12 @@ static void dbg_snapshot_fixmap(void)
 		}
 	}
 
-	dss_log = (struct dbg_snapshot_log *)(dss_items[DSS_ITEM_KEVENTS_ID].entry.vaddr);
-	dss_itmon = (struct itmon_logs *)(dss_items[DSS_ITEM_ITMON_ID].entry.vaddr);
-	dss_itmon->magic = DSS_ITMON_MAGIC_INITIALIZED;
+	if (dss_items[DSS_ITEM_KEVENTS_ID].entry.enabled)
+		dss_log = (struct dbg_snapshot_log *)(dss_items[DSS_ITEM_KEVENTS_ID].entry.vaddr);
+	if (dss_items[DSS_ITEM_ITMON_ID].entry.enabled) {
+		dss_itmon = (struct itmon_logs *)(dss_items[DSS_ITEM_ITMON_ID].entry.vaddr);
+		dss_itmon->magic = DSS_ITMON_MAGIC_INITIALIZED;
+	}
 
 	/*  set fake translation to virtual address to debug trace */
 	dss_info.info_event = dss_log;
@@ -534,6 +537,27 @@ static ssize_t dss_dpm_none_dump_mode_store(struct device *dev,
 
 DEVICE_ATTR_RW(dss_dpm_none_dump_mode);
 
+static ssize_t in_warm_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%sable\n", dss_desc.in_warm ? "en" : "dis");
+}
+
+static ssize_t in_warm_store(struct device *dev, struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	unsigned long val;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &val);
+
+	if (!ret)
+		dss_desc.in_warm = !!val;
+
+	return count;
+}
+
+DEVICE_ATTR_RW(in_warm);
+
 static void dbg_snapshot_set_slcdump_status(void)
 {
 	int i;
@@ -568,6 +592,7 @@ static void dbg_snapshot_set_slcdump_status(void)
 
 static struct attribute *dss_sysfs_attrs[] = {
 	&dev_attr_dss_dpm_none_dump_mode.attr,
+	&dev_attr_in_warm.attr,
 	NULL,
 };
 
@@ -602,6 +627,7 @@ static int dbg_snapshot_probe(struct platform_device *pdev)
 	dbg_snapshot_set_slcdump_status();
 
 	dbg_snapshot_set_enable(true);
+	dbg_snapshot_start_log();
 
 	if (sysfs_create_groups(&pdev->dev.kobj, dss_sysfs_groups))
 		dev_err(dss_desc.dev, "fail to register debug-snapshot sysfs\n");

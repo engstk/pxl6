@@ -57,6 +57,9 @@
 #include <linux/timer.h>
 #include <linux/wait.h>
 #include <linux/freezer.h>
+#include <uapi/linux/sched/types.h>
+
+#include <soc/google/pkvm-s2mpu.h>
 
 /* These are the possible values for the status field from the specification */
 enum eh_cdesc_status {
@@ -108,9 +111,9 @@ static LIST_HEAD(eh_dev_list);
 static DEFINE_SPINLOCK(eh_dev_list_lock);
 
 static DECLARE_WAIT_QUEUE_HEAD(eh_compress_wait);
-static unsigned int eh_default_fifo_size = 256;
+static unsigned int eh_default_fifo_size = 512;
 
-#define EH_SW_FIFO_SIZE	(1 << 14)
+#define EH_SW_FIFO_SIZE	(1 << 16)
 
 #define first_to_eh_request(head) (list_entry((head)->prev, \
 					      struct eh_request, list))
@@ -490,6 +493,7 @@ static void flush_sw_fifo(struct eh_device *eh_dev)
 	list_splice(&list, &fifo->head);
 	fifo->count -= nr_processed;
 	spin_unlock(&fifo->lock);
+	clear_eh_congested();
 }
 
 static void refill_hw_fifo(struct eh_device *eh_dev)
@@ -508,6 +512,7 @@ static void refill_hw_fifo(struct eh_device *eh_dev)
 		}
 	}
 	spin_unlock(&fifo->lock);
+	clear_eh_congested();
 }
 
 static irqreturn_t eh_error_irq(int irq, void *data)
@@ -622,7 +627,6 @@ static int eh_process_completed_descriptor(struct eh_device *eh_dev,
 	/* set the descriptor back to IDLE */
 	desc->status = EH_CDESC_IDLE;
 	atomic_dec(&eh_dev->nr_request);
-	clear_eh_congested();
 
 	update_fifo_complete_index(eh_dev);
 	return ret;
@@ -677,7 +681,12 @@ static int eh_comp_thread(void *data)
 	struct eh_device *eh_dev = data;
 	DEFINE_WAIT(wait);
 	int nr_processed = 0;
+	struct sched_attr attr = {
+		.sched_policy = SCHED_NORMAL,
+		.sched_nice = -10,
+	};
 
+	WARN_ON_ONCE(sched_setattr_nocheck(current, &attr) != 0);
 	current->flags |= PF_MEMALLOC;
 
 	while (!kthread_should_stop()) {
@@ -989,7 +998,7 @@ static ssize_t nr_stall_show(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	struct eh_device *eh_dev = container_of(kobj, struct eh_device, kobj);
 
-	return sysfs_emit(buf, "%l\n", atomic64_read(&eh_dev->nr_stall));
+	return sysfs_emit(buf, "%llu\n", atomic64_read(&eh_dev->nr_stall));
 }
 EH_ATTR_RO(nr_stall);
 
@@ -1125,10 +1134,13 @@ static void eh_setup_dcmd(struct eh_device *eh_dev, unsigned int index,
 
 	src_data = (__ffs(alignment) - 5) << EH_DCMD_BUF_SIZE_SHIFT;
 	src_data |= src_paddr;
+
+	/*
+	 * Only BUF0 is using now so don't set rest of buffers for performance.
+	 * Later, if multiple buffers want to be supported, we need to revisit
+	 * here.
+	 */
 	eh_write_register(eh_dev, EH_REG_DCMD_BUF0(index), src_data);
-	eh_write_register(eh_dev, EH_REG_DCMD_BUF1(index), 0);
-	eh_write_register(eh_dev, EH_REG_DCMD_BUF2(index), 0);
-	eh_write_register(eh_dev, EH_REG_DCMD_BUF3(index), 0);
 
 	dst_data = page_to_phys(dst_page);
 	dst_data |= ((unsigned long)EH_DCMD_PENDING)
@@ -1239,6 +1251,18 @@ void eh_destroy(struct eh_device *eh_dev)
 }
 EXPORT_SYMBOL(eh_destroy);
 
+static int eh_s2mpu_suspend(struct eh_device *eh_dev)
+{
+	return (IS_ENABLED(CONFIG_PKVM_S2MPU) && eh_dev->s2mpu)
+		? pkvm_s2mpu_suspend(eh_dev->s2mpu) : 0;
+}
+
+static int eh_s2mpu_resume(struct eh_device *eh_dev)
+{
+	return (IS_ENABLED(CONFIG_PKVM_S2MPU) && eh_dev->s2mpu)
+		? pkvm_s2mpu_resume(eh_dev->s2mpu) : 0;
+}
+
 #ifdef CONFIG_OF
 static int eh_of_probe(struct platform_device *pdev)
 {
@@ -1248,7 +1272,20 @@ static int eh_of_probe(struct platform_device *pdev)
 	int error_irq = 0;
 	unsigned short quirks = 0;
 	struct clk *clk;
+	struct device *s2mpu = NULL;
 	int sw_fifo_size = EH_SW_FIFO_SIZE;
+
+	if (IS_ENABLED(CONFIG_PKVM_S2MPU)) {
+		s2mpu = pkvm_s2mpu_of_parse(&pdev->dev);
+		if (IS_ERR(s2mpu)) {
+			dev_err(&pdev->dev, "pkvm_s2mpu_of_parse returned: %ld\n",
+				PTR_ERR(s2mpu));
+			return PTR_ERR(s2mpu);
+		}
+		if (s2mpu && !pkvm_s2mpu_ready(s2mpu)) {
+			return -EPROBE_DEFER;
+		}
+	}
 
 	pr_info("starting probing\n");
 
@@ -1291,6 +1328,11 @@ static int eh_of_probe(struct platform_device *pdev)
 	if (ret)
 		goto free_ehdev;
 
+	eh_dev->s2mpu = s2mpu;
+	ret = eh_s2mpu_resume(eh_dev);
+	if (ret)
+		dev_err(&pdev->dev, "could not resume s2mpu: %d", ret);
+
 	eh_dev->clk = clk;
 	platform_set_drvdata(pdev, eh_dev);
 
@@ -1329,6 +1371,7 @@ static int eh_suspend(struct device *dev)
 {
 	unsigned long data;
 	struct eh_device *eh_dev = dev_get_drvdata(dev);
+	int ret;
 
 	/* check pending work */
 	if (atomic_read(&eh_dev->nr_request) > 0) {
@@ -1348,6 +1391,11 @@ static int eh_suspend(struct device *dev)
 
 	/* disable EH clock */
 	clk_disable_unprepare(eh_dev->clk);
+
+	ret = eh_s2mpu_suspend(eh_dev);
+	if (ret)
+		dev_err(dev, "could not suspend s2mpu: %d", ret);
+
 	dev_dbg(dev, "EH suspended\n");
 
 	return 0;
@@ -1356,6 +1404,11 @@ static int eh_suspend(struct device *dev)
 static int eh_resume(struct device *dev)
 {
 	struct eh_device *eh_dev = dev_get_drvdata(dev);
+	int ret;
+
+	ret = eh_s2mpu_resume(eh_dev);
+	if (ret)
+		dev_err(dev, "could not resume s2mpu: %d", ret);
 
 	/* re-enable EH clock */
 	clk_prepare_enable(eh_dev->clk);

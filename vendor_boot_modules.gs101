@@ -21,13 +21,13 @@ bbd.ko
 bc_max77759.ko
 bcm47765.ko
 bcm_dbg.ko
-bigocean.ko
 boot_control_sysfs.ko
 boot_device_spi.ko
 clk_exynos.ko
 cmupmucal.ko
 cp_thermal_zone.ko
 cpif.ko
+cpif_page.ko
 dbgcore-dump.ko
 debug-reboot.ko
 debug-snapshot-debug-kinfo.ko
@@ -43,8 +43,7 @@ exynos-acme.ko
 exynos-adv-tracer-s2d.ko
 exynos-adv-tracer.ko
 exynos-bcm_dbg-dump.ko
-exynos-bts.ko
-exynos-btsopsgs101.ko
+bts.ko
 exynos-coresight-etm.ko
 exynos-coresight.ko
 exynos-cpuhp.ko
@@ -78,9 +77,10 @@ google_dual_batt_gauge.ko
 governor_memlat.ko
 gpu_cooling.ko
 gs-chipid.ko
-gs101-itmon.ko
+itmon.ko
 gs101_spmic_thermal.ko
-gs101_thermal.ko
+gs_thermal.ko
+pixel_metrics.ko
 gs_acpm.ko
 gsa.ko
 gsa_gsc.ko
@@ -92,6 +92,7 @@ heatmap.ko
 i2c-acpm.ko
 i2c-dev.ko
 i2c-exynos5.ko
+kernel-top.ko
 keycombo.ko
 keydebug.ko
 logbuffer.ko
@@ -141,7 +142,7 @@ s2mpg10-regulator.ko
 s2mpg11-mfd.ko
 s2mpg11-powermeter.ko
 s2mpg11-regulator.ko
-s2mpg1x-gpio.ko
+s2mpg1x-gpio-gs101.ko
 s2mpu.ko
 s3c2410_wdt.ko
 samsung-dma.ko

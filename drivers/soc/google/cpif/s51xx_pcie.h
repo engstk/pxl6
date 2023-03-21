@@ -17,7 +17,12 @@ extern int exynos_pcie_register_event(struct exynos_pcie_register_event *reg);
 extern int exynos_pcie_deregister_event(struct exynos_pcie_register_event *reg);
 
 extern void exynos_pcie_rc_register_dump(int ch_num);
+extern void exynos_pcie_rc_print_msi_register(int ch_num);
 extern int exynos_pcie_rc_set_outbound_atu(int ch_num, u32 target_addr, u32 offset, u32 size);
+extern bool exynos_pcie_rc_get_cpl_timeout_state(int ch_num);
+extern void exynos_pcie_rc_set_cpl_timeout_state(int ch_num, bool recovery);
+extern bool exynos_pcie_rc_get_sudden_linkdown_state(int ch_num);
+extern void exynos_pcie_rc_set_sudden_linkdown_state(int ch_num, bool recovery);
 
 struct s51xx_pcie {
 	unsigned int busdev_num;
@@ -28,31 +33,30 @@ struct s51xx_pcie {
 	u32 __iomem *reg_base;
 	u64 dbaddr_base;
 	u32 dbaddr_offset;
+	u32 dbaddr_changed_base;
 
 	u32 link_status;
 	bool suspend_try;
 
 	struct exynos_pcie_register_event pcie_event;
+	struct exynos_pcie_register_event pcie_cpl_timeout_event;
 	struct pci_saved_state *pci_saved_configs;
 };
 
 //extern struct s51xx_pcie s5100pcie;
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
 extern int exynos_pcie_rc_chk_link_status(int ch_num);
 extern int exynos_pcie_rc_l1ss_ctrl(int enable, int id, int ch_num);
-#else
-extern int exynos_check_pcie_link_status(int ch_num);
-extern int exynos_pcie_host_v1_l1ss_ctrl(int enable, int id);
-#endif
 
-extern int exynos_pcie_poweron(int ch_num);
+extern int exynos_pcie_poweron(int ch_num, int spd);
 extern int exynos_pcie_poweroff(int ch_num);
 extern void exynos_pcie_set_perst_gpio(int ch_num, bool on);
 extern void exynos_pcie_set_ready_cto_recovery(int ch_num);
 /* not used: extern int exynos_pcie_gpio_onoff(int ch_num, int val); */
 /* not used(comment out): extern void exynos_pcie_msi_init_ext(int ch_num); */
-extern int exynos_pcie_rc_set_affinity(int ch_num, int affinity);
+extern int register_separated_msi_vector(int ch_num,
+					 irq_handler_t handler, void *context,
+					 int *irq_num);
 
 #define AUTOSUSPEND_TIMEOUT	200
 
@@ -74,10 +78,4 @@ int s51xx_check_pcie_link_status(int ch_num);
 void s51xx_pcie_l1ss_ctrl(int enable, int ch_num);
 void disable_msi_int(struct pci_dev *pdev);
 void print_msi_register(struct pci_dev *pdev);
-int s5100_force_crash_exit_ext(void);
-int s5100_poweron_pcie(struct modem_ctl *mc);
-int s5100_poweroff_pcie(struct modem_ctl *mc, bool force_off);
-int s5100_try_gpio_cp_wakeup(struct modem_ctl *mc);
-int s5100_send_panic_noti_ext(void);
-int s5100_set_outbound_atu(struct modem_ctl *mc, struct cp_btl *btl, loff_t *pos, u32 map_size);
 #endif /* __S51xx_PCIE_H__ */

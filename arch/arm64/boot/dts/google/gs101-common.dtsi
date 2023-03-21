@@ -92,6 +92,8 @@
 		snps,has-lpm-erratum;
 		snps,lpm-nyet-threshold = <0>;
 
+		snps,usb2-gadget-lpm-disable;
+
 		/*
 		 * dis-u2-freeclk-exists-quirk, dis_u2_susphy_quirk are alternative.
 		 * One of them should be selected
@@ -368,6 +370,12 @@
 	pcie,wlan-gpio = <&gpp14 2 0x1 /* WLAN_EN */ >;
 	vreg1-supply = <&m_ldo17_reg>;
 	vreg2-supply = <&m_ldo19_reg>;
+};
+
+&aoc {
+	sensor_1v8-supply = <&s_ldo7_reg>;
+	sensor_3v3-supply = <&s_ldo6_reg>;
+	sensor_power_list = "sensor_1v8", "sensor_3v3";
 };
 
 &aoc {

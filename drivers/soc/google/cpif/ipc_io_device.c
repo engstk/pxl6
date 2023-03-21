@@ -100,32 +100,24 @@ static unsigned int ipc_poll(struct file *filp, struct poll_table_struct *wait)
 	switch (mc->phone_state) {
 	case STATE_BOOTING:
 	case STATE_ONLINE:
-		if (!mc->sim_state.changed) {
-			if (!skb_queue_empty(rxq))
-				return POLLIN | POLLRDNORM;
-			else /* wq is waken up without rx, return for wait */
-				return 0;
-		}
-		/* fall through, if sim_state has been changed */
+		if (!skb_queue_empty(rxq))
+			return POLLIN | POLLRDNORM;
+		break;
 	case STATE_CRASH_EXIT:
 	case STATE_CRASH_RESET:
 	case STATE_NV_REBUILDING:
 	case STATE_CRASH_WATCHDOG:
 		mif_err_limited("%s: %s.state == %s\n", iod->name, mc->name, mc_state(mc));
+
 		if (iod->format == IPC_FMT)
 			return POLLHUP;
-
-		/* give delay to prevent infinite sys_poll call from
-		 * select() in APP layer without 'sleep' user call takes
-		 * almost 100% cpu usage when it is looked up by 'top'
-		 * command.
-		 */
-		msleep(20);
 		break;
+	case STATE_RESET:
+		mif_err_limited("%s: %s.state == %s\n", iod->name, mc->name, mc_state(mc));
 
-	case STATE_OFFLINE:
-		if (iod->ch == EXYNOS_CH_ID_CPLOG && ld->protocol == PROTOCOL_SIT)
+		if (iod->attrs & IO_ATTR_STATE_RESET_NOTI)
 			return POLLHUP;
+		break;
 	default:
 		break;
 	}
@@ -151,15 +143,17 @@ static long ipc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				iod->name, cp_state_str(p_state));
 		}
 
-		if (mc->sim_state.changed) {
-			enum modem_state s_state = mc->sim_state.online ?
-					STATE_SIM_ATTACH : STATE_SIM_DETACH;
-			mc->sim_state.changed = false;
-			return s_state;
-		}
-
-		if (p_state == STATE_NV_REBUILDING)
+		switch (p_state) {
+		case STATE_NV_REBUILDING:
 			mc->phone_state = STATE_ONLINE;
+			break;
+		/* Do not return an internal state */
+		case STATE_RESET:
+			p_state = STATE_OFFLINE;
+			break;
+		default:
+			break;
+		}
 
 		return p_state;
 
@@ -217,33 +211,27 @@ static long ipc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
+#define INIT_END_WAIT_MS	150
+
 static ssize_t ipc_write(struct file *filp, const char __user *data,
 			  size_t count, loff_t *fpos)
 {
 	struct io_device *iod = (struct io_device *)filp->private_data;
 	struct link_device *ld = get_current_link(iod);
+	struct mem_link_device *mld = to_mem_link_device(ld);
 	struct modem_ctl *mc = iod->mc;
-	struct sk_buff *skb;
-	char *buff;
-	int ret;
 	u8 cfg = 0;
 	u16 cfg_sit = 0;
-	unsigned int headroom;
-	unsigned int tailroom;
-	unsigned int tx_bytes;
+	unsigned int headroom = 0;
 	unsigned int copied = 0, tot_frame = 0, copied_frm = 0;
-	unsigned int remains;
-	unsigned int alloc_size;
 	/* 64bit prevent */
 	unsigned int cnt = (unsigned int)count;
-#ifdef DEBUG_MODEM_IF
 	struct timespec64 ts;
-#endif
+	int curr_init_end_cnt;
+	int retry = 0;
 
-#ifdef DEBUG_MODEM_IF
 	/* Record the timestamp */
 	ktime_get_ts64(&ts);
-#endif
 
 	if (iod->format <= IPC_RFS && iod->ch == 0)
 		return -EINVAL;
@@ -259,44 +247,61 @@ static ssize_t ipc_write(struct file *filp, const char __user *data,
 		case PROTOCOL_SIPC:
 			cfg = sipc5_build_config(iod, ld, cnt);
 			headroom = sipc5_get_hdr_len(&cfg);
-		break;
+			break;
 		case PROTOCOL_SIT:
 			cfg_sit = exynos_build_fr_config(iod, ld, cnt);
 			headroom = EXYNOS_HEADER_SIZE;
-		break;
+			break;
 		default:
 			mif_err("protocol error %d\n", ld->protocol);
 			return -EINVAL;
 		}
-	} else {
-		cfg = 0;
-		cfg_sit = 0;
-		headroom = 0;
 	}
 
-	switch (ld->protocol) {
-	case PROTOCOL_SIPC:
-		if (unlikely(!mc->receive_first_ipc) && ld->is_log_ch(iod->ch))
-			return -EBUSY;
-	break;
-	case PROTOCOL_SIT:
-	break;
-	default:
-		mif_err("protocol error %d\n", ld->protocol);
-		return -EINVAL;
+	/* Wait for a while if a new CMD_INIT_END is sent */
+	while ((curr_init_end_cnt = atomic_read(&mld->init_end_cnt)) != mld->last_init_end_cnt &&
+	       retry++ < 3) {
+		mif_info_limited("%s: wait for INIT_END done (%dms) cnt:%d last:%d cmd:0x%02X\n",
+				 iod->name, INIT_END_WAIT_MS,
+				 curr_init_end_cnt, mld->last_init_end_cnt,
+				 mld->read_ap2cp_irq(mld));
+
+		if (atomic_inc_return(&mld->init_end_busy) > 1)
+			curr_init_end_cnt = -1;
+
+		msleep(INIT_END_WAIT_MS);
+		if (curr_init_end_cnt >= 0)
+			mld->last_init_end_cnt = curr_init_end_cnt;
+
+		atomic_dec(&mld->init_end_busy);
+	}
+
+	if (unlikely(!mld->last_init_end_cnt)) {
+		mif_err_limited("%s: INIT_END is not done\n", iod->name);
+		return -EAGAIN;
 	}
 
 	while (copied < cnt) {
-		remains = cnt - copied;
+		struct sk_buff *skb;
+		char *buff;
+		unsigned int remains = cnt - copied;
+		unsigned int tailroom = 0;
+		unsigned int tx_bytes;
+		unsigned int alloc_size;
+		int ret;
+
+		if (check_add_overflow(remains, headroom, &alloc_size))
+			alloc_size = SZ_2K;
 
 		switch (ld->protocol) {
 		case PROTOCOL_SIPC:
-			alloc_size = min_t(unsigned int, remains + headroom,
-				iod->max_tx_size ?: remains + headroom);
-		break;
+			if (iod->max_tx_size)
+				alloc_size = min_t(unsigned int, alloc_size,
+					iod->max_tx_size);
+			break;
 		case PROTOCOL_SIT:
-			alloc_size = min_t(unsigned int, remains + headroom, SZ_2K);
-		break;
+			alloc_size = min_t(unsigned int, alloc_size, SZ_2K);
+			break;
 		default:
 			mif_err("protocol error %d\n", ld->protocol);
 			return -EINVAL;
@@ -305,8 +310,6 @@ static ssize_t ipc_write(struct file *filp, const char __user *data,
 		/* Calculate tailroom for padding size */
 		if (iod->link_header && ld->aligned)
 			tailroom = ld->calc_padding_size(alloc_size);
-		else
-			tailroom = 0;
 
 		alloc_size += tailroom;
 
@@ -343,10 +346,8 @@ static ssize_t ipc_write(struct file *filp, const char __user *data,
 		skbpriv(skb)->lnk_hdr = iod->link_header;
 		skbpriv(skb)->sipc_ch = iod->ch;
 
-#ifdef DEBUG_MODEM_IF
 		/* Copy the timestamp to the skb */
 		skbpriv(skb)->ts = ts;
-#endif
 #ifdef DEBUG_MODEM_IF_IODEV_TX
 		mif_pkt(iod->ch, "IOD-TX", skb);
 #endif
@@ -359,14 +360,13 @@ static ssize_t ipc_write(struct file *filp, const char __user *data,
 			case PROTOCOL_SIPC:
 				sipc5_build_header(iod, buff, cfg,
 					tx_bytes, cnt - copied);
-			break;
+				break;
 			case PROTOCOL_SIT:
 				exynos_build_header(iod, ld, buff, cfg_sit, 0, tx_bytes);
 				/* modify next link header for multiframe */
 				if (((cfg_sit >> 8) & EXYNOS_SINGLE_MASK) != EXYNOS_SINGLE_MASK)
 					cfg_sit = modify_next_frame(cfg_sit);
-
-			break;
+				break;
 			default:
 				mif_err("protocol error %d\n", ld->protocol);
 				return -EINVAL;

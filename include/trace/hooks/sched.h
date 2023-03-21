@@ -149,9 +149,21 @@ DECLARE_RESTRICTED_HOOK(android_rvh_sched_fork,
 	TP_PROTO(struct task_struct *p),
 	TP_ARGS(p), 1);
 
+DECLARE_RESTRICTED_HOOK(android_rvh_wake_up_new_task,
+	TP_PROTO(struct task_struct *p),
+	TP_ARGS(p), 1);
+
+DECLARE_RESTRICTED_HOOK(android_rvh_schedule,
+	TP_PROTO(struct task_struct *prev, struct task_struct *next, struct rq *rq),
+	TP_ARGS(prev, next, rq), 1);
+
 DECLARE_RESTRICTED_HOOK(android_rvh_build_perf_domains,
 	TP_PROTO(bool *eas_check),
 	TP_ARGS(eas_check), 1);
+
+DECLARE_RESTRICTED_HOOK(android_rvh_update_misfit_status,
+	TP_PROTO(struct task_struct *p, struct rq *rq, bool *need_update),
+	TP_ARGS(p, rq, need_update), 1);
 
 DECLARE_RESTRICTED_HOOK(android_rvh_cpu_cgroup_attach,
 	TP_PROTO(struct cgroup_taskset *tset),
@@ -291,6 +303,10 @@ DECLARE_RESTRICTED_HOOK(android_rvh_cpumask_any_and_distribute,
 		const struct cpumask *new_mask, int *dest_cpu),
 	TP_ARGS(p, cpu_valid_mask, new_mask, dest_cpu), 1);
 
+DECLARE_RESTRICTED_HOOK(android_rvh_do_sched_yield,
+	TP_PROTO(struct rq *rq),
+	TP_ARGS(rq), 1);
+
 DECLARE_HOOK(android_vh_free_task,
 	TP_PROTO(struct task_struct *p),
 	TP_ARGS(p));
@@ -392,6 +408,10 @@ DECLARE_HOOK(android_vh_pidfd_open,
 DECLARE_HOOK(android_vh_mmput,
 	TP_PROTO(void *unused),
 	TP_ARGS(unused));
+
+DECLARE_HOOK(android_vh_rebuild_root_domains_bypass,
+	TP_PROTO(bool tasks_frozen, bool *bypass),
+	TP_ARGS(tasks_frozen, bypass));
 /* macro versions of hooks are no longer required */
 
 #endif /* _TRACE_HOOK_SCHED_H */

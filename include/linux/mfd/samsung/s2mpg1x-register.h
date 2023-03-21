@@ -2,9 +2,9 @@
 /*
  * include/linux/mfd/samsung/s2mpg1x-register.h
  *
- * Copyright (C) 2015 Samsung Electronics
+ * Copyright (C) 2021 Samsung Electronics
  *
- * header file including common register information of s2mpg10, s2mpg11
+ * header file including common register information of s2mpg10, s2mpg11, 2mpg12, s2mpg13
  */
 
 #ifndef __LINUX_MFD_S2MPG1X_REGISTER_H
@@ -12,9 +12,12 @@
 
 #include <linux/bits.h>
 
-#if defined(CONFIG_SOC_GS101)
+#if IS_ENABLED(CONFIG_SOC_GS101)
 #define S2MPG1X_METER_CHANNEL_MAX 8
+#elif IS_ENABLED(CONFIG_SOC_GS201)
+#define S2MPG1X_METER_CHANNEL_MAX 12
 #endif
+
 #define MASK(width, shift) GENMASK(shift + width - 1, shift)
 
 typedef enum {
@@ -135,7 +138,7 @@ typedef enum {
 	INT_62P_5HZ,
 	INT_125HZ,
 	INT_250HZ,
-#if defined(CONFIG_SOC_GS101)
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	INT_500HZ,
 #endif
 	INT_1000HZ,
@@ -144,11 +147,19 @@ typedef enum {
 } s2mpg1x_int_samp_rate;
 
 typedef enum {
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	EXT_7P_628125HZ = 0,
 	EXT_15P_25625HZ,
 	EXT_30P_5125HZ,
 	EXT_61P_025HZ,
 	EXT_122P_05HZ,
+#elif IS_ENABLED(CONFIG_SOC_GS201)
+	EXT_7P_8125HZ = 0,
+	EXT_15P_625HZ,
+	EXT_31P_25HZ,
+	EXT_62P_5HZ,
+	EXT_125HZ,
+#endif
 	S2MPG1X_EXT_FREQ_COUNT,
 	S2MPG1X_EXT_FREQ_NONE,
 } s2mpg1x_ext_samp_rate;
@@ -168,6 +179,9 @@ typedef enum {
 #define S2MPG1X_METER_ACC_BUF 6 /* 41-bit */
 #define S2MPG1X_METER_COUNT_BUF 3 /* 20-bit */
 #define S2MPG1X_METER_BUCKEN_BUF 2
+
+/* MT_TRIM(0xE) MASK */
+#define S2MPG1X_PMETER_MRST_MASK	BIT(7)
 
 /* S2MPG1x_METER_CTRL1 */
 #define METER_EN_MASK BIT(0)
@@ -234,6 +248,8 @@ typedef enum {
 #define DVS_NLDO_POWER_450mA _IQ30(u32, 0.000686813)
 #define NLDO_CURRENT_450mA _IQ30(u32, 0.10989011)
 #define NLDO_POWER_450mA _IQ30(u32, 0.001373626)
+#define PLDO_CURRENT_600mA _IQ30(u32, 0.146520147)
+#define PLDO_POWER_600mA _IQ30(u32, 0.003663004)
 #define DVS_NLDO_CURRENT_800mA _IQ30(u32, 0.195360195)
 #define DVS_NLDO_POWER_800mA _IQ30(u32, 0.001221001)
 #define NLDO_CURRENT_800mA _IQ30(u32, 0.195360195)
@@ -242,7 +258,13 @@ typedef enum {
 #define PLDO_POWER_800mA _IQ30(u32, 0.004884005)
 #define NLDO_CURRENT_1000mA _IQ30(u32, 0.244200244)
 #define NLDO_POWER_1000mA _IQ30(u32, 0.001418251)
+#define NLDO_CURRENT_1200mA _IQ30(u32, 0.244200244)
+#define NLDO_POWER_1200mA _IQ30(u32, 0.001418251)
+#if IS_ENABLED(CONFIG_SOC_GS101)
 #define EXTERNAL_RESOLUTION_VRAIL _IQ30(u32, 1.3186813)
+#elif IS_ENABLED(CONFIG_SOC_GS201)
+#define EXTERNAL_RESOLUTION_VRAIL _IQ30(u32, 2.1978021)
+#endif
 #define EXTERNAL_RESOLUTION_VSHUNT _IQ30(u32, 0.0079356982)
 #define EXTERNAL_RESOLUTION_TRIM BIT(3) // 3 bits
 

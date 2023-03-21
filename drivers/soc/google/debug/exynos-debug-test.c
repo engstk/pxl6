@@ -203,6 +203,7 @@ static void simulate_SFR(char *arg)
 	/* should not reach here */
 }
 
+#if IS_ENABLED(CONFIG_SOC_GS101)
 static void simulate_WP(char *arg)
 {
 	unsigned int ps_hold_control;
@@ -213,6 +214,7 @@ static void simulate_WP(char *arg)
 	exynos_pmu_write(exynos_debug_desc.ps_hold_control_offset,
 			ps_hold_control & 0xFFFFFEFF);
 }
+#endif
 
 static void simulate_PANIC(char *arg)
 {
@@ -497,7 +499,7 @@ static void simulate_OVERFLOW(char *arg)
 static char *buffer[NR_CPUS];
 static void simulate_CPU_CONTEXT_CACHE_FLUSH_handler(void *info)
 {
-	int cpu = raw_smp_processor_id();
+	u64 cpu = raw_smp_processor_id();
 	u64 i = 0;
 	u64 addr = virt_to_phys((void *)(buffer[cpu]));
 	local_irq_disable();
@@ -505,7 +507,7 @@ static void simulate_CPU_CONTEXT_CACHE_FLUSH_handler(void *info)
 	memset(buffer[cpu], 0x5A, PAGE_SIZE * 2);
 	dbg_snapshot_set_debug_test_buffer_addr(addr, cpu);
 
-	i = cpu << 16;
+	i = cpu << 48;
 	/* populate registers with known values and infinite loop */
 	asm volatile("mov x0, %0\n\t"
 			"add x1, x0, #1\n\t"
@@ -613,7 +615,9 @@ static struct force_error_item force_error_vector[] = {
 	{"QDP",		&simulate_QDP},
 	{"SVC",		&simulate_SVC},
 	{"SFR",		&simulate_SFR},
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	{"WP",		&simulate_WP},
+#endif
 	{"panic",	&simulate_PANIC},
 	{"bug",		&simulate_BUG},
 	{"warn",	&simulate_WARN},
@@ -808,7 +812,9 @@ static void exynos_debug_test_desc_init(void)
 
 static struct debug_trigger exynos_debug_test_trigger = {
 	.hard_lockup = simulate_HARD_LOCKUP,
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	.cold_reset = simulate_WP,
+#endif
 	.watchdog_emergency_reset = simulate_QDP,
 	.halt = simulate_HALT,
 	.arraydump = simulate_ARRAYDUMP,

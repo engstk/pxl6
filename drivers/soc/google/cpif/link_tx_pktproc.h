@@ -9,11 +9,17 @@
 
 #include <linux/skbuff.h>
 #include "link_device_memory.h"
+#if IS_ENABLED(CONFIG_EXYNOS_CPIF_IOMMU)
+#include "cpif_vmapper.h"
+#endif
 
-/* Numbers */
-#define PKTPROC_HIPRIO_UL	0
-#define PKTPROC_NORM_UL		1
-#define PKTPROC_MAX_QUEUE_UL	2
+/* Queue Numbers */
+enum pktproc_ul_queue_t {
+	PKTPROC_UL_HIPRIO = 0,
+	PKTPROC_UL_QUEUE_0 = PKTPROC_UL_HIPRIO,
+	PKTPROC_UL_NORM = 1,
+	PKTPROC_UL_QUEUE_MAX
+};
 
 /*
  * Descriptor structure mode
@@ -27,6 +33,8 @@ enum pktproc_end_bit_owner {
 
 /* Padding required by CP */
 #define CP_PADDING		76
+#define MAX_UL_PACKET_SIZE		512
+#define HIPRIO_MAX_PACKET_SIZE	roundup_pow_of_two(MAX_UL_PACKET_SIZE + CP_PADDING)
 
 /* Q_info */
 struct pktproc_q_info_ul {
@@ -41,7 +49,7 @@ struct pktproc_q_info_ul {
 struct pktproc_info_ul {
 	u32 num_queues:4, mode:4, max_packet_size:16, end_bit_owner:1, reserve1:7;
 	u32 cp_quota:16, reserve2:16;
-	struct pktproc_q_info_ul q_info[PKTPROC_MAX_QUEUE_UL];
+	struct pktproc_q_info_ul q_info[PKTPROC_UL_QUEUE_MAX];
 } __packed;
 
 struct pktproc_desc_ul {
@@ -82,9 +90,9 @@ struct pktproc_queue_ul {
 	u32 *rear_ptr; /* indicates the last desc read by CP */
 
 	/* Store */
-	u32 cp_desc_pbase;
+	u64 cp_desc_pbase;
 	u32 num_desc;
-	u32 cp_buff_pbase;
+	u64 cp_buff_pbase;
 
 	struct pktproc_info_ul *ul_info;
 	struct pktproc_q_info_ul *q_info;	/* Pointer to q_info of info_v */
@@ -92,6 +100,7 @@ struct pktproc_queue_ul {
 
 	u32 desc_size;
 	u64 buff_addr_cp; /* base data address value for cp */
+	u32 max_packet_size;
 
 	/* Pointer to data buffer */
 	u8 __iomem *q_buff_vbase;
@@ -109,26 +118,32 @@ struct pktproc_queue_ul {
 struct pktproc_adaptor_ul {
 	bool support;	/* Is support PktProc feature? */
 
-	unsigned long cp_base;		/* CP base address for pktproc */
+	unsigned long long cp_base;	/* CP base address for pktproc */
 	unsigned long info_rgn_offset;	/* Offset of info region */
 	unsigned long info_rgn_size;	/* Size of info region */
 	unsigned long desc_rgn_offset;	/* Offset of descriptor region */
 	unsigned long desc_rgn_size;	/* Size of descriptor region */
 	unsigned long buff_rgn_offset;	/* Offset of data buffer region */
+	unsigned long buff_rgn_size;	/* Size of data buffer region */
 
 	u32 num_queue;		/* Number of queue */
-	u32 max_packet_size;	/* packet size pktproc UL can hold */
+	u32 default_max_packet_size;	/* packet size pktproc UL can hold */
+	u32 hiprio_ack_only;
 	enum pktproc_end_bit_owner end_bit_owner;	/* owner to set end bit. AP:0, CP:1 */
 	u32 cp_quota;		/* max number of buffers cp allows us to transfer */
 	bool use_hw_iocc;	/* H/W IO cache coherency */
-	bool info_desc_rgn_cached;
+	bool info_rgn_cached;
+	bool desc_rgn_cached;
 	bool buff_rgn_cached;
 	bool padding_required;	/* requires extra length. (s5123 EVT1 only) */
-
+#if IS_ENABLED(CONFIG_EXYNOS_CPIF_IOMMU)
+	struct cpif_va_mapper *desc_map;
+	struct cpif_va_mapper *buff_map;
+#endif
 	void __iomem *info_vbase;	/* I/O region for information */
 	void __iomem *desc_vbase;	/* I/O region for descriptor */
 	void __iomem *buff_vbase;	/* I/O region for data buffer */
-	struct pktproc_queue_ul *q[PKTPROC_MAX_QUEUE_UL];/* Logical queue */
+	struct pktproc_queue_ul *q[PKTPROC_UL_QUEUE_MAX];/* Logical queue */
 };
 
 #if IS_ENABLED(CONFIG_CP_PKTPROC_UL)

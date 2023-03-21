@@ -50,8 +50,14 @@
 #include <linux/sysfs.h>
 #include <linux/string.h>
 #include <linux/fs.h>
+#include <linux/suspend.h>
 
 #include <soc/google/debug-test.h>
+
+void __noreturn __cold nvhe_hyp_panic_handler(u64 esr, u64 spsr,
+					      u64 elr_virt, u64 elr_phys,
+					      u64 par, uintptr_t vcpu,
+					      u64 far, u64 hpfar);
 
 /*
  * Utility functions
@@ -146,12 +152,10 @@ static void simulate_warn(char *arg)
 
 static void simulate_null(char *arg)
 {
-	char *pointer = NULL;
-
 	pr_crit("called!\n");
 
 	/* Intentional null pointer dereference */
-	*pointer = 'a';
+	writeb('a', NULL);
 
 	/* Should not reach here */
 	pr_crit("failed!");
@@ -231,7 +235,7 @@ static void simulate_low_memory(char *arg)
 
 static void simulate_softlockup(char *arg)
 {
-	pr_crit("called!\n");
+	pr_crit("called on CPU %u!\n", smp_processor_id());
 
 	local_irq_disable();
 	preempt_disable();
@@ -444,7 +448,9 @@ void debug_trigger_register(struct debug_trigger *soc_trigger, char *arch_name)
 {
 	pr_info("DEBUG TEST: [%s] test triggers are registered!", arch_name);
 	soc_test_trigger.hard_lockup = soc_trigger->hard_lockup;
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	soc_test_trigger.cold_reset = soc_trigger->cold_reset;
+#endif
 	soc_test_trigger.watchdog_emergency_reset =
 		soc_trigger->watchdog_emergency_reset;
 	soc_test_trigger.halt = soc_trigger->halt;
@@ -471,6 +477,7 @@ static void simulate_hardlockup(char *arg)
 
 }
 
+#if IS_ENABLED(CONFIG_SOC_GS101)
 static void simulate_cold_reset(char *arg)
 {
 	pr_crit("called!\n");
@@ -484,6 +491,7 @@ static void simulate_cold_reset(char *arg)
 	/* Should not reach here */
 	pr_crit("failed!\n");
 }
+#endif
 
 static void simulate_watchdog_emergency_reset(char *arg)
 {
@@ -534,6 +542,50 @@ static void simulate_scandump(char *arg)
 
 	(*soc_test_trigger.scandump)(arg);
 }
+
+static int suspend_valid(suspend_state_t state)
+{
+	return 1;
+}
+
+static int suspend_begin(suspend_state_t state)
+{
+	pr_crit("called!\n");
+	schedule_timeout_interruptible(msecs_to_jiffies(9000000));
+	return -EINVAL;
+}
+
+static int suspend_enter(suspend_state_t state)
+{
+	return -EINVAL;
+}
+
+static const struct platform_suspend_ops suspend_ops = {
+	.valid = suspend_valid,
+	.begin = suspend_begin,
+	.enter = suspend_enter,
+};
+
+static void simulate_suspend_hang(char *arg)
+{
+	suspend_set_ops(&suspend_ops);
+}
+
+static void simulate_hyp_panic(char *arg)
+{
+	u64 esr, spsr;
+
+	pr_crit("called!\n");
+
+	/* Fake the EL2 exception with the following values
+	 * exception class: 0x3F, instruction specific syndrome : 0x1ffffff
+	 */
+	spsr = PSR_MODE_EL2t;
+	esr  = (ESR_ELx_EC_MAX << ESR_ELx_EC_SHIFT) | ESR_ELx_ISS_MASK;
+
+	nvhe_hyp_panic_handler(esr, spsr, -1, 0, 0, 0, 0, 0);
+}
+
 /*
  * Error trigger definitions
  */
@@ -567,11 +619,15 @@ static const struct force_error_item force_error_vector[] = {
 	{ "pcabort",		&simulate_pc_abort },
 	{ "spabort",		&simulate_sp_abort },
 	{ "jumpzero",		&simulate_jump_zero },
+#if IS_ENABLED(CONFIG_SOC_GS101)
 	{ "cold_reset",		&simulate_cold_reset },
+#endif
 	{ "emerg_reset",	&simulate_watchdog_emergency_reset },
 	{ "halt",		&simulate_halt },
 	{ "arraydump",		&simulate_arraydump },
 	{ "scandump",		&simulate_scandump },
+	{ "suspend_hang",	&simulate_suspend_hang },
+	{ "hyp_panic",		&simulate_hyp_panic },
 };
 
 static void parse_and_trigger(const char *buf)

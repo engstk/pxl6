@@ -53,7 +53,7 @@ static ssize_t status_show(struct device *dev,
 	count += scnprintf(&buf[count], PAGE_SIZE - count, "magic:0x%08X mem_access:0x%08X\n",
 				ioread32(bl->magic), ioread32(bl->mem_access));
 
-	for (i = 0; i < MAX_SIPC_MAP; i++) {
+	for (i = 0; i < IPC_MAP_MAX; i++) {
 		ipc_dev = bl->dev[i];
 
 		count += scnprintf(&buf[count], PAGE_SIZE - count, "\n");
@@ -192,13 +192,13 @@ int create_legacy_link_device(struct mem_link_device *mld)
 	atomic_set(&dev->rxq.busy, 0);
 	dev->rxq.head = (void __iomem *)(mld->base + modem->legacy_raw_head_tail_offset + 8);
 	dev->rxq.tail = (void __iomem *)(mld->base + modem->legacy_raw_head_tail_offset + 12);
-#if IS_ENABLED(CONFIG_CACHED_LEGACY_RAW_RX_BUFFER)
-	dev->rxq.buff = phys_to_virt(cp_shmem_get_base(bl->ld->mdm_data->cp_num, SHMEM_IPC) +
+	if (modem->legacy_raw_rx_buffer_cached)
+		dev->rxq.buff =
+			phys_to_virt(cp_shmem_get_base(bl->ld->mdm_data->cp_num, SHMEM_IPC) +
 			modem->legacy_raw_buffer_offset + modem->legacy_raw_txq_size);
-#else
-	dev->rxq.buff = (void __iomem *)(mld->base + modem->legacy_raw_buffer_offset +
+	else
+		dev->rxq.buff = (void __iomem *)(mld->base + modem->legacy_raw_buffer_offset +
 			modem->legacy_raw_txq_size);
-#endif
 	dev->rxq.size = modem->legacy_raw_rxq_size;
 
 	dev->msg_mask = MASK_SEND_RAW;
@@ -229,12 +229,14 @@ int init_legacy_link(struct legacy_link_device *bl)
 {
 	unsigned int magic;
 	unsigned int mem_access;
+	struct modem_data *modem = bl->ld->mdm_data;
+
 	int i = 0;
 
 	iowrite32(0, bl->magic);
 	iowrite32(0, bl->mem_access);
 
-	for (i = 0; i < MAX_SIPC_MAP; i++) {
+	for (i = 0; i < IPC_MAP_MAX; i++) {
 		struct legacy_ipc_device *dev = bl->dev[i];
 		/* initialize circ_queues */
 		iowrite32(0, dev->txq.head);
@@ -250,11 +252,9 @@ int init_legacy_link(struct legacy_link_device *bl)
 		atomic_set(&dev->rxq.busy, 0);
 		dev->req_ack_cnt[RX] = 0;
 
-#if IS_ENABLED(CONFIG_CACHED_LEGACY_RAW_RX_BUFFER)
-		if (i == IPC_MAP_NORM_RAW)
+		if (modem->legacy_raw_rx_buffer_cached && i == IPC_MAP_NORM_RAW)
 			dma_sync_single_for_device(bl->ld->dev, virt_to_phys(dev->rxq.buff),
 					dev->rxq.size, DMA_FROM_DEVICE);
-#endif
 	}
 
 	iowrite32(bl->ld->magic_ipc, bl->magic);
@@ -393,10 +393,8 @@ struct sk_buff *recv_from_legacy_link(struct mem_link_device *mld,
 	/* Finish reading data before incrementing tail */
 	smp_mb();
 
-#ifdef DEBUG_MODEM_IF
 	/* Record the time-stamp */
 	ktime_get_ts64(&skbpriv(skb)->ts);
-#endif
 
 	return skb;
 
@@ -426,7 +424,7 @@ bool check_legacy_tx_pending(struct mem_link_device *mld)
 	unsigned int head, tail;
 	struct legacy_ipc_device *dev;
 
-	for (i = IPC_MAP_FMT ; i < MAX_SIPC_MAP ; i++) {
+	for (i = IPC_MAP_FMT ; i < IPC_MAP_MAX ; i++) {
 		dev = mld->legacy_link_dev.dev[i];
 		head = get_txq_head(dev);
 		tail = get_txq_tail(dev);

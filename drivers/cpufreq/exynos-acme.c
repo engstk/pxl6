@@ -27,11 +27,19 @@
 #include <soc/google/exynos-cpupm.h>
 #include <soc/google/exynos_cpu_cooling.h>
 #include <soc/google/debug-snapshot.h>
+#include <soc/google/gs_tmu.h>
 
 #include <trace/events/power.h>
 
 #include "exynos-acme.h"
 #include "../soc/google/vh/kernel/systrace.h"
+
+#if IS_ENABLED(CONFIG_PIXEL_EM)
+#include "../soc/google/vh/include/pixel_em.h"
+struct pixel_em_profile **exynos_acme_pixel_em_profile;
+EXPORT_SYMBOL_GPL(exynos_acme_pixel_em_profile);
+#endif
+
 /*
  * list head of cpufreq domain
  */
@@ -189,6 +197,81 @@ fail_scale:
 }
 
 /*********************************************************************
+ *                         THERMAL PRESSURE                         *
+ *********************************************************************/
+/*
+ * When device thermals throttle the CPUs, we notify the scheduler of
+ * capacity change using the thermal pressure APIs
+ */
+static void update_thermal_pressure(struct exynos_cpufreq_domain *domain, int dfs_count_change)
+{
+	cpumask_t *maskp = &domain->cpus;
+	struct cpufreq_policy *policy = cpufreq_cpu_get(cpumask_first(maskp));
+	unsigned long max_capacity, min_capacity, capacity;
+#if IS_ENABLED(CONFIG_PIXEL_EM)
+	struct pixel_em_profile **profile_ptr_snapshot, *profile = NULL;
+	struct pixel_em_cluster *em_cluster;
+	int i;
+#endif
+
+	if (!policy)
+		return;
+
+	max_capacity = arch_scale_cpu_capacity(cpumask_first(maskp));
+	min_capacity = (policy->cpuinfo.min_freq * max_capacity) / (policy->cpuinfo.max_freq);
+	capacity     = (policy->max * max_capacity) / (policy->cpuinfo.max_freq);
+
+	spin_lock(&domain->thermal_update_lock);
+	domain->dfs_throttle_count += dfs_count_change;
+
+	BUG_ON(domain->dfs_throttle_count < 0);
+	BUG_ON(domain->dfs_throttle_count > domain->max_dfs_count);
+
+#if IS_ENABLED(CONFIG_PIXEL_EM)
+	profile_ptr_snapshot = READ_ONCE(exynos_acme_pixel_em_profile);
+
+	if (profile_ptr_snapshot)
+		profile = READ_ONCE(*profile_ptr_snapshot);
+
+	if (profile) {
+		em_cluster = profile->cpu_to_cluster[cpumask_first(maskp)];
+		for (i = 0; i < em_cluster->num_opps - 1; i++) {
+			if (em_cluster->opps[i].freq >= policy->max)
+				break;
+		}
+		capacity = (domain->dfs_throttle_count > 0) ?
+			em_cluster->opps[0].capacity : em_cluster->opps[i].capacity;
+	} else {
+		capacity = (domain->dfs_throttle_count > 0) ? min_capacity : capacity;
+	}
+#else
+	capacity = (domain->dfs_throttle_count > 0) ? min_capacity : capacity;
+#endif
+
+	arch_set_thermal_pressure(maskp, max_capacity - capacity);
+	spin_unlock(&domain->thermal_update_lock);
+
+	cpufreq_cpu_put(policy);
+}
+
+static void exynos_cpufreq_set_thermal_dfs_cb(cpumask_t *maskp, bool is_dfs_throttled)
+{
+	unsigned int cpu;
+	cpumask_t cpu_per_domain = CPU_MASK_NONE;
+
+	/* create a mask with one cpu per domain */
+	for_each_cpu_and(cpu, maskp, cpu_possible_mask) {
+		struct exynos_cpufreq_domain *domain = find_domain(cpu);
+		cpumask_set_cpu(cpumask_first(&domain->cpus), &cpu_per_domain);
+	}
+
+	/* apply thermal pressure for each domain */
+	for_each_cpu(cpu, &cpu_per_domain) {
+		update_thermal_pressure(find_domain(cpu), (is_dfs_throttled ? 1 : -1));
+	}
+}
+
+/*********************************************************************
  *                   EXYNOS CPUFREQ DRIVER INTERFACE                 *
  *********************************************************************/
 static int exynos_cpufreq_init(struct cpufreq_policy *policy)
@@ -273,7 +356,6 @@ static int exynos_cpufreq_verify(struct cpufreq_policy_data *new_policy)
 	struct cpufreq_policy policy;
 	unsigned int min_freq, max_freq;
 	int index, ret;
-	unsigned long max_capacity, capacity;
 
 	if (!domain)
 		return -EINVAL;
@@ -306,12 +388,7 @@ static int exynos_cpufreq_verify(struct cpufreq_policy_data *new_policy)
 
 	ret = cpufreq_frequency_table_verify(new_policy, domain->freq_table);
 	if (!ret) {
-		max_capacity = arch_scale_cpu_capacity(cpumask_first(&domain->cpus));
-		capacity = new_policy->max * max_capacity;
-		capacity /= new_policy->cpuinfo.max_freq;
-		arch_set_thermal_pressure(&domain->cpus, max_capacity - capacity);
-		pr_debug_ratelimited("thermal pressure: %lu, cpus: %*pbl\n",
-			max_capacity - capacity, cpumask_pr_args(&domain->cpus));
+		update_thermal_pressure(domain, 0);
 	}
 	return ret;
 }
@@ -578,8 +655,54 @@ static ssize_t freq_qos_max_store(struct device *dev,
 	return count;
 }
 
+static ssize_t min_freq_qos_list_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	ssize_t len = 0;
+	int total_requests = 0;
+	struct exynos_cpufreq_domain *domain;
+	struct plist_node *min_freq_pos;
+
+	list_for_each_entry(domain, &domains, list) {
+		total_requests = 0;
+		list_for_each_entry(min_freq_pos,
+				    &domain->min_qos_req.qos->min_freq.list.node_list, node_list) {
+			total_requests += 1;
+			len += sysfs_emit_at(buf, len, "cpu%d: total_requests: %d,"
+					     " min_freq_qos: %d\n",
+					     cpumask_first(&domain->cpus),
+					     total_requests, min_freq_pos->prio);
+		}
+	}
+	return len;
+}
+
+static ssize_t max_freq_qos_list_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	ssize_t len = 0;
+	int total_requests = 0;
+	struct exynos_cpufreq_domain *domain;
+	struct plist_node *max_freq_pos;
+
+	list_for_each_entry(domain, &domains, list) {
+		total_requests = 0;
+		list_for_each_entry(max_freq_pos,
+				    &domain->max_qos_req.qos->max_freq.list.node_list, node_list) {
+			total_requests += 1;
+			len += sysfs_emit_at(buf, len, "cpu%d: total_requests: %d,"
+					     " max_freq_qos: %d\n",
+					     cpumask_first(&domain->cpus),
+					     total_requests, max_freq_pos->prio);
+		}
+	}
+	return len;
+}
+
 static DEVICE_ATTR_RW(freq_qos_max);
 static DEVICE_ATTR_RW(freq_qos_min);
+static DEVICE_ATTR_RO(min_freq_qos_list);
+static DEVICE_ATTR_RO(max_freq_qos_list);
 
 /*********************************************************************
  *                       CPUFREQ DEV FOPS                            *
@@ -928,6 +1051,19 @@ static void freq_qos_release(struct work_struct *work)
 }
 
 static int
+init_user_freq_qos(struct exynos_cpufreq_domain *domain, struct cpufreq_policy *policy)
+{
+	int ret = freq_qos_add_request(&policy->constraints, &domain->user_min_qos_req,
+				       FREQ_QOS_MIN, domain->min_freq);
+	if (ret < 0)
+		return ret;
+
+	ret = freq_qos_add_request(&policy->constraints, &domain->user_max_qos_req,
+				   FREQ_QOS_MAX, domain->soft_max_freq);
+	return ret;
+}
+
+static int
 init_freq_qos(struct exynos_cpufreq_domain *domain, struct cpufreq_policy *policy)
 {
 	unsigned int boot_qos, val;
@@ -940,16 +1076,6 @@ init_freq_qos(struct exynos_cpufreq_domain *domain, struct cpufreq_policy *polic
 		return ret;
 
 	ret = freq_qos_add_request(&policy->constraints, &domain->max_qos_req,
-				   FREQ_QOS_MAX, domain->max_freq);
-	if (ret < 0)
-		return ret;
-
-	ret = freq_qos_add_request(&policy->constraints, &domain->user_min_qos_req,
-				   FREQ_QOS_MIN, domain->min_freq);
-	if (ret < 0)
-		return ret;
-
-	ret = freq_qos_add_request(&policy->constraints, &domain->user_max_qos_req,
 				   FREQ_QOS_MAX, domain->max_freq);
 	if (ret < 0)
 		return ret;
@@ -1072,14 +1198,18 @@ static int init_domain(struct exynos_cpufreq_domain *domain,
 	 * to bigger one.
 	 */
 	domain->max_freq = cal_dfs_get_max_freq(domain->cal_id);
+	domain->soft_max_freq = domain->max_freq;
 	domain->min_freq = cal_dfs_get_min_freq(domain->cal_id);
 
 	if (!of_property_read_u32(dn, "max-freq", &val))
-		domain->max_freq = min(domain->max_freq, val);
+		domain->max_freq = val;
 	if (!of_property_read_u32(dn, "min-freq", &val))
 		domain->min_freq = max(domain->min_freq, val);
 	if (!of_property_read_u32(dn, "resume-freq", &val))
 		resume_freq = max(domain->min_freq, val);
+	if (!of_property_read_u32(dn, "soft-max-freq", &val))
+		domain->soft_max_freq = min(domain->max_freq, val);
+	domain->soft_max_freq = max(domain->soft_max_freq, domain->min_freq);
 
 	domain->max_freq_qos = domain->max_freq;
 	domain->min_freq_qos = domain->min_freq;
@@ -1214,12 +1344,13 @@ static int init_domain(struct exynos_cpufreq_domain *domain,
 					    cal_dfs_get_resume_freq(domain->cal_id);
 	domain->old = get_freq(domain);
 	if (domain->old < domain->min_freq || domain->max_freq < domain->old) {
-		WARN(1, "Out-of-range freq(%dkhz) returned for domain%d in init time\n",
+		pr_info("Out-of-range freq(%dkhz) returned for domain%d in init time\n",
 		     domain->old, domain->id);
 		domain->old = domain->boot_freq;
 	}
 
 	mutex_init(&domain->lock);
+	spin_lock_init(&domain->thermal_update_lock);
 
 	/*
 	 * Initialize CPUFreq DVFS Manager
@@ -1229,6 +1360,12 @@ static int init_domain(struct exynos_cpufreq_domain *domain,
 
 	cpu_dev = get_cpu_device(cpumask_first(&domain->cpus));
 	dev_pm_opp_of_register_em(cpu_dev, &domain->cpus);
+
+	/* Get max-dfs-count per domain. Set to zero, if not configured*/
+	if (of_property_read_u32(dn, "max-dfs-count", &domain->max_dfs_count)) {
+		pr_info("max-dfs-count not set for cpufreq-domain:%d, defaulting to 0\n", domain->id);
+		domain->max_dfs_count = 0;
+	}
 
 	pr_info("Complete to initialize cpufreq-domain%d\n", domain->id);
 
@@ -1298,14 +1435,34 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	ret = sysfs_create_file(&pdev->dev.kobj, &dev_attr_min_freq_qos_list.attr);
+	if (ret) {
+		pr_err("failed to create min_freq_qos_list node\n");
+		return ret;
+	}
+
+	ret = sysfs_create_file(&pdev->dev.kobj, &dev_attr_max_freq_qos_list.attr);
+	if (ret) {
+		pr_err("failed to create max_freq_qos_list node\n");
+		return ret;
+	}
+
 	list_for_each_entry(domain, &domains, list) {
 		struct cpufreq_policy *policy;
 
-		enable_domain(domain);
-
 		policy = cpufreq_cpu_get_raw(cpumask_first(&domain->cpus));
-		if (!policy)
-			continue;
+		if (!policy) {
+			pr_err("failed to find domain policy!\n");
+			return -ENODEV;
+		}
+
+		ret = init_user_freq_qos(domain, policy);
+		if (ret < 0) {
+			pr_err("Failed to set max user qos vote!\n");
+			return ret;
+		}
+
+		enable_domain(domain);
 
 #if IS_ENABLED(CONFIG_EXYNOS_CPU_THERMAL)
 		exynos_cpufreq_cooling_register(domain->dn, policy);
@@ -1323,6 +1480,7 @@ static int exynos_cpufreq_probe(struct platform_device *pdev)
 	}
 
 	register_pm_notifier(&exynos_cpufreq_pm);
+	register_dfs_throttle_cb(exynos_cpufreq_set_thermal_dfs_cb);
 
 	pr_info("Initialized Exynos cpufreq driver\n");
 

@@ -193,7 +193,7 @@ static void exynos_ufs_fmp_fill_prdt(void *unused, struct ufs_hba *hba,
 	}
 }
 
-#if IS_ENABLED(CONFIG_SCSI_UFS_PIXEL_FIPS140)
+#if IS_ENABLED(CONFIG_SCSI_UFS_PIXEL_FIPS140) && IS_ENABLED(CONFIG_SOC_GS101)
 static void exynos_ufs_fmp_fips_self_test(void *data, struct ufs_hba *hba)
 {
 	if (ufs_pixel_fips_verify(hba))

@@ -203,7 +203,11 @@ static inline bool sipc5_ipc_ch(u8 ch)
 
 static inline bool sipc_ps_ch(u8 ch)
 {
+#if IS_ENABLED(CONFIG_CH_EXTENSION)
+	return (ch >= SIPC_CH_EX_ID_PDP_0 && ch <= SIPC_CH_EX_ID_PDP_MAX) ?
+#else
 	return (ch >= SIPC_CH_ID_PDP_0 && ch <= SIPC_CH_ID_PDP_14) ?
+#endif
 		true : false;
 }
 
@@ -228,68 +232,6 @@ static inline bool sipc_router_ch(u8 ch)
 static inline bool sipc_misc_ch(u8 ch)
 {
 	return (ch == SIPC_CH_ID_CASS) ? true : false;
-}
-
-struct sipc5_frame_data {
-	/* Frame length calculated from the length fields */
-	unsigned int len;
-
-	/* The length of link layer header */
-	unsigned int hdr_len;
-
-	/* The length of received header */
-	unsigned int hdr_rcvd;
-
-	/* The length of link layer payload */
-	unsigned int pay_len;
-
-	/* The length of received data */
-	unsigned int pay_rcvd;
-
-	/* The length of link layer padding */
-	unsigned int pad_len;
-
-	/* The length of received padding */
-	unsigned int pad_rcvd;
-
-	/* Header buffer */
-	u8 hdr[SIPC5_MAX_HEADER_SIZE];
-};
-
-#define STD_UDL_STEP_MASK	0x0000000F
-#define STD_UDL_SEND		0x1
-#define STD_UDL_CRC		0xC
-
-struct std_dload_info {
-	u32 size;
-	u32 mtu;
-	u32 num_frames;
-} __packed;
-
-
-/*
- * @brief	get BOOT/DUMP command
- * @param frm	the pointer to an SIPC5 link frame
- * @return	the standard BOOT/DUMP command in an SIPC5 BOOT/DUMP frame
- */
-static inline u32 std_bootdump_get_cmd(u8 *frm)
-{
-	u8 *cmd = frm + sipc5_get_hdr_len(frm);
-
-	return *((u32 *)cmd);
-}
-
-/*
- * @brief		check whether or not a command came with a payload
- * @param cmd		the standard BOOT/DUMP command
- * @retval "true"	if the STD_UDL command has a payload
- * @retval "false"	otherwise
- */
-static inline bool std_bootdump_with_payload(u32 cmd)
-{
-	u32 mask = cmd & STD_UDL_STEP_MASK;
-
-	return (mask && mask < STD_UDL_CRC) ? true : false;
 }
 
 #endif

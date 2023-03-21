@@ -14,6 +14,7 @@
 int mfc_core_instance_init(struct mfc_core *core, struct mfc_ctx *ctx);
 int mfc_core_instance_deinit(struct mfc_core *core, struct mfc_ctx *ctx);
 int mfc_core_instance_open(struct mfc_core *core, struct mfc_ctx *ctx);
+void mfc_core_instance_cache_flush(struct mfc_core *core, struct mfc_ctx *ctx);
 int mfc_core_instance_move_to(struct mfc_core *core, struct mfc_ctx *ctx);
 int mfc_core_instance_move_from(struct mfc_core *core, struct mfc_ctx *ctx);
 void mfc_core_instance_csd_parsing(struct mfc_core *core, struct mfc_ctx *ctx);
@@ -23,3 +24,6 @@ void mfc_core_instance_q_flush(struct mfc_core *core, struct mfc_ctx *ctx);
 void mfc_core_instance_finishing(struct mfc_core *core, struct mfc_ctx *ctx);
 int mfc_core_request_work(struct mfc_core *core, enum mfc_request_work work,
 		struct mfc_ctx *ctx);
+#if !IS_ENABLED(CONFIG_EXYNOS_IMGLOADER)
+int mfc_release_verify_fw(struct mfc_core *core);
+#endif

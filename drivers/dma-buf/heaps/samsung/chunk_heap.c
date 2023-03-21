@@ -21,6 +21,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
+#include <linux/swap.h>
 
 #define GFP_CHUNK_HEAP_NORETRY_NOWARN (__GFP_NORETRY | __GFP_NOWARN)
 
@@ -205,8 +206,10 @@ err_prot:
 	samsung_dma_buffer_free(buffer);
 err_buffer:
 	if (!protret) {
-		for (pg = 0; pg < nr_chunks; pg++)
+		for (pg = 0; pg < nr_chunks; pg++) {
 			cma_release(chunk_heap->cma, pages[pg], 1 << chunk_order);
+			dma_heap_dec_inuse(1 << chunk_order);
+		}
 	}
 err_alloc:
 	kvfree(pages);
@@ -228,8 +231,10 @@ static void chunk_heap_release(struct samsung_dma_buffer *buffer)
 		ret = chunk_heap_unprotect(buffer);
 
 	if (!ret) {
-		for_each_sgtable_sg(table, sg, i)
+		for_each_sgtable_sg(table, sg, i) {
 			cma_release(chunk_heap->cma, sg_page(sg), 1 << chunk_order);
+			dma_heap_dec_inuse(1 << chunk_order);
+		}
 	}
 	samsung_dma_buffer_free(buffer);
 }

@@ -30,8 +30,7 @@ EXPORT_SYMBOL(register_modem_event_notifier);
 
 void modem_notify_event(enum modem_event evt, void *mc)
 {
-	mif_info("event notify (%d)\n", evt);
-	raw_notifier_call_chain(&modem_event_notifier, evt, mc);
+	/* ToDo */
 }
 EXPORT_SYMBOL(modem_notify_event);
 
@@ -43,11 +42,17 @@ int register_modem_voice_call_event_notifier(struct notifier_block *nb)
 	return raw_notifier_chain_register(&modem_voice_call_event_notifier, nb);
 }
 
+void unregister_modem_voice_call_event_notifier(struct notifier_block *nb)
+{
+	if (nb)
+		raw_notifier_chain_unregister(&modem_voice_call_event_notifier, nb);
+}
+
 void modem_voice_call_notify_event(enum modem_voice_call_event evt, void *data)
 {
-	mif_err("voice call event notify (%d) ++\n", evt);
+	mif_info("voice call event notify (%d) ++\n", evt);
 	raw_notifier_call_chain(&modem_voice_call_event_notifier, evt, data);
-	mif_err("voice call event notify (%d) --\n", evt);
+	mif_info("voice call event notify (%d) --\n", evt);
 }
 EXPORT_SYMBOL(modem_voice_call_notify_event);
 #endif

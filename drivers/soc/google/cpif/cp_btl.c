@@ -21,6 +21,7 @@
 #include <soc/google/exynos-smc.h>
 
 #include "modem_utils.h"
+#include "modem_ctrl.h"
 #include "cp_btl.h"
 #if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
 #include "s51xx_pcie.h"
@@ -30,6 +31,8 @@
 #if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
 #define BTL_MAP_SIZE		SZ_1M	/* per PCI BAR2 limit */
 #endif
+
+#define convert_to_kb(x) ((x) << (PAGE_SHIFT - 10))
 
 /* fops */
 static int btl_open(struct inode *inode, struct file *filep)
@@ -281,6 +284,7 @@ int cp_btl_create(struct cp_btl *btl, struct device *dev)
 {
 	struct modem_data *pdata = NULL;
 	int ret = 0;
+	struct sysinfo s;
 
 	if (!dev) {
 		mif_err("dev is null\n");
@@ -300,6 +304,11 @@ int cp_btl_create(struct cp_btl *btl, struct device *dev)
 	atomic_set(&btl->active, 0);
 
 	mif_dt_read_string(dev->of_node, "cp_btl_node_name", btl->name);
+	mif_dt_read_u32_noerr(dev->of_node, "cp_btl_support_extension", btl->support_extension);
+	mif_dt_read_u32_noerr(dev->of_node, "cp_btl_extension_dram_size", btl->extension_dram_size);
+
+	if (btl->support_extension)
+		btl->extension_enabled = true;
 
 	btl->id = pdata->cp_num;
 	if (btl->id >= MAX_BTL_ID) {
@@ -318,16 +327,33 @@ int cp_btl_create(struct cp_btl *btl, struct device *dev)
 	mif_info("name:%s id:%d link:%d\n", btl->name, btl->id, btl->link_type);
 	switch (btl->link_type) {
 	case LINKDEV_SHMEM:
-		btl->mem.v_base = cp_shmem_get_region(btl->id, SHMEM_BTL);
+		btl->mem.size = cp_shmem_get_size(btl->id, SHMEM_BTL);
+
+		if (btl->support_extension) {
+			si_meminfo(&s);
+			mif_info("total mem (%ld kb)\n", convert_to_kb(s.totalram));
+			/* DRAM size: over 8GB -> BTL size: 64MB */
+			/* DRAM size: under 8GB -> BTL size: 32MB */
+			if (convert_to_kb(s.totalram) > btl->extension_dram_size) {
+				btl->mem.size += cp_shmem_get_size(btl->id, SHMEM_BTL_EXT);
+			} else {
+				cp_shmem_release_rmem(btl->id, SHMEM_BTL_EXT, 0);
+				btl->extension_enabled = false;
+			}
+		}
+
+		/* TODO: cached */
+		btl->mem.v_base = cp_shmem_get_nc_region(cp_shmem_get_base(btl->id, SHMEM_BTL),
+					btl->mem.size);
 		if (!btl->mem.v_base) {
 			mif_err("cp_shmem_get_region() error:v_base\n");
 			ret = -ENOMEM;
 			goto create_exit;
 		}
-		btl->mem.size = cp_shmem_get_size(btl->id, SHMEM_BTL);
 
 		/* BAAW */
 		exynos_smc(SMC_ID_CLK, SSS_CLK_ENABLE, 0, 0);
+
 		ret = (int)exynos_smc(SMC_ID, CP_BOOT_REQ_CP_RAM_LOGGING, 0, 0);
 		if (ret) {
 			mif_err("exynos_smc() error:%d\n", ret);
@@ -371,9 +397,9 @@ create_exit:
 	if (btl->mem.v_base)
 		vunmap(btl->mem.v_base);
 
-#if !IS_ENABLED(CONFIG_SOC_EXYNOS9820)
-	cp_shmem_release_rmem(btl->id, SHMEM_BTL);
-#endif
+	cp_shmem_release_rmem(btl->id, SHMEM_BTL, 0);
+	if (btl->extension_enabled)
+		cp_shmem_release_rmem(btl->id, SHMEM_BTL_EXT, 0);
 
 	return ret;
 }

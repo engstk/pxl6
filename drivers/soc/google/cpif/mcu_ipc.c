@@ -14,11 +14,9 @@
 #include <linux/delay.h>
 #include <linux/bitops.h>
 
-#include <linux/mcu_ipc.h>
+#include <soc/google/mcu_ipc.h>
 #include "mcu_ipc_priv.h"
 #include "modem_utils.h"
-
-#define	USE_FIXED_AFFINITY
 
 /* IRQ handler */
 static irqreturn_t cp_mbox_irq_handler(int irq, void *data)
@@ -433,23 +431,7 @@ int cp_mbox_set_affinity(u32 idx, int affinity)
 	mif_debug("idx:%d affinity:0x%x\n", idx, affinity);
 	irq_data->affinity = affinity;
 
-#if IS_ENABLED(CONFIG_ARGOS)
-#ifdef USE_FIXED_AFFINITY
 	return irq_set_affinity_hint(irq_data->irq, cpumask_of(affinity));
-#else
-	if (!zalloc_cpumask_var(&irq_data->dmask, GFP_KERNEL))
-		return -ENOMEM;
-	if (!zalloc_cpumask_var(&irq_data->imask, GFP_KERNEL))
-		return -ENOMEM;
-
-	cpumask_or(irq_data->imask, irq_data->imask, cpumask_of(mask));
-	cpumask_copy(irq_data->dmask, get_default_cpu_mask());
-
-	return argos_irq_affinity_setup_label(irq, "IPC", irq_data->imask, irq_data->dmask);
-#endif
-#else /* CONFIG_ARGOS */
-	return irq_set_affinity_hint(irq_data->irq, cpumask_of(affinity));
-#endif /* CONFIG_ARGOS */
 }
 EXPORT_SYMBOL(cp_mbox_set_affinity);
 
@@ -457,7 +439,6 @@ EXPORT_SYMBOL(cp_mbox_set_affinity);
 static int cp_mbox_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource *res = NULL;
 	struct device_node *irq_np = NULL;
 	struct device_node *irq_child_np = NULL;
 	u32 count = 0;
@@ -470,7 +451,8 @@ static int cp_mbox_probe(struct platform_device *pdev)
 
 	if (!dev->of_node) {
 		mif_err("dev->of_node is null\n");
-		return -ENODEV;
+		err = -ENODEV;
+		goto fail;
 	}
 
 	/* DMA mask */
@@ -480,11 +462,11 @@ static int cp_mbox_probe(struct platform_device *pdev)
 		pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
 
 	/* Region */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	mbox_data.ioaddr = devm_ioremap_resource(&pdev->dev, res);
+	mbox_data.ioaddr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(mbox_data.ioaddr)) {
 		mif_err("failed to request memory resource\n");
-		return PTR_ERR(mbox_data.ioaddr);
+		err = PTR_ERR(mbox_data.ioaddr);
+		goto fail;
 	}
 
 	mbox_data.dev = &pdev->dev;
@@ -504,14 +486,16 @@ static int cp_mbox_probe(struct platform_device *pdev)
 	irq_np = of_get_child_by_name(dev->of_node, "cp_mailbox_irqs");
 	if (!irq_np) {
 		mif_err("of_get_child_by_name() error:irq_np\n");
-		return -EINVAL;
+		err = -EINVAL;
+		goto fail;
 	}
 	for_each_child_of_node(irq_np, irq_child_np) {
 		struct cp_mbox_irq_data *irq_data = NULL;
 
 		if (count >= MAX_CP_MBOX_IRQ_IDX) {
 			mif_err("count is full:%d\n", count);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto fail;
 		}
 
 		/* IRQ index */
@@ -519,7 +503,8 @@ static int cp_mbox_probe(struct platform_device *pdev)
 		irq_data = &mbox_data.irq_data[idx];
 		if (!irq_data) {
 			mif_err("irq_data %d is null\n", idx);
-			return -EINVAL;
+			err = -EINVAL;
+			goto fail;
 		}
 		irq_data->idx = idx;
 
@@ -558,12 +543,12 @@ static int cp_mbox_probe(struct platform_device *pdev)
 					IRQF_ONESHOT, irq_data->name, irq_data);
 		if (err) {
 			mif_err("devm_request_irq() error:%d\n", err);
-			return err;
+			goto fail;
 		}
 		err = enable_irq_wake(irq);
 		if (err) {
 			mif_err("enable_irq_wake() error:%d\n", err);
-			return err;
+			goto fail;
 		}
 		irq_data->irq = irq;
 
@@ -588,9 +573,13 @@ static int cp_mbox_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(dev, &mbox_data);
 
-	mif_err("---\n");
+	mif_info("---\n");
 
 	return 0;
+
+fail:
+	panic("CP mbox probe failed\n");
+	return err;
 }
 
 static int cp_mbox_remove(struct platform_device *pdev)

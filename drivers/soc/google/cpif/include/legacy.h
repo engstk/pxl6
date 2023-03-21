@@ -10,11 +10,6 @@
 #include "circ_queue.h"
 #include "sipc5.h"
 
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
-#define DOORBELL_INT_ADD		0x10000
-#define MODEM_INT_NUM			16
-#endif
-
 #define BAD_MSG_BUFFER_SIZE 32
 
 enum legacy_ipc_map {
@@ -23,7 +18,7 @@ enum legacy_ipc_map {
 	IPC_MAP_HPRIO_RAW,
 #endif
 	IPC_MAP_NORM_RAW,
-	MAX_SIPC_MAP,
+	IPC_MAP_MAX,
 };
 
 struct legacy_ipc_device {
@@ -54,9 +49,7 @@ struct legacy_link_device {
 	u32 __iomem *magic;
 	u32 __iomem *mem_access;
 
-	struct legacy_ipc_device *dev[MAX_SIPC_MAP];
-
-
+	struct legacy_ipc_device *dev[IPC_MAP_MAX];
 };
 
 int create_legacy_link_device(struct mem_link_device *mld);

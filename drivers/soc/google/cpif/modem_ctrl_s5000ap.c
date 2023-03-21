@@ -12,9 +12,9 @@
 #include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
-#include <linux/mcu_ipc.h>
-#include <linux/shm_ipc.h>
 #include <linux/modem_notifier.h>
+#include <soc/google/mcu_ipc.h>
+#include <soc/google/shm_ipc.h>
 #include <soc/google/cal-if.h>
 #include <soc/google/exynos-modem-ctrl.h>
 #if IS_ENABLED(CONFIG_EXYNOS_PMU_IF)
@@ -29,9 +29,6 @@
 #if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
 #include "s51xx_pcie.h"
 #endif
-#if IS_ENABLED(CONFIG_SBD_BOOTLOG)
-#include "link_device.h"
-#endif
 #if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 #include "../../../video/fbdev/exynos/dpu30/decon.h"
 static int s5000ap_lcd_notifier(struct notifier_block *notifier,
@@ -41,14 +38,37 @@ static int s5000ap_lcd_notifier(struct notifier_block *notifier,
 /*
  * CP_WDT interrupt handler
  */
+#if IS_ENABLED(CONFIG_SOC_S5E9925) && IS_ENABLED(CONFIG_SOC_S5E9925_EVT0)
+#define PMU_CP_INT_IN		0x3940
+#define CP_SCANDUMP_MASK	(0x1 << 7)
+#elif IS_ENABLED(CONFIG_SOC_S5E9925)
+#define PMU_CP_INT_IN		0x3930
+#define CP_SCANDUMP_MASK	(0x1 << 7)
+#elif IS_ENABLED(CONFIG_SOC_S5E8825)
+#define PMU_CP_INT_IN		0x3540
+#define CP_SCANDUMP_MASK	(0x1 << 7)
+#endif
 static irqreturn_t cp_wdt_handler(int irq, void *arg)
 {
 	struct modem_ctl *mc = (struct modem_ctl *)arg;
 	enum modem_state new_state;
 	struct link_device *ld = get_current_link(mc->bootd);
+#if IS_ENABLED(CONFIG_SOC_S5E9925) || IS_ENABLED(CONFIG_SOC_S5E8825)
+	u32	val;
+#endif
 
-	mif_disable_irq(&mc->irq_cp_wdt);
 	mif_info("%s: CP_WDT occurred\n", mc->name);
+	mif_disable_irq(&mc->irq_cp_wdt);
+
+#if IS_ENABLED(CONFIG_SOC_S5E9925) || IS_ENABLED(CONFIG_SOC_S5E8825)
+	mif_info("enable CP scandump request\n");
+	exynos_pmu_read(PMU_CP_INT_IN, &val);
+	if (val & CP_SCANDUMP_MASK) {
+		mif_info("cp scandump request detected\n");
+		dbg_snapshot_expire_watchdog();
+		return IRQ_HANDLED;
+	}
+#endif
 
 	if (mc->phone_state == STATE_ONLINE)
 		modem_notify_event(MODEM_EVENT_WATCHDOG, mc);
@@ -231,6 +251,7 @@ static int init_control_messages(struct modem_ctl *mc)
 	int ds_det;
 #if IS_ENABLED(CONFIG_CP_BTL)
 	unsigned int sbi_ext_backtrace_mask, sbi_ext_backtrace_pos;
+	unsigned int sbi_ext_backtrace_ext_mask, sbi_ext_backtrace_ext_pos;
 #endif
 
 	if (modem->offset_cmsg_offset)
@@ -250,10 +271,12 @@ static int init_control_messages(struct modem_ctl *mc)
 	set_ctrl_msg(&mld->cp2ap_msg, 0);
 
 	if (ld->capability_check) {
-		iowrite32(0, mld->ap_capability_0_offset);
-		iowrite32(0, mld->cp_capability_0_offset);
-		iowrite32(0, mld->ap_capability_1_offset);
-		iowrite32(0, mld->cp_capability_1_offset);
+		int part;
+
+		for (part = 0; part < AP_CP_CAP_PARTS; part++) {
+			iowrite32(0, mld->ap_capability_offset[part]);
+			iowrite32(0, mld->cp_capability_offset[part]);
+		}
 	}
 
 	if (!np) {
@@ -267,6 +290,14 @@ static int init_control_messages(struct modem_ctl *mc)
 	mif_dt_read_u32(np, "sbi_ext_backtrace_pos", sbi_ext_backtrace_pos);
 	update_ctrl_msg(&mld->ap2cp_united_status, mc->mdm_data->btl.enabled,
 				sbi_ext_backtrace_mask, sbi_ext_backtrace_pos);
+
+	if (mc->mdm_data->btl.support_extension) {
+		mif_info("btl extension enable:%d\n", mc->mdm_data->btl.extension_enabled);
+		mif_dt_read_u32(np, "sbi_ext_backtrace_ext_mask", sbi_ext_backtrace_ext_mask);
+		mif_dt_read_u32(np, "sbi_ext_backtrace_ext_pos", sbi_ext_backtrace_ext_pos);
+		update_ctrl_msg(&mld->ap2cp_united_status, mc->mdm_data->btl.extension_enabled,
+					sbi_ext_backtrace_ext_mask, sbi_ext_backtrace_ext_pos);
+	}
 #endif
 
 	mif_dt_read_u32(np, "sbi_sys_rev_mask", sbi_sys_rev_mask);
@@ -300,12 +331,6 @@ static bool _is_first_boot = true;
 static int power_on_cp(struct modem_ctl *mc)
 {
 	mif_info("+++\n");
-
-	mc->receive_first_ipc = 0;
-
-#if !IS_ENABLED(CONFIG_CP_SECURE_BOOT)
-	exynos_cp_init();
-#endif
 
 	change_modem_state(mc, STATE_OFFLINE);
 
@@ -371,8 +396,6 @@ static int power_reset_cp(struct modem_ctl *mc)
 
 	mif_info("+++\n");
 
-	mc->receive_first_ipc = 0;
-
 	/* 2cp dump WA */
 	if (timer_pending(&mld->crash_ack_timer))
 		del_timer(&mld->crash_ack_timer);
@@ -381,7 +404,6 @@ static int power_reset_cp(struct modem_ctl *mc)
 	if (ld->sbd_ipc && hrtimer_active(&mld->sbd_print_timer))
 		hrtimer_cancel(&mld->sbd_print_timer);
 
-	/* mc->phone_state = STATE_OFFLINE; */
 	if (mc->phone_state == STATE_OFFLINE) {
 		mif_info("already offline\n");
 		return 0;
@@ -390,7 +412,8 @@ static int power_reset_cp(struct modem_ctl *mc)
 	if (mc->phone_state == STATE_ONLINE)
 		modem_notify_event(MODEM_EVENT_RESET, mc);
 
-	/* Change phone state to OFFLINE */
+	change_modem_state(mc, STATE_RESET);
+	msleep(STATE_RESET_INTERVAL_MS);
 	change_modem_state(mc, STATE_OFFLINE);
 
 	if (cal_cp_status()) {
@@ -416,8 +439,6 @@ static int power_reset_dump_cp(struct modem_ctl *mc)
 	struct mem_link_device *mld = to_mem_link_device(ld);
 
 	mif_info("+++\n");
-
-	mc->receive_first_ipc = 0;
 
 	/* 2cp dump WA */
 	if (timer_pending(&mld->crash_ack_timer))
@@ -546,9 +567,6 @@ static int complete_normal_boot(struct modem_ctl *mc)
 	struct modem_data *modem = mc->mdm_data;
 	struct mem_link_device *mld = modem->mld;
 #endif
-#if IS_ENABLED(CONFIG_SBD_BOOTLOG)
-	struct link_device *ld = get_current_link(mc->bootd);
-#endif
 
 	mif_info("+++\n");
 
@@ -582,7 +600,7 @@ static int complete_normal_boot(struct modem_ctl *mc)
 		mc->lcd_notifier.notifier_call = s5000ap_lcd_notifier;
 		ret = register_lcd_status_notifier(&mc->lcd_notifier);
 		if (ret) {
-			mif_err("failed to register LCD notifier");
+			mif_err("failed to register LCD notifier\n");
 			return ret;
 		}
 	}
@@ -592,9 +610,6 @@ static int complete_normal_boot(struct modem_ctl *mc)
 			mc->sbi_lcd_status_pos);
 #endif /* CONFIG_CP_LCD_NOTIFIER */
 
-#if IS_ENABLED(CONFIG_SBD_BOOTLOG)
-	mif_add_timer(&ld->cplog_timer, (10 * HZ), shmem_pr_sbdcplog);
-#endif
 	mif_info("---\n");
 
 exit:
@@ -606,41 +621,10 @@ static int trigger_cp_crash(struct modem_ctl *mc)
 	struct link_device *ld = get_current_link(mc->bootd);
 	struct mem_link_device *mld = to_mem_link_device(ld);
 	u32 crash_type = ld->crash_reason.type;
-#if IS_ENABLED(CONFIG_SOC_EXYNOS9630)
-	unsigned int val = 0; /* value used for PMU registers */
-#endif
+
 	mif_info("+++\n");
 
-#if IS_ENABLED(CONFIG_SOC_EXYNOS9630)
-	exynos_pmu_read(0x3200, &val); /* CP_CONFIGURATION */
-	mif_info("CP_CONFIGURATION: 0x%08X\n", val);
-	exynos_pmu_read(0x3204, &val); /* CP_STATUS */
-	mif_info("CP_STATUS: 0x%08X\n", val);
-	exynos_pmu_read(0x3208, &val); /* CP_STATES */
-	mif_info("CP_STATES: 0x%08X\n", val);
-	exynos_pmu_read(0x320C, &val); /* CP_OPTION */
-	mif_info("CP_OPTION: 0x%08X\n", val);
-	exynos_pmu_read(0x3210, &val); /* CP_CTRL_NS */
-	mif_info("CP_CTRL_NS: 0x%08X\n", val);
-	exynos_pmu_read(0x3220, &val); /* CP_OUT */
-	mif_info("CP_OUT: 0x%08X\n", val);
-	exynos_pmu_read(0x3224, &val); /* CP_IN */
-	mif_info("CP_IN: 0x%08X\n", val);
-	exynos_pmu_read(0x3240, &val); /* CP_INT_IN */
-	mif_info("CP_INT_IN: 0x%08X\n", val);
-	exynos_pmu_read(0x3244, &val); /* CP_INT_EN */
-	mif_info("CP_INT_EN: 0x%08X\n", val);
-	exynos_pmu_read(0x3248, &val); /* CP_INT_TYPE */
-	mif_info("CP_INT_TYPE: 0x%08X\n", val);
-	exynos_pmu_read(0x324c, &val); /* CP_INT_DIR */
-	mif_info("CP_INT_DIR: 0x%08X\n", val);
-#endif
-
-	if (ld->protocol == PROTOCOL_SIT &&
-			crash_type == CRASH_REASON_RIL_TRIGGER_CP_CRASH)
-		ld->link_trigger_cp_crash(mld, crash_type, ld->crash_reason.string);
-	else
-		ld->link_trigger_cp_crash(mld, crash_type, "Forced crash is called");
+	ld->link_trigger_cp_crash(mld, crash_type, "Forced crash is called");
 
 	mif_info("---\n");
 	return 0;
@@ -670,82 +654,6 @@ EXPORT_SYMBOL(modem_force_crash_exit_ext);
 
 #if IS_ENABLED(CONFIG_CP_UART_NOTI)
 #if IS_ENABLED(CONFIG_PMU_UART_SWITCH)
-#if IS_ENABLED(CONFIG_SOC_EXYNOS9630)
-static void __iomem *uart_txd_addr; /* SEL_TXD_GPIO_UART_DEBUG */
-static void __iomem *uart_rxd_addr; /* SEL_RXD_CP_UART */
-void change_to_cp_uart(void)
-{
-	if (uart_txd_addr == NULL) {
-		uart_txd_addr = devm_ioremap(g_mc->dev, 0x10E2062C, SZ_64);
-		if (uart_txd_addr == NULL) {
-			mif_err("Err: failed to ioremap UART TXD!\n");
-			return;
-		}
-	}
-	if (uart_rxd_addr == NULL) {
-		uart_rxd_addr = devm_ioremap(g_mc->dev, 0x10E20650, SZ_64);
-		if (uart_rxd_addr == NULL) {
-			mif_err("Err: failed to ioremap UART RXD!\n");
-			return;
-		}
-	}
-	mif_info("CHANGE TO CP UART\n");
-	__raw_writel(0x2, uart_txd_addr);
-	mif_info("SEL_TXD_GPIO_UART_DEBUG val: %08X\n", __raw_readl(uart_txd_addr));
-	__raw_writel(0x1, uart_rxd_addr);
-	mif_info("SEL_RXD_CP_UART val: %08X\n", __raw_readl(uart_rxd_addr));
-}
-
-void change_to_ap_uart(void)
-{
-	if (uart_txd_addr == NULL) {
-		uart_txd_addr = devm_ioremap(g_mc->dev, 0x10E2062C, SZ_64);
-		if (uart_txd_addr == NULL) {
-			mif_err("Err: failed to ioremap UART TXD!\n");
-			return;
-		}
-	}
-	if (uart_rxd_addr == NULL) {
-		uart_rxd_addr = devm_ioremap(g_mc->dev, 0x10E20650, SZ_64);
-		if (uart_rxd_addr == NULL) {
-			mif_err("Err: failed to ioremap UART RXD!\n");
-			return;
-		}
-	}
-	mif_info("CHANGE TO CP UART\n");
-	__raw_writel(0x0, uart_txd_addr);
-	mif_info("SEL_TXD_GPIO_UART_DEBUG val: %08X\n", __raw_readl(uart_txd_addr));
-	__raw_writel(0x0, uart_rxd_addr);
-	mif_info("SEL_RXD_CP_UART val: %08X\n", __raw_readl(uart_rxd_addr));
-}
-#elif IS_ENABLED(CONFIG_SOC_EXYNOS3830)
-void change_to_cp_uart(void)
-{
-	int ret = 0;
-
-	ret = exynos_pmu_write(0x0760, 0x11002000);
-	if (ret < 0) {
-		mif_err("ERR(%d) set CP UART_IO_SHARE_CTRL\n", ret);
-		return;
-	}
-
-	mif_info("CHANGE TO CP UART\n");
-}
-
-void change_to_ap_uart(void)
-{
-	int ret = 0;
-
-	ret = exynos_pmu_write(0x0760, 0x00120000);
-	if (ret < 0) {
-		mif_err("ERR(%d) set AP UART_IO_SHARE_CTRL\n", ret);
-		return;
-	}
-
-	mif_info("CHANGE TO AP UART\n");
-}
-#endif /* CONFIG_SOC_EXYNOSxxxx */
-
 void send_uart_noti_to_modem(int val)
 {
 	struct modem_data *modem;
@@ -871,6 +779,8 @@ static int suspend_cp(struct modem_ctl *mc)
 	struct modem_data *modem = mc->mdm_data;
 	struct mem_link_device *mld = modem->mld;
 
+	mld->link_dev.stop_timers(mld);
+
 	modem_ctrl_set_kerneltime(mc);
 
 	mif_info("%s: pda_active:0\n", mc->name);
@@ -896,6 +806,8 @@ static int resume_cp(struct modem_ctl *mc)
 			mc->sbi_pda_active_pos);
 
 	cp_mbox_set_interrupt(CP_MBOX_IRQ_IDX_0, mc->int_pda_active);
+
+	mld->link_dev.start_timers(mld);
 
 	return 0;
 }
@@ -923,15 +835,9 @@ static void s5000ap_get_pdata(struct modem_ctl *mc, struct modem_data *modem)
 	struct modem_mbox *mbx = modem->mbx;
 
 	mc->int_pda_active = mbx->int_ap2cp_active;
-
 	mc->int_cp_wakeup = mbx->int_ap2cp_wakeup;
-
-	mc->irq_phone_active = mbx->irq_cp2ap_active;
-
-	mc->mbx_ap_status = mbx->mbx_ap2cp_status;
-	mc->mbx_cp_status = mbx->mbx_cp2ap_status;
-
 	mc->int_uart_noti = mbx->int_ap2cp_uart_noti;
+	mc->irq_phone_active = mbx->irq_cp2ap_active;
 
 	mc->sbi_lte_active_mask = modem->sbi_lte_active_mask;
 	mc->sbi_lte_active_pos = modem->sbi_lte_active_pos;
@@ -952,9 +858,11 @@ static void s5000ap_get_pdata(struct modem_ctl *mc, struct modem_data *modem)
 	mc->sbi_ds_det_mask = modem->sbi_ds_det_mask;
 	mc->sbi_ds_det_pos = modem->sbi_ds_det_pos;
 
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	mc->sbi_lcd_status_mask = modem->sbi_lcd_status_mask;
 	mc->sbi_lcd_status_pos = modem->sbi_lcd_status_pos;
 	mc->int_lcd_status = mbx->int_ap2cp_lcd_status;
+#endif
 }
 
 static int send_panic_to_cp_notifier(struct notifier_block *nb,
@@ -991,11 +899,12 @@ static int cp_itmon_notifier(struct notifier_block *nb,
 	if (IS_ERR_OR_NULL(itmon_data))
 		return NOTIFY_DONE;
 
-	if (itmon_data->port && (strncmp("MODEM", itmon_data->port,
-					sizeof("MODEM") - 1) == 0)) {
-		modem_force_crash_exit_ext();
+	if (itmon_data->port &&
+	(strncmp("CP_", itmon_data->port, sizeof("CP_") - 1) == 0 ||
+	strncmp("MODEM", itmon_data->port, sizeof("MODEM") - 1) == 0) &&
+	itmon_data->errcode == 1) {	/* force cp crash when decode error */
 		mif_info("CP itmon notifier: cp crash request complete\n");
-		return NOTIFY_OK;
+		modem_force_crash_exit_ext();
 	}
 
 	return NOTIFY_DONE;
@@ -1058,11 +967,16 @@ int s5000ap_init_modemctl_device(struct modem_ctl *mc, struct modem_data *pdata)
 
 	/* Register CP_WDT */
 	irq_num = platform_get_irq(pdev, 0);
+	if (irq_num < 0) {
+		mif_err("platform_get_irq failed with(%d)", irq_num);
+		ret = irq_num;
+		goto err_irq;
+	}
 	mif_init_irq(&mc->irq_cp_wdt, irq_num, "cp_wdt", flags);
 	ret = mif_request_irq(&mc->irq_cp_wdt, cp_wdt_handler, mc);
 	if (ret) {
 		mif_err("Failed to request_irq with(%d)", ret);
-		return ret;
+		goto err_irq;
 	}
 	/* CP_WDT interrupt must be enabled only after CP booting */
 	mif_disable_irq(&mc->irq_cp_wdt);
@@ -1073,11 +987,14 @@ int s5000ap_init_modemctl_device(struct modem_ctl *mc, struct modem_data *pdata)
 	if (ret) {
 		mif_err("Failed to cp_mbox_register_handler %u with(%d)",
 				mc->irq_phone_active, ret);
-		return ret;
+		goto err_mbox_register;
 	}
 
 	init_completion(&mc->init_cmpl);
 	init_completion(&mc->off_cmpl);
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	init_completion(&mc->clatinfo_ack);
+#endif
 
 	/* AP2CP_CFG */
 	mif_dt_read_u32_noerr(np, "ap2cp_cfg_addr", mc->ap2cp_cfg_addr);
@@ -1086,13 +1003,18 @@ int s5000ap_init_modemctl_device(struct modem_ctl *mc, struct modem_data *pdata)
 		mc->ap2cp_cfg_ioaddr = devm_ioremap(mc->dev, mc->ap2cp_cfg_addr, SZ_64);
 		if (mc->ap2cp_cfg_ioaddr == NULL) {
 			mif_err("%s: AP2CP_CFG ioremap failed.\n", __func__);
-			return -EACCES;
+			ret = -EACCES;
+			goto err_cfg_ioaddr;
 		}
 	}
 
 	/* Register panic notifier_call*/
 	mc->send_panic_nb.notifier_call = send_panic_to_cp_notifier;
-	atomic_notifier_chain_register(&panic_notifier_list, &mc->send_panic_nb);
+	ret = atomic_notifier_chain_register(&panic_notifier_list, &mc->send_panic_nb);
+	if (ret < 0) {
+		mif_err("failed to register panic notifier_call\n");
+		goto err_cfg_ioaddr;
+	}
 
 #if !IS_ENABLED(CONFIG_GPIO_DS_DETECT)
 	if (sysfs_create_group(&pdev->dev.kobj, &sim_group))
@@ -1105,4 +1027,26 @@ int s5000ap_init_modemctl_device(struct modem_ctl *mc, struct modem_data *pdata)
 #endif
 	mif_info("---\n");
 	return 0;
+
+err_cfg_ioaddr:
+	cp_mbox_unregister_handler(CP_MBOX_IRQ_IDX_0, mc->irq_phone_active, cp_active_handler);
+err_mbox_register:
+	mif_free_irq(&mc->irq_cp_wdt, mc);
+err_irq:
+	g_mc = NULL;
+	return ret;
+}
+
+void s5000ap_uninit_modemctl_device(struct modem_ctl *mc, struct modem_data *pdata)
+{
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+	itmon_notifier_chain_unregister(&mc->itmon_nb);
+#endif
+#if !IS_ENABLED(CONFIG_GPIO_DS_DIRECT)
+	sysfs_remove_group(&mc->dev.kobj, &sim_group);
+#endif
+	atomic_notifier_chain_unregister(&panic_notifier_list, &mc->send_panic_nb);
+	cp_mbox_unregister_handler(CP_MBOX_IRQ_IDX_0, mc->irq_phone_active, cp_active_handler);
+	mif_free_irq(&mc->irq_cp_wdt, mc);
+	g_mc = NULL;
 }

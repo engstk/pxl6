@@ -14,7 +14,7 @@ void modem_ctrl_set_kerneltime(struct modem_ctl *mc)
 	struct utc_time t;
 
 	get_utc_time(&t);
-	mif_info("time = %d.%d\n", t.sec + (t.min * 60), t.us);
+	mif_info("time = %d.%06d\n", t.sec + (t.min * 60), t.us);
 
 	if (mld->ap2cp_kerneltime_sec.type == DRAM_V2) {
 		set_ctrl_msg(&mld->ap2cp_kerneltime_sec, t.sec + (t.min * 60));
@@ -106,7 +106,7 @@ void change_modem_state(struct modem_ctl *mc, enum modem_state state)
 	mc->phone_state = state;
 	spin_unlock_irqrestore(&mc->lock, flags);
 
-	mif_err("%s->state changed (%s -> %s)\n", mc->name,
+	mif_info("%s->state changed (%s -> %s)\n", mc->name,
 		cp_state_str(old_state), cp_state_str(state));
 
 	list_for_each_entry(iod, &mc->modem_state_notify_list, list) {

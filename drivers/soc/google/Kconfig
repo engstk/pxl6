@@ -12,9 +12,18 @@ config SOC_GS101
 	bool "Google GS101"
 	depends on SOC_GOOGLE
 
+config SOC_GS201
+	bool "Google GS201"
+	depends on SOC_GOOGLE
+
 config BOARD_SLIDER
 	bool "Google Slider Board"
 	depends on SOC_GS101
+	select OF_GENERATE_SYMBOLS
+
+config BOARD_CLOUDRIPPER
+	bool "Google Cloudripper Board"
+	depends on SOC_GS201
 	select OF_GENERATE_SYMBOLS
 
 config GS_CHIPID
@@ -115,9 +124,9 @@ config EXYNOS_PM
 
 config EXYNOS_CPUPM
 	tristate "CPU Power Management driver"
-	depends on SOC_GS101 && PMUCAL
+	depends on (SOC_GS101 || SOC_GS201) && PMUCAL
 	help
-	Support CPU Power Control for GS101 SoC.
+	Support CPU Power Control for GS SoC.
 
 source "drivers/soc/google/acpm/Kconfig"
 
@@ -177,12 +186,23 @@ config VH_KERNEL
 	help
 	Modules for vendor kernel hooks.
 
-config PIXEL_EM
-	tristate "Enable Pixel Energy Model driver"
-	depends on VH_KERNEL
-	default n
+config BOARD_EMULATOR
+	bool "EMULATOR platform"
+	select OF_GENERATE_SYMBOLS
+
+config BOARD_GS201_EMULATOR
+	bool "EMULATOR Platform for GS201"
+	depends on SOC_GS201 && BOARD_EMULATOR
+	select OF_GENERATE_SYMBOLS
 	help
-	Support Pixel Energy Model.
+	GS201 Zebu Emulator System
+
+config BOARD_GS201_HYBRID
+	bool "HYBRID EMULATOR Platform for GS201"
+	depends on SOC_GS201 && BOARD_EMULATOR
+	select OF_GENERATE_SYMBOLS
+	help
+	GS201 Hybrid Zebu Emulator System, it is support for Android Platform
 
 config PIXEL_STAT
 	tristate "Enable Pixel statistics"
@@ -239,5 +259,25 @@ config SYSRQ_HOOK
 	default n
 	help
 	Modules for sysrq hooks.
+
+config PKVM_S2MPU
+	tristate "S2MPU driver compatible with pKVM"
+	default n
+	help
+	This module is a driver for the stage-2 IOMMU controlled by hypervisor.
+
+config WLAN_TRACKER
+	bool "WiFi performance tracker driver"
+	depends on SOC_GS201
+	default n
+	help
+	Module for wlan performance tracker.
+
+config KERNEL_TOP
+	tristate "Display processes statistic"
+	default n
+	help
+	  This module exposes kernel function for modules to debugging
+	  processes statistic.
 
 endmenu

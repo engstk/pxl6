@@ -101,52 +101,30 @@ static unsigned int bootdump_poll(struct file *filp, struct poll_table_struct *w
 	switch (mc->phone_state) {
 	case STATE_BOOTING:
 	case STATE_ONLINE:
-		if (!mc->sim_state.changed) {
-			if (!skb_queue_empty(rxq))
-				return POLLIN | POLLRDNORM;
-			else /* wq is waken up without rx, return for wait */
-				return 0;
-		}
-		/* fall through, if sim_state has been changed */
+		if (!skb_queue_empty(rxq))
+			return POLLIN | POLLRDNORM;
+		break;
 	case STATE_CRASH_EXIT:
 	case STATE_CRASH_RESET:
 	case STATE_NV_REBUILDING:
 	case STATE_CRASH_WATCHDOG:
-		/* report crash only if iod is fmt/boot device */
-		if (iod->format == IPC_FMT) {
-			mif_err_limited("FMT %s: %s.state == %s\n",
-				iod->name, mc->name, mc_state(mc));
-			return POLLHUP;
-		} else if (iod->format == IPC_BOOT || ld->is_boot_ch(iod->ch)) {
+		if (iod->format == IPC_BOOT || ld->is_boot_ch(iod->ch) ||
+		    iod->format == IPC_DUMP || ld->is_dump_ch(iod->ch)) {
 			if (!skb_queue_empty(rxq))
 				return POLLIN | POLLRDNORM;
-
-			mif_err_limited("BOOT %s: %s.state == %s\n",
-				iod->name, mc->name, mc_state(mc));
-			return POLLHUP;
-		} else if (iod->format == IPC_DUMP || ld->is_dump_ch(iod->ch)) {
-			if (!skb_queue_empty(rxq))
-				return POLLIN | POLLRDNORM;
-
-			mif_err_limited("DUMP %s: %s.state == %s\n",
-				iod->name, mc->name, mc_state(mc));
-		} else {
-			mif_err_limited("%s: %s.state == %s\n",
-				iod->name, mc->name, mc_state(mc));
-
-			/* give delay to prevent infinite sys_poll call from
-			 * select() in APP layer without 'sleep' user call takes
-			 * almost 100% cpu usage when it is looked up by 'top'
-			 * command.
-			 */
-			msleep(20);
 		}
-		break;
 
-	case STATE_OFFLINE:
-		if (ld->protocol == PROTOCOL_SIT)
+		mif_err_limited("%s: %s.state == %s\n", iod->name, mc->name, mc_state(mc));
+
+		if (iod->format == IPC_BOOT || ld->is_boot_ch(iod->ch))
 			return POLLHUP;
-		/* fall through */
+		break;
+	case STATE_RESET:
+		mif_err_limited("%s: %s.state == %s\n", iod->name, mc->name, mc_state(mc));
+
+		if (iod->attrs & IO_ATTR_STATE_RESET_NOTI)
+			return POLLHUP;
+		break;
 	default:
 		break;
 	}
@@ -162,6 +140,7 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 	enum modem_state p_state;
 	struct cpif_version version;
 	int ret = 0;
+	struct mem_link_device *mld;
 
 	switch (cmd) {
 	case IOCTL_POWER_ON:
@@ -219,9 +198,6 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 			mif_err("boot_mode is invalid:%d\n", mode.idx);
 			return -EINVAL;
 		}
-
-		if (ld->reset_zerocopy)
-			ld->reset_zerocopy(ld);
 
 		return ret;
 	}
@@ -305,15 +281,17 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 				iod->name, cp_state_str(p_state));
 		}
 
-		if (mc->sim_state.changed) {
-			enum modem_state s_state = mc->sim_state.online ?
-					STATE_SIM_ATTACH : STATE_SIM_DETACH;
-			mc->sim_state.changed = false;
-			return s_state;
-		}
-
-		if (p_state == STATE_NV_REBUILDING)
+		switch (p_state) {
+		case STATE_NV_REBUILDING:
 			mc->phone_state = STATE_ONLINE;
+			break;
+		/* Do not return an internal state */
+		case STATE_RESET:
+			p_state = STATE_OFFLINE;
+			break;
+		default:
+			break;
+		}
 
 		return p_state;
 
@@ -408,6 +386,24 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 		mif_info("%s: IOCTL_HANDOVER_BLOCK_INFO\n", iod->name);
 		return ld->handover_block_info(ld, arg);
 
+	case IOCTL_SET_SPI_BOOT_MODE:
+		mld = to_mem_link_device(ld);
+		if (!mld) {
+			mif_err("%s: mld is null\n", iod->name);
+			return -EINVAL;
+		}
+		if (mld->spi_bus_num < 0) {
+			mif_err("invalid cpboot_spi_bus_num\n");
+			return -ENODEV;
+		}
+		mld->attrs |= LINK_ATTR_XMIT_BTDLR_SPI;
+		mld->attrs &= (~LINK_ATTR_XMIT_BTDLR_PCIE);
+
+		ld->load_cp_image = cpboot_spi_load_cp_image;
+
+		mif_info("%s: IOCTL_SET_SPI_BOOT_MODE\n", iod->name);
+		return 0;
+
 	default:
 		 /* If you need to handle the ioctl for specific link device,
 		  * then assign the link ioctl handler to ld->ioctl
@@ -442,14 +438,10 @@ static ssize_t bootdump_write(struct file *filp, const char __user *data,
 	unsigned int alloc_size;
 	/* 64bit prevent */
 	unsigned int cnt = (unsigned int)count;
-#ifdef DEBUG_MODEM_IF
 	struct timespec64 ts;
-#endif
 
-#ifdef DEBUG_MODEM_IF
 	/* Record the timestamp */
 	ktime_get_ts64(&ts);
-#endif
 
 	if (iod->format <= IPC_RFS && iod->ch == 0)
 		return -EINVAL;
@@ -482,8 +474,13 @@ static ssize_t bootdump_write(struct file *filp, const char __user *data,
 
 	while (copied < cnt) {
 		remains = cnt - copied;
-		alloc_size = min_t(unsigned int, remains + headroom,
-			iod->max_tx_size ?: remains + headroom);
+
+		if (check_add_overflow(remains, headroom, &alloc_size))
+			alloc_size = SZ_2K;
+
+		if (iod->max_tx_size)
+			alloc_size = min_t(unsigned int, alloc_size,
+				iod->max_tx_size);
 
 		/* Calculate tailroom for padding size */
 		if (iod->link_header && ld->aligned)
@@ -526,10 +523,8 @@ static ssize_t bootdump_write(struct file *filp, const char __user *data,
 		skbpriv(skb)->lnk_hdr = iod->link_header;
 		skbpriv(skb)->sipc_ch = iod->ch;
 
-#ifdef DEBUG_MODEM_IF
 		/* Copy the timestamp to the skb */
 		skbpriv(skb)->ts = ts;
-#endif
 #ifdef DEBUG_MODEM_IF_IODEV_TX
 		mif_pkt(iod->ch, "IOD-TX", skb);
 #endif

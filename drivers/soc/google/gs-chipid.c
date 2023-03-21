@@ -22,13 +22,16 @@ struct gs_chipid_variant {
 	int rev_reg;
 	int main_rev_bit;
 	int sub_rev_bit;
+	int dvfs_version_reg;
 };
 
-#define RAW_HEX_STR_SIZE 116
+#define RAW_HEX_STR_SIZE 132
 #define AP_HW_TUNE_HEX_STR_SIZE 64
 #define AP_HW_TUNE_HEX_ARRAY_SIZE 32
 #define ASV_TBL_HEX_STR_SIZE 128
 #define HPM_ASV_HEX_STR_SIZE 128
+#define GS101_HPM_ASV_END_ADDR 0xA024
+#define GS201_HPM_ASV_END_ADDR 0xA02C
 
 static void gs_chipid_get_asv_tbl_str(void __iomem *reg);
 static void gs_chipid_get_hpm_asv_str(void __iomem *reg);
@@ -47,6 +50,7 @@ struct gs_chipid_info {
 	u32 sub_rev;
 	u32 lot_id;
 	char *lot_id2;
+	u32 dvfs_version;
 	u64 unique_id;
 	char ap_hw_tune_str[AP_HW_TUNE_HEX_STR_SIZE+1];
 	u8 ap_hw_tune_arr[AP_HW_TUNE_HEX_ARRAY_SIZE];
@@ -59,9 +63,12 @@ struct gs_chipid_info {
 };
 
 #define GS101_SOC_ID		0x09845000
+#define GS201_SOC_ID		0x09855000
 #define SOC_MASK		0xFFFFF000
 #define SOC_MASK_V2		0x00FFFFFF
-#define SOC_TYPE_MASK		0x0000000F
+#define SOC_TYPE_MASK		0x000000FF
+#define GS201_TYPE_MASK 	0x00F00000
+#define GS201_TYPE_SHIFT	20
 #define LOTID_MASK		0x001FFFFF
 #define REV_MASK		0xF
 
@@ -81,6 +88,9 @@ static const char *product_id_to_name(unsigned int product_id)
 	case GS101_SOC_ID:
 		soc_name = "GS101";
 		break;
+	case GS201_SOC_ID:
+		soc_name = "GS201";
+		break;
 	default:
 		soc_name = "UNKNOWN";
 	}
@@ -93,6 +103,16 @@ static const struct gs_chipid_variant drv_data_gs101 = {
 	.rev_reg = 0x10,
 	.main_rev_bit = 0,
 	.sub_rev_bit = 16,
+	.dvfs_version_reg = 0x900C,
+};
+
+static const struct gs_chipid_variant drv_data_gs201 = {
+	.product_ver = 1,
+	.unique_id_reg = 0x04,
+	.rev_reg = 0x10,
+	.main_rev_bit = 0,
+	.sub_rev_bit = 16,
+	.dvfs_version_reg = 0x900C,
 };
 
 static char lot_id[6];
@@ -163,6 +183,12 @@ static ssize_t lot_id2_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s\n", gs_soc_info.lot_id2);
 }
 
+static ssize_t dvfs_version_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", gs_soc_info.dvfs_version);
+}
+
 static ssize_t revision_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
@@ -216,6 +242,7 @@ static DEVICE_ATTR_RO(product_id);
 static DEVICE_ATTR_RO(unique_id);
 static DEVICE_ATTR_RO(lot_id);
 static DEVICE_ATTR_RO(lot_id2);
+static DEVICE_ATTR_RO(dvfs_version);
 static DEVICE_ATTR_RO(revision);
 static DEVICE_ATTR_RO(evt_ver);
 static DEVICE_ATTR_RO(raw_str);
@@ -228,6 +255,7 @@ static struct attribute *chipid_sysfs_attrs[] = {
 	&dev_attr_unique_id.attr,
 	&dev_attr_lot_id.attr,
 	&dev_attr_lot_id2.attr,
+	&dev_attr_dvfs_version.attr,
 	&dev_attr_revision.attr,
 	&dev_attr_evt_ver.attr,
 	&dev_attr_raw_str.attr,
@@ -267,6 +295,15 @@ u32 gs_chipid_get_type(void)
 }
 EXPORT_SYMBOL_GPL(gs_chipid_get_type);
 
+s32 gs_chipid_get_dvfs_version(void)
+{
+	if (!gs_soc_info.initialized)
+		return -EPROBE_DEFER;
+
+	return gs_soc_info.dvfs_version;
+}
+EXPORT_SYMBOL_GPL(gs_chipid_get_dvfs_version);
+
 u32 gs_chipid_get_revision(void)
 {
 	if (!gs_soc_info.initialized)
@@ -292,6 +329,9 @@ static void gs_chipid_get_chipid_info(void __iomem *reg)
 	case 1:
 	default:
 		gs_soc_info.product_id = val & SOC_MASK;
+		if (gs_soc_info.product_id == GS201_SOC_ID)
+			val |= (readl_relaxed(reg + data->rev_reg)
+				& GS201_TYPE_MASK) >> GS201_TYPE_SHIFT;
 		gs_soc_info.type = val & SOC_TYPE_MASK;
 		break;
 	}
@@ -313,30 +353,42 @@ static void gs_chipid_get_chipid_info(void __iomem *reg)
 	temp = (temp >> 11) & LOTID_MASK;
 	chipid_dec_to_36(temp, uniq_id1, lot_id);
 	gs_soc_info.lot_id2 = lot_id;
+
+	val = readb_relaxed(reg + data->dvfs_version_reg);
+	gs_soc_info.dvfs_version = val;
 }
 
 static void gs_chipid_get_raw_str(void __iomem *reg)
 {
 	u32 addr;
+	u32 addr_end;
 	u8 val;
 	int str_pos = 0;
+	size_t str_buf_size = sizeof(gs_soc_info.raw_str);
 
 	for (addr = 0x4; addr < 0xA; addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.raw_str + str_pos,
-				     RAW_HEX_STR_SIZE - str_pos,
+				     str_buf_size - str_pos,
 				     "%02x", val);
 	}
-	for (addr = 0xA000; addr < 0xA024; addr++) {
+
+	if (gs_soc_info.product_id == GS201_SOC_ID) {
+		addr_end = GS201_HPM_ASV_END_ADDR;
+	} else {
+		addr_end = GS101_HPM_ASV_END_ADDR;
+	}
+
+	for (addr = 0xA000; addr < addr_end; addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.raw_str + str_pos,
-				     RAW_HEX_STR_SIZE - str_pos,
+				     str_buf_size - str_pos,
 				     "%02x", val);
 	}
 	for (addr = 0x9000; addr < 0x9010; addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.raw_str + str_pos,
-				     RAW_HEX_STR_SIZE - str_pos,
+				     str_buf_size - str_pos,
 				     "%02x", val);
 	}
 }
@@ -347,11 +399,12 @@ static void gs_chipid_get_ap_hw_tune_str(void __iomem *reg)
 	u8 val;
 	int str_pos = 0;
 	int arr_pos = 0;
+	size_t str_buf_size = sizeof(gs_soc_info.ap_hw_tune_str);
 
 	for (addr = 0xC300; addr < (0xC300 + AP_HW_TUNE_HEX_STR_SIZE/2); addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.ap_hw_tune_str + str_pos,
-				     AP_HW_TUNE_HEX_STR_SIZE - str_pos, "%02x",
+				     str_buf_size - str_pos, "%02x",
 				     val);
 		if (arr_pos < ARRAY_SIZE(gs_soc_info.ap_hw_tune_arr))
 			gs_soc_info.ap_hw_tune_arr[arr_pos++] = val;
@@ -373,11 +426,12 @@ static void gs_chipid_get_asv_tbl_str(void __iomem *reg)
 	u32 addr;
 	u8 val;
 	int str_pos = 0;
+	size_t str_buf_size = sizeof(gs_soc_info.asv_tbl_str);
 
 	for (addr = 0x9000; addr < (0x9000 + ASV_TBL_HEX_STR_SIZE/2); addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.asv_tbl_str + str_pos,
-				     ASV_TBL_HEX_STR_SIZE - str_pos, "%02x",
+				     str_buf_size - str_pos, "%02x",
 				     val);
 	}
 }
@@ -387,11 +441,12 @@ static void gs_chipid_get_hpm_asv_str(void __iomem *reg)
 	u32 addr;
 	u8 val;
 	int str_pos = 0;
+	size_t str_buf_size = sizeof(gs_soc_info.hpm_asv_str);
 
 	for (addr = 0xA000; addr < (0xA000 + HPM_ASV_HEX_STR_SIZE/2); addr++) {
 		val = readb_relaxed(reg + addr);
 		str_pos += scnprintf(gs_soc_info.hpm_asv_str + str_pos,
-				     HPM_ASV_HEX_STR_SIZE - str_pos, "%02x",
+				     str_buf_size - str_pos, "%02x",
 				     val);
 	}
 }
@@ -401,6 +456,10 @@ static const struct of_device_id of_gs_chipid_ids[] = {
 	 .compatible = "google,gs101-chipid",
 	 .data = &drv_data_gs101,
 	 },
+	{
+	 .compatible = "google,gs201-chipid",
+	 .data = &drv_data_gs201,
+	},
 	{},
 };
 

@@ -20,7 +20,7 @@
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <dt-bindings/soc/google/gs101-bts.h>
+#include <dt-bindings/soc/google/gs-bts.h>
 #include <soc/google/exynos-pd.h>
 #include <soc/google/bts.h>
 
@@ -115,6 +115,8 @@ struct bts_ops {
 	int (*get_urgent)(void __iomem *va, struct bts_stat *stat);
 	int (*set_blocking)(void __iomem *va, struct bts_stat *stat);
 	int (*get_blocking)(void __iomem *va, struct bts_stat *stat);
+	int (*set_vc)(void __iomem *va, unsigned int value);
+	int (*get_vc)(void __iomem *va, unsigned int *value);
 };
 
 /**

@@ -686,12 +686,14 @@ static int mfc_core_probe(struct platform_device *pdev)
 		goto err_sysmmu_fault_handler;
 	}
 
+#if IS_ENABLED(CONFIG_EXYNOS_CONTENT_PATH_PROTECTION)
 	/* allocate Secure-DVA region */
+	core->drm_fw_buf.buftype = MFCBUF_DRM_FW;
 	core->drm_fw_buf.size = dev->variant->buf_size->firmware_code;
-	core->drm_fw_buf.daddr = secure_iova_alloc(core->drm_fw_buf.size,
-			EXYNOS_SECBUF_PROT_ALIGNMENTS);
-	if (!core->drm_fw_buf.daddr)
-		mfc_core_err("DRM F/W buffer can not get IOVA!\n");
+	if (mfc_mem_special_buf_alloc(dev, &core->drm_fw_buf)) {
+		mfc_core_err("[F/W] Allocating DRM firmware buffer failed\n");
+	}
+#endif
 
 	/* vOTF 1:1 mapping */
 	core->domain = iommu_get_domain_for_dev(core->device);
@@ -744,7 +746,9 @@ static int mfc_core_probe(struct platform_device *pdev)
 	return 0;
 
 err_alloc_debug:
-	secure_iova_free(core->drm_fw_buf.daddr, core->drm_fw_buf.size);
+#if IS_ENABLED(CONFIG_EXYNOS_CONTENT_PATH_PROTECTION)
+	mfc_mem_special_buf_free(dev, &core->drm_fw_buf);
+#endif
 	iommu_unregister_device_fault_handler(&pdev->dev);
 err_sysmmu_fault_handler:
 	destroy_workqueue(core->butler_wq);

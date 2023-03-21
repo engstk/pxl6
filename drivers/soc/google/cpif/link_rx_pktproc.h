@@ -7,6 +7,8 @@
 #ifndef __LINK_RX_PKTPROC_H__
 #define __LINK_RX_PKTPROC_H__
 
+#include "cpif_netrx_mng.h"
+
 /* Debug */
 /* #define PKTPROC_DEBUG */
 /* #define PKTPROC_DEBUG_PKT */
@@ -27,6 +29,20 @@
 #define PKTPROC_STATUS_TCPC	0x20
 #define PKTPROC_STATUS_IPCS	0x40
 #define PKTPROC_STATUS_PFD	0x80
+
+#if IS_ENABLED(CONFIG_CP_PKTPROC_LRO)
+/* LRO bit field */
+#define LRO_LAST_SEG		0x01
+#define LRO_MID_SEG		0x02
+#define LRO_FIRST_SEG		0x04
+#define LRO_PACKET		0x08
+#define LRO_MODE_ON		0x10
+
+/* W/A padding for LRO packet (except first) TCP (60 bytes) + IPv6 (40 bytes) = 100 */
+#define SKB_FRONT_PADDING	(NET_SKB_PAD + NET_IP_ALIGN + SKB_DATA_ALIGN(100))
+#else
+#define SKB_FRONT_PADDING	(NET_SKB_PAD + NET_IP_ALIGN)
+#endif
 
 /*
  * PktProc info region
@@ -80,7 +96,8 @@ struct pktproc_desc_sktbuf {
 		control:8,
 		status:8,
 		lro:5,
-		reserved1:3;
+		clat:2,
+		reserved1:1;
 	u16 length;
 	u16 filter_result;
 	u16 information;
@@ -93,15 +110,40 @@ struct pktproc_desc_sktbuf {
 /* Statistics */
 struct pktproc_statistics {
 	u64 pass_cnt;
+	u64 lro_cnt;
 	u64 err_len;
 	u64 err_chid;
 	u64 err_addr;
 	u64 err_nomem;
 	u64 err_bm_nomem;
 	u64 err_csum;
-	u64 use_memcpy_cnt;
 	u64 err_enqueue_dit;
 };
+
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
+struct cpif_pcie_iommu_ctrl {
+	struct page_frag_cache pf_cache;
+	u32 pf_offset;
+	u32 curr_fore;
+
+	/* Will */
+	unsigned long map_src_pa;
+	void *map_page_va;
+	u32 map_idx;
+
+	unsigned long unmap_src_pa;
+	u32 unmap_page_size;
+
+	/* Was */
+	u32 end_map_size;
+
+	/* These elements must be at the end */
+	void **pf_buf;
+	/* Debug */
+	u32 mapped_cnt;
+	u64 mapped_size;
+};
+#endif
 
 /* Logical view for each queue */
 struct pktproc_queue {
@@ -120,9 +162,9 @@ struct pktproc_queue {
 	u32 done_ptr;
 
 	/* Store */
-	u32 cp_desc_pbase;
+	u64 cp_desc_pbase;
 	u32 num_desc;
-	u32 cp_buff_pbase;
+	u64 cp_buff_pbase;
 
 	/* Pointer to info region by version */
 	union {
@@ -151,20 +193,27 @@ struct pktproc_queue {
 	unsigned long q_buff_pbase;
 	u32 q_buff_size;
 
-	/* Buffer manager */
-	struct mif_buff_mng *manager;	/* Pointer to buffer manager */
+	/* CP interface network rx manager */
+	struct cpif_netrx_mng *manager;	/* Pointer to rx manager */
 	dma_addr_t *dma_addr;
-	bool use_memcpy;	/* memcpy mode on sktbuf mode */
+
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
+	struct cpif_pcie_iommu_ctrl ioc;
+#endif
 
 	/* IRQ */
 	int irq;
+#if IS_ENABLED(CONFIG_MCU_IPC)
 	u32 irq_idx;
+#endif
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
+	bool msi_irq_wake;
+#endif
 
 	/* NAPI */
 	struct net_device netdev;
 	struct napi_struct napi;
 	struct napi_struct *napi_ptr;
-	atomic_t stop_napi_poll;
 
 	/* Statistics */
 	struct pktproc_statistics stat;
@@ -216,10 +265,10 @@ struct pktproc_perftest {
 	int session;
 	u16 ch;
 	int cpu;
+	int ipi_cpu[PKTPROC_MAX_QUEUE];
 	int udelay;
 	u32 seq_counter[PKTPROC_MAX_QUEUE];
 	u16 clat_ipv6[8];
-	int ipi_cpu[PKTPROC_MAX_QUEUE];
 };
 
 struct pktproc_perftest_data {
@@ -234,31 +283,37 @@ struct pktproc_adaptor {
 	bool support;	/* Is support PktProc feature? */
 	enum pktproc_version version;	/* Version */
 
-	u32 cp_base;		/* CP base address for pktproc */
+	u64 cp_base;		/* CP base address for pktproc */
 	u32 info_rgn_offset;	/* Offset of info region */
 	u32 info_rgn_size;	/* Size of info region */
 	u32 desc_rgn_offset;	/* Offset of descriptor region */
 	u32 desc_rgn_size;	/* Size of descriptor region */
 	u32 buff_rgn_offset;	/* Offset of data buffer region */
+	u32 buff_rgn_size;	/* Size of data buffer region */
 
-	bool info_desc_rgn_cached;
+	bool info_rgn_cached;
+	bool desc_rgn_cached;
 	bool buff_rgn_cached;
 
 	enum pktproc_desc_mode desc_mode;	/* Descriptor structure mode */
 	u32 desc_num_ratio_percent;		/* Number of descriptors ratio as percent */
 	u32 num_queue;		/* Number of queue */
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
+	u32 space_margin;
+#endif
 	bool use_exclusive_irq;	/* Exclusive interrupt */
+#if IS_ENABLED(CONFIG_MCU_IPC)
 	u32 exclusive_irq_idx[PKTPROC_MAX_QUEUE];
+#endif
 	bool use_hw_iocc;	/* H/W IO cache coherency */
-	u32 max_packet_size;	/* Max packet size */
+	u32 max_packet_size;	/* Max packet size CP sees */
+	u32 true_packet_size;	/* True packet size AP allocated */
 	bool use_dedicated_baaw;	/* BAAW for 36bit address */
-	bool use_36bit_data_addr;	/* Data is located to 36bit address range */
 
 	struct device *dev;
 
-	bool use_napi;
-	bool use_buff_mng;
-	struct mif_buff_mng *manager;	/* Buffer manager */
+	bool use_netrx_mng;
+	u32 netrx_capacity;
 	u32 skb_padding_size;
 
 	void __iomem *info_vbase;	/* I/O region for information */
@@ -286,29 +341,10 @@ static inline int pktproc_check_support(struct pktproc_adaptor *ppa)
 
 static inline int pktproc_check_active(struct pktproc_adaptor *ppa, u32 q_idx)
 {
-	if (!pktproc_check_support(ppa))
-		return 0;
-
 	if (!ppa->q[q_idx])
 		return 0;
 
 	return atomic_read(&ppa->q[q_idx]->active);
-}
-
-static inline int pktproc_stop_napi_poll(struct pktproc_adaptor *ppa, u32 q_idx)
-{
-	if (!pktproc_check_support(ppa))
-		return 0;
-
-	if (!ppa->use_napi)
-		return 0;
-
-	if (!ppa->q[q_idx])
-		return 0;
-
-	atomic_set(&ppa->q[q_idx]->stop_napi_poll, 1);
-
-	return 0;
 }
 #else
 static inline int pktproc_create(struct platform_device *pdev, struct mem_link_device *mld,
@@ -318,7 +354,6 @@ static inline int pktproc_get_usage(struct pktproc_queue *q) { return 0; }
 static inline int pktproc_get_usage_fore_rear(struct pktproc_queue *q) { return 0; }
 static inline int pktproc_check_support(struct pktproc_adaptor *ppa) { return 0; }
 static inline int pktproc_check_active(struct pktproc_adaptor *ppa, u32 q_idx) { return 0; }
-static inline int pktproc_stop_napi_poll(struct pktproc_adaptor *ppa, u32 q_idx) { return 0; }
 #endif
 
 #endif /* __LINK_RX_PKTPROC_H__ */

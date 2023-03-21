@@ -11,6 +11,7 @@
 #include "cma.h"
 #include "meminfo.h"
 #include "vmscan.h"
+#include "compaction.h"
 
 extern void vh_rmqueue_mod(void *data, struct zone *preferred_zone,
 		struct zone *zone, unsigned int order, gfp_t gfp_flags,
@@ -23,6 +24,10 @@ extern void vh_pagecache_get_page_mod(void *data,
 static int pixel_stat_mm_init(void)
 {
 	int ret;
+
+	ret = pixel_mm_sysfs();
+	if (ret)
+		return ret;
 
 	ret = register_trace_android_vh_rmqueue(vh_rmqueue_mod, NULL);
 	if (ret)
@@ -51,7 +56,12 @@ static int pixel_stat_mm_init(void)
 	if (ret)
 		return ret;
 
-	ret = pixel_mm_sysfs();
+	ret = register_trace_android_vh_mm_compaction_begin(vh_compaction_begin,
+			NULL);
+	if (ret)
+		return ret;
+
+	ret = register_trace_android_vh_mm_compaction_end(vh_compaction_end, NULL);
 	if (ret)
 		return ret;
 

@@ -23,88 +23,57 @@
 #if IS_ENABLED(CONFIG_CP_PKTPROC_UL)
 void pktproc_ul_q_stop(struct pktproc_queue_ul *q)
 {
-	if (atomic_read(&q->busy) == 0) {
-		struct link_device *ld = &(q->mld->link_dev);
+	struct link_device *ld = &q->mld->link_dev;
+	unsigned long flags;
 
-		if (!test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
-
-			spin_lock_irqsave(&q->lock, flags);
-
-			atomic_set(&q->busy, 1);
-			set_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-			stop_net_ifaces(ld);
-
-			spin_unlock_irqrestore(&q->lock, flags);
-
-			/* Currently,
-			 * CP is not doing anything when CP receive req_ack
-			 * command from AP. So, we'll skip this scheme.
-			 */
-			/* send_req_ack(mld, dev); */
-			mif_info_limited("PKTPROC UL QUEUE %d tx_flowctrl=0x%04lx\n",
-				q->q_idx, ld->tx_flowctrl_mask);
-		}
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	if (!atomic_read(&q->busy)) {
+		mif_info("Requested stop on PKTPROC UL QUEUE %d\n", q->q_idx);
+		atomic_set(&q->busy, 1);
+		stop_net_ifaces(ld, TXQ_STOP_MASK);
 	}
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
 }
 
-void pktproc_ul_q_start(struct pktproc_queue_ul *q)
-{
-	if (atomic_read(&q->busy) > 0) {
-		struct link_device *ld = &q->mld->link_dev;
-
-		if (test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
-
-			spin_lock_irqsave(&q->lock, flags);
-
-			atomic_set(&q->busy, 0);
-			clear_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-
-			if (ld->tx_flowctrl_mask == 0) {
-				resume_net_ifaces(ld);
-				mif_info_limited("PKTPROC UL QUEUE %d,\n"
-						"tx_flowctrl=0x%04lx\n",
-					q->q_idx, ld->tx_flowctrl_mask);
-			}
-
-			spin_unlock_irqrestore(&q->lock, flags);
-		}
-	}
-}
-
-int pktproc_under_ul_flow_ctrl(struct pktproc_queue_ul *q)
-{
-	return atomic_read(&q->busy);
-}
-
-int pktproc_check_ul_flow_ctrl(struct pktproc_queue_ul *q)
+static void pktproc_ul_q_start(struct pktproc_queue_ul *q)
 {
 	struct link_device *ld = &q->mld->link_dev;
-	struct modem_ctl *mc = ld->mc;
-	int busy_count = atomic_read(&q->busy);
 	unsigned long flags;
+
+	mif_info("Requested start on PKTPROC UL QUEUE %d\n", q->q_idx);
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	atomic_set(&q->busy, 0);
+	resume_net_ifaces(ld, TXQ_STOP_MASK);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+}
+
+int pktproc_ul_q_check_busy(struct pktproc_queue_ul *q)
+{
+	struct link_device *ld = &q->mld->link_dev;
+	int busy_count;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	busy_count = atomic_read(&q->busy);
+	if (unlikely(busy_count))
+		atomic_inc(&q->busy);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+
+	if (!busy_count)
+		return 0;
 
 	spin_lock_irqsave(&q->lock, flags);
 	if (pktproc_ul_q_empty(q->q_info)) {
 		spin_unlock_irqrestore(&q->lock, flags);
 #ifdef DEBUG_MODEM_IF_FLOW_CTRL
-		if (cp_online(mc)) {
-			mif_err("PKTPROC UL Queue %d: No RES_ACK,\n"
-					"but EMPTY (busy_cnt %d)\n",
-				q->q_idx, busy_count);
-		}
+		if (cp_online(ld->mc))
+			mif_err("PKTPROC UL Queue %d: EMPTY (busy_cnt %d)\n", q->q_idx, busy_count);
 #endif
 		pktproc_ul_q_start(q);
 		return 0;
 	}
-
 	spin_unlock_irqrestore(&q->lock, flags);
-
-	atomic_inc(&q->busy);
-
-	if (cp_online(mc) && count_flood(busy_count, BUSY_COUNT_MASK))
-		return -ETIME;
 
 	return -EBUSY;
 }
@@ -112,86 +81,59 @@ int pktproc_check_ul_flow_ctrl(struct pktproc_queue_ul *q)
 
 void sbd_txq_stop(struct sbd_ring_buffer *rb)
 {
-	if (rb->ld->is_ps_ch(rb->ch) && atomic_read(&rb->busy) == 0) {
-		struct link_device *ld = rb->ld;
+	struct link_device *ld = rb->ld;
+	unsigned long flags;
 
-		if (!test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
+	if (!ld->is_ps_ch(rb->ch))
+		return;
 
-			spin_lock_irqsave(&rb->lock, flags);
-
-			atomic_set(&rb->busy, 1);
-			set_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-			stop_net_ifaces(ld);
-
-			spin_unlock_irqrestore(&rb->lock, flags);
-
-			/* Currently,
-			 * CP is not doing anything when CP receive req_ack
-			 * command from AP. So, we'll skip this scheme.
-			 */
-			/* send_req_ack(mld, dev); */
-			mif_info_limited("%s, tx_flowctrl=0x%04lx\n",
-				rb->iod->name, ld->tx_flowctrl_mask);
-		}
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	if (!atomic_read(&rb->busy)) {
+		mif_info("Requested stop on rb ch: %d name: %s\n", rb->ch, rb->iod->name);
+		atomic_set(&rb->busy, 1);
+		stop_net_ifaces(ld, TXQ_STOP_MASK);
 	}
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
 }
 
-void sbd_txq_start(struct sbd_ring_buffer *rb)
-{
-	if (rb->ld->is_ps_ch(rb->ch) && atomic_read(&rb->busy) > 0) {
-		struct link_device *ld = rb->ld;
-
-		if (test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
-
-			spin_lock_irqsave(&rb->lock, flags);
-
-			atomic_set(&rb->busy, 0);
-			clear_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-
-			if (ld->tx_flowctrl_mask == 0) {
-				resume_net_ifaces(ld);
-				mif_info_limited("%s, tx_flowctrl=0x%04lx\n",
-					rb->iod->name, ld->tx_flowctrl_mask);
-			}
-
-			spin_unlock_irqrestore(&rb->lock, flags);
-		}
-	}
-}
-
-int sbd_under_tx_flow_ctrl(struct sbd_ring_buffer *rb)
-{
-	return atomic_read(&rb->busy);
-}
-
-int sbd_check_tx_flow_ctrl(struct sbd_ring_buffer *rb)
+static void sbd_txq_start(struct sbd_ring_buffer *rb)
 {
 	struct link_device *ld = rb->ld;
-	struct modem_ctl *mc = ld->mc;
-	int busy_count = atomic_read(&rb->busy);
+	unsigned long flags;
+
+	if (!ld->is_ps_ch(rb->ch))
+		return;
+
+	mif_info("Requested start on rb ch: %d name: %s\n", rb->ch, rb->iod->name);
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	atomic_set(&rb->busy, 0);
+	resume_net_ifaces(ld, TXQ_STOP_MASK);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+}
+
+int sbd_txq_check_busy(struct sbd_ring_buffer *rb)
+{
+	struct link_device *ld = rb->ld;
+	int busy_count;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	busy_count = atomic_read(&rb->busy);
+	if (unlikely(busy_count))
+		atomic_inc(&rb->busy);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+
+	if (!busy_count)
+		return 0;
 
 	if (rb_empty(rb)) {
 #ifdef DEBUG_MODEM_IF_FLOW_CTRL
-		if (cp_online(mc)) {
-			mif_err("%s TXQ: No RES_ACK, but EMPTY (busy_cnt %d)\n",
-				rb->iod->name, busy_count);
-		}
+		if (cp_online(ld->mc))
+			mif_err("%s TXQ: EMPTY (busy_cnt %d)\n", rb->iod->name, busy_count);
 #endif
 		sbd_txq_start(rb);
 		return 0;
-	}
-
-	atomic_inc(&rb->busy);
-
-	if (cp_online(mc) && count_flood(busy_count, BUSY_COUNT_MASK)) {
-		/* Currently,
-		 * CP is not doing anything when CP receive req_ack
-		 * command from AP. So, we'll skip this scheme.
-		 */
-		 /* send_req_ack(mld, dev); */
-		return -ETIME;
 	}
 
 	return -EBUSY;
@@ -199,119 +141,58 @@ int sbd_check_tx_flow_ctrl(struct sbd_ring_buffer *rb)
 
 void txq_stop(struct mem_link_device *mld, struct legacy_ipc_device *dev)
 {
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
-	if (dev->id == IPC_MAP_HPRIO_RAW && atomic_read(&dev->txq.busy) == 0) {
-#else
-	if (dev->id == IPC_MAP_NORM_RAW && atomic_read(&dev->txq.busy) == 0) {
-#endif
-		struct link_device *ld = &mld->link_dev;
+	struct link_device *ld = &mld->link_dev;
+	unsigned long flags;
+	bool ret = false;
 
-		if (!test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
+	if (dev->id == IPC_MAP_FMT)
+		return;
 
-			spin_lock_irqsave(&dev->txq.lock, flags);
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	if (!atomic_read(&dev->txq.busy)) {
+		mif_info("Requested stop on dev: %s\n", dev->name);
+		atomic_set(&dev->txq.busy, 1);
+		ret = stop_net_ifaces(ld, TXQ_STOP_MASK);
+	}
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
 
-			atomic_set(&dev->txq.busy, 1);
-			set_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-			stop_net_ifaces(&mld->link_dev);
-
-			spin_unlock_irqrestore(&dev->txq.lock, flags);
-
-			send_req_ack(mld, dev);
-			mif_info_limited("%s: %s TXQ BUSY, tx_flowctrl_mask=0x%04lx\n",
-				ld->name, dev->name, ld->tx_flowctrl_mask);
-		}
+	if (ret) {
+		/* notify cp that legacy buffer is stuck. required for legacy only */
+		send_req_ack(mld, dev);
 	}
 }
 
-void tx_flowctrl_suspend(struct mem_link_device *mld)
+static void txq_start(struct mem_link_device *mld, struct legacy_ipc_device *dev)
 {
 	struct link_device *ld = &mld->link_dev;
+	unsigned long flags;
 
-	if (!test_bit(TX_SUSPEND_MASK, &ld->tx_flowctrl_mask)) {
-		unsigned long flags;
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
-		struct legacy_ipc_device *dev = mld->legacy_link_dev.dev[IPC_MAP_HPRIO_RAW];
-#else
-		struct legacy_ipc_device *dev = mld->legacy_link_dev.dev[IPC_MAP_NORM_RAW];
-#endif
+	if (dev->id == IPC_MAP_FMT)
+		return;
 
-		spin_lock_irqsave(&dev->txq.lock, flags);
+	mif_info("Requested start on dev: %s\n", dev->name);
 
-		set_bit(TX_SUSPEND_MASK, &ld->tx_flowctrl_mask);
-		stop_net_ifaces(&mld->link_dev);
-
-		spin_unlock_irqrestore(&dev->txq.lock, flags);
-
-		mif_info_limited("%s: %s TX suspended, tx_flowctrl_mask=0x%04lx\n",
-			ld->name, dev->name, ld->tx_flowctrl_mask);
-	}
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	atomic_set(&dev->txq.busy, 0);
+	resume_net_ifaces(ld, TXQ_STOP_MASK);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
 }
 
-void txq_start(struct mem_link_device *mld, struct legacy_ipc_device *dev)
-{
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
-	if (dev->id == IPC_MAP_HPRIO_RAW && atomic_read(&dev->txq.busy) > 0) {
-#else
-	if (dev->id == IPC_MAP_NORM_RAW && atomic_read(&dev->txq.busy) > 0) {
-#endif
-		struct link_device *ld = &mld->link_dev;
-
-		if (test_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask)) {
-			unsigned long flags;
-
-			spin_lock_irqsave(&dev->txq.lock, flags);
-
-			atomic_set(&dev->txq.busy, 0);
-			clear_bit(TXQ_STOP_MASK, &ld->tx_flowctrl_mask);
-
-			if (ld->tx_flowctrl_mask == 0) {
-				resume_net_ifaces(&mld->link_dev);
-				mif_info_limited("%s:%s TXQ restart, tx_flowctrl_mask=0x%04lx\n",
-					ld->name, dev->name, ld->tx_flowctrl_mask);
-			}
-
-			spin_unlock_irqrestore(&dev->txq.lock, flags);
-		}
-	}
-}
-
-void tx_flowctrl_resume(struct mem_link_device *mld)
-{
-	struct link_device *ld = &mld->link_dev;
-
-	if (test_bit(TX_SUSPEND_MASK, &ld->tx_flowctrl_mask)) {
-		unsigned long flags;
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
-		struct legacy_ipc_device *dev = mld->legacy_link_dev.dev[IPC_MAP_HPRIO_RAW];
-#else
-		struct legacy_ipc_device *dev = mld->legacy_link_dev.dev[IPC_MAP_NORM_RAW];
-#endif
-
-		spin_lock_irqsave(&dev->txq.lock, flags);
-
-		clear_bit(TX_SUSPEND_MASK, &ld->tx_flowctrl_mask);
-
-		if (ld->tx_flowctrl_mask == 0) {
-			resume_net_ifaces(&mld->link_dev);
-			mif_info_limited("%s:%s TX resumed, tx_flowctrl_mask=0x%04lx\n",
-				ld->name, dev->name, ld->tx_flowctrl_mask);
-		}
-
-		spin_unlock_irqrestore(&dev->txq.lock, flags);
-	}
-}
-
-int under_tx_flow_ctrl(struct mem_link_device *mld, struct legacy_ipc_device *dev)
-{
-	return atomic_read(&dev->txq.busy);
-}
-
-int check_tx_flow_ctrl(struct mem_link_device *mld, struct legacy_ipc_device *dev)
+int txq_check_busy(struct mem_link_device *mld, struct legacy_ipc_device *dev)
 {
 	struct link_device *ld = &mld->link_dev;
 	struct modem_ctl *mc = ld->mc;
-	int busy_count = atomic_read(&dev->txq.busy);
+	int busy_count;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	busy_count = atomic_read(&dev->txq.busy);
+	if (unlikely(busy_count))
+		atomic_inc(&dev->txq.busy);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+
+	if (!busy_count)
+		return 0;
 
 	if (txq_empty(dev)) {
 #ifdef DEBUG_MODEM_IF_FLOW_CTRL
@@ -324,14 +205,33 @@ int check_tx_flow_ctrl(struct mem_link_device *mld, struct legacy_ipc_device *de
 		return 0;
 	}
 
-	atomic_inc(&dev->txq.busy);
-
 	if (cp_online(mc) && count_flood(busy_count, BUSY_COUNT_MASK)) {
+		/* notify cp that legacy buffer is stuck. required for legacy only */
 		send_req_ack(mld, dev);
 		return -ETIME;
 	}
 
 	return -EBUSY;
+}
+
+void tx_flowctrl_suspend(struct mem_link_device *mld)
+{
+	struct link_device *ld = &mld->link_dev;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	stop_net_ifaces(ld, TX_SUSPEND_MASK);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
+}
+
+void tx_flowctrl_resume(struct mem_link_device *mld)
+{
+	struct link_device *ld = &mld->link_dev;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ld->netif_lock, flags);
+	resume_net_ifaces(ld, TX_SUSPEND_MASK);
+	spin_unlock_irqrestore(&ld->netif_lock, flags);
 }
 
 void send_req_ack(struct mem_link_device *mld, struct legacy_ipc_device *dev)

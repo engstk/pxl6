@@ -11,8 +11,8 @@
 #include <linux/platform_device.h>
 #include <linux/miscdevice.h>
 #include <linux/types.h>
-#include <linux/shm_ipc.h>
 #include <dt-bindings/soc/google/exynos-cpif.h>
+#include <soc/google/shm_ipc.h>
 
 #include "cp_btl.h"
 
@@ -25,22 +25,9 @@
 #define SSS_CLK_ENABLE	0
 #define SSS_CLK_DISABLE	1
 
-enum modem_network {
-	UMTS_NETWORK,
-	CDMA_NETWORK,
-	TDSCDMA_NETWORK,
-	LTE_NETWORK,
-	MAX_MODEM_NETWORK
-};
-
 struct __packed multi_frame_control {
 	u8 id:7,
 	   more:1;
-};
-
-enum io_mode {
-	PIO,
-	DMA
 };
 
 enum direction {
@@ -60,9 +47,6 @@ enum read_write {
 	WR = 1,
 	RDWR = 2
 };
-
-#define STR_CP_FAIL	"cp_fail"
-#define STR_CP_WDT	"cp_wdt"	/* CP watchdog timer */
 
 /**
  * struct modem_io_t - declaration for io_device
@@ -85,80 +69,62 @@ struct modem_io_t {
 	u32 link_type;
 	u32 attrs;
 	char *option_region;
-	/*IS_ENABLED(CONFIG_LINK_DEVICE_MEMORY_SBD)*/
 	unsigned int ul_num_buffers;
 	unsigned int ul_buffer_size;
 	unsigned int dl_num_buffers;
 	unsigned int dl_buffer_size;
 };
 
-struct modemlink_pm_data {
-	char *name;
-	struct device *dev;
-	/* link power control 2 types : pin & regulator control */
-	int (*link_ldo_enable)(bool enable);
-	unsigned int gpio_link_enable;
-	unsigned int gpio_link_active;
-	unsigned int gpio_link_hostwake;
-	unsigned int gpio_link_slavewake;
-	int (*link_reconnect)(void *reconnect);
-
-	/* usb hub only */
-	int (*port_enable)(int i, int j);
-	int (*hub_standby)(void *standby);
-	void *hub_pm_data;
-	bool has_usbhub;
-
-	/* cpu/bus frequency lock */
-	atomic_t freqlock;
-	int (*freq_lock)(struct device *dev);
-	int (*freq_unlock)(struct device *dev);
-
-	int autosuspend_delay_ms; /* if zero, the default value is used */
-	void (*ehci_reg_dump)(struct device *dev);
-};
-
-struct modemlink_pm_link_activectl {
-	int gpio_initialized;
-	int gpio_request_host_active;
-};
-
 #if IS_ENABLED(CONFIG_LINK_DEVICE_SHMEM) || IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
-enum shmem_type {
-	REAL_SHMEM,
-	C2C_SHMEM,
-	MAX_SHMEM_TYPE
-};
-
 struct modem_mbox {
-	unsigned int mbx_ap2cp_msg;
-	unsigned int mbx_cp2ap_msg;
-	unsigned int mbx_ap2cp_wakeup;	/* CP_WAKEUP	*/
-	unsigned int mbx_cp2ap_wakeup;	/* AP_WAKEUP	*/
-	unsigned int mbx_ap2cp_status;	/* AP_STATUS	*/
-	unsigned int mbx_cp2ap_status;	/* CP_STATUS	*/
-	unsigned int mbx_cp2ap_wakelock; /* Wakelock for VoLTE */
-	unsigned int mbx_cp2ap_ratmode; /* Wakelock for pcie */
-	unsigned int mbx_ap2cp_kerneltime; /* Kernel time */
-
 	unsigned int int_ap2cp_msg;
 	unsigned int int_ap2cp_active;
 	unsigned int int_ap2cp_wakeup;
 	unsigned int int_ap2cp_status;
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	unsigned int int_ap2cp_lcd_status;
+#endif
+#if IS_ENABLED(CONFIG_CP_LLC)
 	unsigned int int_ap2cp_llc_status;
+#endif
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	unsigned int int_ap2cp_clatinfo_send;
+#endif
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
+	unsigned int int_ap2cp_pcie_link_ack;
+#endif
 	unsigned int int_ap2cp_uart_noti;
 
 	unsigned int irq_cp2ap_msg;
 	unsigned int irq_cp2ap_status;
 	unsigned int irq_cp2ap_active;
+#if IS_ENABLED(CONFIG_CP_LLC)
 	unsigned int irq_cp2ap_llc_status;
-	unsigned int irq_cp2ap_wakeup;
+#endif
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	unsigned int irq_cp2ap_clatinfo_ack;
+#endif
 	unsigned int irq_cp2ap_wakelock;
 	unsigned int irq_cp2ap_rat_mode;
-	unsigned int irq_cp2ap_change_ul_path;
 };
 #endif
+
+#define AP_CP_CAP_PARTS		2
+#define AP_CP_CAP_PART_LEN	4
+#define AP_CP_CAP_BIT_MAX	32
+
+/* AP capability[0] index */
+enum ap_capability_0_bits {
+	AP_CAP_0_PKTPROC_UL_BIT = 0,
+	AP_CAP_0_CH_EXTENSION_BIT,
+	AP_CAP_0_PKTPROC_36BIT_ADDR_BIT,
+	AP_CAP_0_MAX = AP_CP_CAP_BIT_MAX
+};
+
+/* AP capability[1] index */
+enum ap_capability_1_bits {
+	AP_CAP_1_MAX = AP_CP_CAP_BIT_MAX
+};
 
 /* platform data */
 struct modem_data {
@@ -169,7 +135,6 @@ struct modem_data {
 	struct mem_link_device *mld;
 
 	/* Modem component */
-	enum modem_network modem_net;
 	u32 modem_type;
 
 	u32 link_type;
@@ -192,12 +157,6 @@ struct modem_data {
 	/* check if cp2ap_active is in alive */
 	u32 cp2ap_active_not_alive;
 
-	/* Modem link PM support */
-	struct modemlink_pm_data *link_pm_data;
-
-	/* SIM Detect polarity */
-	bool sim_polarity;
-
 	/* legacy buffer setting */
 	u32 legacy_fmt_head_tail_offset;
 	u32 legacy_fmt_buffer_offset;
@@ -207,6 +166,7 @@ struct modem_data {
 	u32 legacy_raw_buffer_offset;
 	u32 legacy_raw_txq_size;
 	u32 legacy_raw_rxq_size;
+	u32 legacy_raw_rx_buffer_cached;
 
 	/* several 4 byte length info in ipc region */
 	u32 offset_ap_version;
@@ -222,8 +182,18 @@ struct modem_data {
 	u32 cp2ap_msg[2];
 	u32 cp2ap_united_status[2];
 	u32 ap2cp_united_status[2];
+#if IS_ENABLED(CONFIG_CP_LLC)
 	u32 ap2cp_llc_status[2];
 	u32 cp2ap_llc_status[2];
+#endif
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	u32 ap2cp_clatinfo_xlat_v4_addr[2];
+	u32 ap2cp_clatinfo_xlat_addr_0[2];
+	u32 ap2cp_clatinfo_xlat_addr_1[2];
+	u32 ap2cp_clatinfo_xlat_addr_2[2];
+	u32 ap2cp_clatinfo_xlat_addr_3[2];
+	u32 ap2cp_clatinfo_index[2];
+#endif
 	u32 ap2cp_kerneltime[2];
 	u32 ap2cp_kerneltime_sec[2];
 	u32 ap2cp_kerneltime_usec[2];
@@ -255,8 +225,10 @@ struct modem_data {
 	unsigned int sbi_crash_type_pos;
 	unsigned int sbi_ds_det_mask;
 	unsigned int sbi_ds_det_pos;
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	unsigned int sbi_lcd_status_mask;
 	unsigned int sbi_lcd_status_pos;
+#endif
 
 	/* ulpath offset for 2CP models */
 	u32 ulpath_offset;
@@ -276,8 +248,7 @@ struct modem_data {
 
 	/* capability */
 	u32 capability_offset;
-	u32 ap_capability_0;
-	u32 ap_capability_1;
+	u32 ap_capability[AP_CP_CAP_PARTS];
 
 #if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
 	/* SIT priority queue info */
@@ -288,8 +259,30 @@ struct modem_data {
 #endif
 	struct cp_btl btl;	/* CP background trace log */
 
-	void (*gpio_revers_bias_clear)(void);
-	void (*gpio_revers_bias_restore)(void);
+	u32 pktproc_use_36bit_addr; /* Check pktproc use 36bit addr */
+};
+
+enum cp_gpio_type {
+	CP_GPIO_AP2CP_CP_PWR,
+	CP_GPIO_AP2CP_NRESET,
+	CP_GPIO_AP2CP_WAKEUP,
+	CP_GPIO_AP2CP_DUMP_NOTI,
+	CP_GPIO_AP2CP_AP_ACTIVE,
+#if !IS_ENABLED(CONFIG_CP_WRESET_WA)
+	CP_GPIO_AP2CP_CP_WRST_N,
+	CP_GPIO_AP2CP_PM_WRST_N,
+#endif
+	CP_GPIO_CP2AP_PS_HOLD,
+	CP_GPIO_CP2AP_WAKEUP,
+	CP_GPIO_CP2AP_CP_ACTIVE,
+	CP_GPIO_MAX
+};
+
+enum cp_gpio_irq_type {
+	CP_GPIO_IRQ_NONE,
+	CP_GPIO_IRQ_CP2AP_WAKEUP,
+	CP_GPIO_IRQ_CP2AP_CP_ACTIVE,
+	CP_GPIO_IRQ_MAX
 };
 
 struct modem_irq {
@@ -303,11 +296,13 @@ struct modem_irq {
 };
 
 struct cpif_gpio {
+	bool valid;
 	int num;
+	enum cp_gpio_irq_type irq_type;
 	const char *label;
+	const char *node_name;
 };
 
-#if IS_ENABLED(CONFIG_OF)
 #define mif_dt_read_enum(np, prop, dest) \
 	do { \
 		u32 val; \
@@ -353,10 +348,51 @@ struct cpif_gpio {
 		if (!of_property_read_u32(np, prop, &val)) \
 			dest = val; \
 	} while (0)
-#endif
+
+#define mif_dt_read_u64(np, prop, dest) \
+	do { \
+		u64 val; \
+		if (of_property_read_u64(np, prop, &val)) { \
+			mif_err("%s is not defined\n", prop); \
+			return -EINVAL; \
+		} \
+		dest = val; \
+	} while (0)
+
+#define mif_dt_read_u64_noerr(np, prop, dest) \
+	do { \
+		u64 val; \
+		if (!of_property_read_u64(np, prop, &val)) \
+			dest = val; \
+	} while (0)
+
+#define mif_dt_count_u32_elems(np, prop, dest) \
+	do { \
+		int val; \
+		val = of_property_count_u32_elems(np, prop); \
+		if (val < 0) { \
+			mif_err("can not get %s\n", prop); \
+			return -EINVAL; \
+		} \
+		dest = (u32)val; \
+	} while (0)
+
+#define mif_dt_count_u32_array(np, prop, dest, size) \
+	do { \
+		int val; \
+		val = of_property_read_u32_array(np, prop, dest, size); \
+		if (val < 0) { \
+			mif_err("can not get %s %d\n", prop, size); \
+			return -EINVAL; \
+		} \
+	} while (0)
+
+
+#define cpif_set_bit(data, offset)	((data) |= BIT(offset))
+#define cpif_clear_bit(data, offset)	((data) &= ~BIT(offset))
+#define cpif_check_bit(data, offset)	((data) & BIT(offset))
 
 #define LOG_TAG	"cpif: "
-#define FUNC	(__func__)
 #define CALLER	(__builtin_return_address(0))
 
 #define mif_err_limited(fmt, ...) \

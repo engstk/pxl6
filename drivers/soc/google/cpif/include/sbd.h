@@ -48,7 +48,7 @@
 #define BUFF_RGN_OFFSET	(CMD_DESC_RGN_SIZE)
 
 #define MAX_SBD_SIPC_CHANNELS	IOD_CH_ID_MAX	/* 2 ^ 8	*/
-#define MAX_SBD_LINK_IDS	64		/* up to 64 ids	*/
+#define MAX_SBD_LINK_IDS	32		/* up to 32 ids	*/
 
 /*
  * @brief	Priority for QoS(Quality of Service)
@@ -145,17 +145,11 @@ struct sbd_ring_buffer {
 	/* Pointer to the "SBD link" device instance to which an RB belongs */
 	struct sbd_link_device *sl;
 
-	/* Pointer to the "zerocopy_adaptor" device instance to which an RB belongs */
-	struct zerocopy_adaptor *zdptr;
-
 	/* UL/DL socket buffer queues */
 	struct sk_buff_head skb_q;
 
 	/* Whether or not link-layer header is used */
 	bool lnk_hdr;
-
-	/* Whether or not zerocopy is used */
-	bool zerocopy;
 
 	/*
 	 * Variables for receiving a frame with the SIPC5 "EXT_LEN" attribute
@@ -209,34 +203,6 @@ struct sbd_link_attr {
 
 	/* Size of the data buffer for each SBD in an SBD RB */
 	unsigned int buff_size[ULDL];
-
-	/* Bool variable to check if SBD ipc device supports zerocopy */
-	bool zerocopy;
-};
-
-struct zerocopy_adaptor {
-	/* Spin-lock for each zerocopy_adaptor */
-	spinlock_t lock;
-
-	/* Spin-lock for kfifo */
-	spinlock_t lock_kfifo;
-
-	/* SBD ring buffer that matches this zerocopy_adaptor */
-	struct sbd_ring_buffer *rb;
-
-	/* Variables to manage previous rp */
-	u16 pre_rp;
-
-	/* Pointers to variables in the shared region for a physical SBD RB */
-	u16 *rp;
-	u16 *wp;
-	u16 len;
-
-	/* Pointer to kfifo for saving dma_addr */
-	struct kfifo fifo;
-
-	/* Timer for when buffer pool is full */
-	struct hrtimer datalloc_timer;
 };
 
 struct sbd_ipc_device {
@@ -249,16 +215,8 @@ struct sbd_ipc_device {
 	/* SIPC Channel ID --> rb.ch */
 	u16 ch;
 
-	atomic_t config_done;
-
 	/* UL/DL SBD RB pair in the kernel space */
 	struct sbd_ring_buffer rb[ULDL];
-
-	/* Bool variable to check if SBD ipc device supports zerocopy */
-	bool zerocopy;
-
-	/* Pointer to Zerocopy adaptor : memory is allocated for UL/DL zerocopy_adaptor */
-	struct zerocopy_adaptor *zdptr;
 };
 
 struct sbd_link_device {
@@ -315,8 +273,6 @@ struct sbd_link_device {
 	struct sbd_global_desc *g_desc;
 
 	unsigned long rxdone_mask;
-
-	bool reset_zerocopy_done;
 };
 
 static inline void sbd_activate(struct sbd_link_device *sl)
@@ -392,64 +348,25 @@ static inline struct sbd_ring_buffer *sbd_id2rb(struct sbd_link_device *sl,
 	return (id < MAX_SBD_LINK_IDS) ? &sl->ipc_dev[id].rb[dir] : NULL;
 }
 
-static inline bool zerocopy_adaptor_empty(struct zerocopy_adaptor *zdptr)
-{
-	return circ_empty(zdptr->pre_rp, *zdptr->rp);
-}
-
 static inline bool rb_empty(struct sbd_ring_buffer *rb)
 {
 	WARN_ON(!rb);
 
-	if (rb->zdptr)
-		return zerocopy_adaptor_empty(rb->zdptr);
-	else
-		return circ_empty(*rb->rp, *rb->wp);
-}
-
-static inline unsigned int zerocopy_adaptor_space(struct zerocopy_adaptor *zdptr)
-{
-	return circ_get_space(zdptr->len, *zdptr->wp, zdptr->pre_rp);
+	return circ_empty(*rb->rp, *rb->wp);
 }
 
 static inline unsigned int rb_space(struct sbd_ring_buffer *rb)
 {
 	WARN_ON(!rb);
 
-	if (rb->zdptr)
-		return zerocopy_adaptor_space(rb->zdptr);
-	else
-		return circ_get_space(rb->len, *rb->wp, *rb->rp);
-}
-
-static inline unsigned int zerocopy_adaptor_usage(struct zerocopy_adaptor *zdptr)
-{
-	return circ_get_usage(zdptr->len, *zdptr->rp, zdptr->pre_rp);
+	return circ_get_space(rb->len, *rb->wp, *rb->rp);
 }
 
 static inline unsigned int rb_usage(struct sbd_ring_buffer *rb)
 {
 	WARN_ON(!rb);
 
-	if (rb->zdptr)
-		return zerocopy_adaptor_usage(rb->zdptr);
-	else
-		return circ_get_usage(rb->len, *rb->wp, *rb->rp);
-}
-
-static inline unsigned int zerocopy_adaptor_full(struct zerocopy_adaptor *zdptr)
-{
-	return (zerocopy_adaptor_space(zdptr) == 0);
-}
-
-static inline unsigned int rb_full(struct sbd_ring_buffer *rb)
-{
-	WARN_ON(!rb);
-
-	if (rb->zdptr)
-		return zerocopy_adaptor_full(rb->zdptr);
-	else
-		return (rb_space(rb) == 0);
+	return circ_get_usage(rb->len, *rb->wp, *rb->rp);
 }
 
 static inline void set_lnk_hdr(struct sbd_ring_buffer *rb, struct sk_buff *skb)
@@ -477,6 +394,7 @@ static inline void check_more(struct sbd_ring_buffer *rb, struct sk_buff *skb)
 	}
 }
 
+#if IS_ENABLED(CONFIG_LINK_DEVICE_WITH_SBD_ARCH)
 int create_sbd_link_device(struct link_device *ld, struct sbd_link_device *sl,
 			   u8 *shmem_base, unsigned int shmem_size);
 
@@ -484,22 +402,21 @@ int init_sbd_link(struct sbd_link_device *sl);
 bool check_sbd_tx_pending(struct mem_link_device *mld);
 
 int sbd_pio_tx(struct sbd_ring_buffer *rb, struct sk_buff *skb);
-struct sk_buff *sbd_pio_rx(struct sbd_ring_buffer *rb);
+int sbd_pio_rx(struct sbd_ring_buffer *rb, struct sk_buff **skb);
+#else
+static inline int create_sbd_link_device(struct link_device *ld, struct sbd_link_device *sl,
+			   u8 *shmem_base, unsigned int shmem_size) { return 0; }
+
+static inline int init_sbd_link(struct sbd_link_device *sl) { return 0; }
+static inline bool check_sbd_tx_pending(struct mem_link_device *mld)
+	{ return false; }
+
+static inline int sbd_pio_tx(struct sbd_ring_buffer *rb,
+	struct sk_buff *skb) { return 0; }
+static inline int sbd_pio_rx(struct sbd_ring_buffer *rb, struct sk_buff **skb)
+	{ return 0; }
+#endif
 
 #define SBD_UL_LIMIT		16	/* Uplink burst limit */
-
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY)
-extern const struct attribute_group zerocopy_group;
-
-struct sk_buff *sbd_pio_rx_zerocopy_adaptor(struct sbd_ring_buffer *rb, int use_memcpy);
-int allocate_data_in_advance(struct zerocopy_adaptor *zdptr);
-int setup_zerocopy_adaptor(struct sbd_ipc_device *ipc_dev);
-extern enum hrtimer_restart datalloc_timer_func(struct hrtimer *timer);
-#else
-static inline struct sk_buff *sbd_pio_rx_zerocopy_adaptor(struct sbd_ring_buffer *rb,
-		int use_memcpy) { return NULL; }
-static inline int allocate_data_in_advance(struct zerocopy_adaptor *zdptr) { return 0; }
-static inline int setup_zerocopy_adaptor(struct sbd_ipc_device *ipc_dev) { return 0; }
-#endif
 
 #endif

@@ -11,6 +11,8 @@
 #include "modem_prj.h"
 #include "link_device_memory.h"
 
+#define CP_CPU_BASE_ADDRESS	0x40000000
+
 #define MIF_TAG	"cpif"
 
 #define IS_CONNECTED(iod, ld) ((iod)->link_type == (ld)->link_type)
@@ -36,6 +38,11 @@
 #define MAX_TIM_LOG_SIZE \
 	(MAX_LOG_SIZE - sizeof(enum mif_log_id) \
 	 - sizeof(unsigned long long) - sizeof(struct timespec64))
+
+#define PR_BUFFER_SIZE	128
+
+#define PADDR_LO(paddr)	((paddr) & 0xFFFFFFFF)
+#define PADDR_HI(paddr)	(((paddr) >> 32) & 0xF)
 
 enum mif_log_id {
 	MIF_IPC_RL2AP = 1,
@@ -213,7 +220,7 @@ static const char * const modem_state_string[] = {
 	[STATE_SIM_ATTACH]	= "SIM_ATTACH",
 	[STATE_SIM_DETACH]	= "SIM_DETACH",
 	[STATE_CRASH_WATCHDOG]	= "WDT_RESET",
-	[STATE_INIT] = "INIT",
+	[STATE_RESET]		= "RESET",
 };
 
 static const inline char *cp_state_str(enum modem_state state)
@@ -264,31 +271,63 @@ static inline unsigned long ms2ns(unsigned long ms)
 	return ms * 1E6L;
 }
 
-void get_utc_time(struct utc_time *utc);
+static inline void ts642utc(struct timespec64 *ts, struct utc_time *utc)
+{
+	struct tm tm;
+
+	time64_to_tm((ts->tv_sec - (sys_tz.tz_minuteswest * 60)), 0, &tm);
+	utc->year = 1900 + (u32)tm.tm_year;
+	utc->mon = 1 + tm.tm_mon;
+	utc->day = tm.tm_mday;
+	utc->hour = tm.tm_hour;
+	utc->min = tm.tm_min;
+	utc->sec = tm.tm_sec;
+	utc->us = (u32)ns2us(ts->tv_nsec);
+}
+
+static inline void get_utc_time(struct utc_time *utc)
+{
+	struct timespec64 ts;
+
+	ktime_get_ts64(&ts);
+	ts642utc(&ts, utc);
+}
+
+/* dump2hex
+ * dump data to hex as fast as possible.
+ * the length of @buff must be greater than "@len * 3"
+ * it need 3 bytes per one data byte to print.
+ */
+static inline void dump2hex(char *buff, size_t buff_size,
+			    const char *data, size_t data_len)
+{
+	static const char *hex = "0123456789abcdef";
+	char *dest = buff;
+	size_t len;
+	size_t i;
+
+	if (buff_size < (data_len * 3))
+		len = buff_size / 3;
+	else
+		len = data_len;
+
+	for (i = 0; i < len; i++) {
+		*dest++ = hex[(data[i] >> 4) & 0xf];
+		*dest++ = hex[data[i] & 0xf];
+		*dest++ = ' ';
+	}
+
+	/* The last character must be overwritten with NULL */
+	if (likely(len > 0))
+		dest--;
+
+	*dest = 0;
+}
 
 static inline unsigned int calc_offset(void *target, void *base)
 {
 	return (unsigned long)target - (unsigned long)base;
 }
-
-int mif_dump_log(struct modem_shared *, struct io_device *);
-
-#define mif_irq_log(msd, map, data, len) \
-	_mif_irq_log(MIF_IRQ, msd, map, data, len)
-#define mif_com_log(msd, format, ...) \
-	_mif_com_log(MIF_COM, msd, pr_fmt(format), ##__VA_ARGS__)
-#define mif_time_log(msd, epoch, data, len) \
-	_mif_time_log(MIF_TIME, msd, epoch, data, len)
-
-void mif_ipc_log(enum mif_log_id id,
-	struct modem_shared *msd, const char *data, size_t len);
-void _mif_irq_log(enum mif_log_id id,
-	struct modem_shared *msd, struct mif_irq_map irq_map, const char *data, size_t len);
-void _mif_com_log(enum mif_log_id id,
-	struct modem_shared *msd, const char *data, ...);
-void _mif_time_log(enum mif_log_id id,
-	struct modem_shared *msd, struct timespec64 epoch, const char *data,
-	size_t len);
 
 static inline struct link_device *find_linkdev(struct modem_shared *msd,
 		u32 link_type)
@@ -344,19 +383,9 @@ static inline void pr_skb(const char *tag, struct sk_buff *skb, struct link_devi
 	pr_buffer(tag, (char *)((skb)->data), (size_t)((skb)->len), length);
 }
 
-/* print a urb as hex string */
-#define pr_urb(tag, urb) \
-	pr_buffer(tag, (char *)((urb)->transfer_buffer), \
-			(size_t)((urb)->actual_length), (size_t)16)
-
-/* Stop/wake all TX queues in network interfaces */
-void stop_net_iface(struct link_device *ld, unsigned int channel);
-void resume_net_iface(struct link_device *ld, unsigned int channel);
-void stop_net_ifaces(struct link_device *ld);
-void resume_net_ifaces(struct link_device *ld);
-
-/* flow control CMD from CP, it use in serial devices */
-int link_rx_flowctl_cmd(struct link_device *ld, const char *data, size_t len);
+/* Stop/wake all normal priority TX queues in network interfaces */
+bool stop_net_ifaces(struct link_device *ld, unsigned long set_mask);
+void resume_net_ifaces(struct link_device *ld, unsigned long clear_mask);
 
 /* Get an IO device */
 struct io_device *get_iod_with_format(struct modem_shared *msd,
@@ -382,7 +411,7 @@ static inline struct io_device *link_get_iod_with_channel(
 	struct io_device *iod = get_iod_with_channel(ld->msd, channel);
 	struct mem_link_device *mld = ld->mdm_data->mld;
 
-	if (!iod && atomic_read(&mld->cp_boot_done))
+	if (!iod && atomic_read(&mld->init_end_cnt))
 		mif_err("No IOD matches channel (%d)\n", channel);
 
 	return (iod && IS_CONNECTED(iod, ld)) ? iod : NULL;
@@ -408,28 +437,10 @@ static inline void iodevs_for_each(struct modem_shared *msd, action_fn action, v
 	}
 }
 
-/* netif wake/stop queue of iod */
-void iodev_netif_wake(struct io_device *iod, void *args);
-void iodev_netif_stop(struct io_device *iod, void *args);
-
-/* netif wake/stop queue of iod having activated ndev */
-void netif_tx_flowctl(struct modem_shared *msd, bool tx_stop);
-
 __be32 ipv4str_to_be32(const char *ipv4str, size_t count);
 
 void mif_add_timer(struct timer_list *timer, unsigned long expire,
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
 				void (*function)(struct timer_list *));
-#else
-				void (*function)(unsigned long), unsigned long data);
-#endif
-
-/* debug helper functions for sipc4, sipc5 */
-void mif_print_data(const u8 *data, int len);
-
-void mif_dump2format16(const u8 *data, int len, char *buff, char *tag);
-void mif_dump2format4(const u8 *data, int len, char *buff, char *tag);
-void mif_print_dump(const u8 *data, int len, int width);
 
 /*
  * ---------------------------------------------------------------------------
@@ -509,13 +520,14 @@ void mif_print_dump(const u8 *data, int len, int width);
 */
 #define UDP_HDR_SIZE	8
 
+#ifdef DEBUG_MODEM_IF_IP_DATA
 void print_ipv4_packet(const u8 *ip_pkt, enum direction dir);
-bool is_dns_packet(const u8 *ip_pkt);
-bool is_syn_packet(const u8 *ip_pkt);
+#endif
 
 void mif_init_irq(struct modem_irq *irq, unsigned int num, const char *name,
 		  unsigned long flags);
 int mif_request_irq(struct modem_irq *irq, irq_handler_t isr, void *data);
+void mif_free_irq(struct modem_irq *irq, void *data);
 void mif_enable_irq(struct modem_irq *irq);
 void mif_disable_irq(struct modem_irq *irq);
 bool mif_gpio_set_value(struct cpif_gpio *gpio, int value, unsigned int delay_ms);
@@ -525,28 +537,6 @@ int mif_gpio_toggle_value(struct cpif_gpio *gpio, int delay_ms);
 struct file *mif_open_file(const char *path);
 void mif_save_file(struct file *fp, const char *buff, size_t size);
 void mif_close_file(struct file *fp);
-
-int board_gpio_export(struct device *dev,
-		unsigned int gpio, bool dir, const char *name);
-
-void make_gpio_floating(unsigned int gpio, bool floating);
-
-#if IS_ENABLED(CONFIG_ARGOS)
-/* kernel team needs to provide argos header file. !!!
- * As of now, there's nothing to use.
- */
-#if IS_ENABLED(CONFIG_SCHED_HMP)
-extern struct cpumask hmp_slow_cpu_mask;
-extern struct cpumask hmp_fast_cpu_mask;
-#endif
-
-int argos_irq_affinity_setup_label(unsigned int irq, const char *label,
-		struct cpumask *affinity_cpu_mask,
-		struct cpumask *default_cpu_mask);
-int argos_task_affinity_setup_label(struct task_struct *p, const char *label,
-		struct cpumask *affinity_cpu_mask,
-		struct cpumask *default_cpu_mask);
-#endif
 
 void mif_stop_logging(void);
 void set_wakeup_packet_log(bool enable);
@@ -561,64 +551,11 @@ void set_wakeup_packet_log(bool enable);
  * sizeof(struct skb_shared_info): 512
  * 2048 + 512 = 2560 (0xA00)
  */
-#define MIF_BUFF_DEFAULT_PACKET_SIZE	(2048)
-#define MIF_BUFF_CELL_PADDING_SIZE	(512)
-#define MIF_BUFF_DEFAULT_CELL_SIZE	(MIF_BUFF_DEFAULT_PACKET_SIZE+MIF_BUFF_CELL_PADDING_SIZE)
-#define MIF_BUFF_MAP_CELL_SIZE	(sizeof(uint64_t))
-#define MIF_BITS_FOR_BYTE	(8)
-#define MIF_BITS_FOR_MAP_CELL	(MIF_BUFF_MAP_CELL_SIZE * MIF_BITS_FOR_BYTE)
-#define MIF_64BIT_FIRST_BIT	(0x8000000000000000ULL)
-
-struct mif_buff_mng {
-	unsigned char *buffer_start;
-	unsigned char *buffer_end;
-	unsigned int buffer_size;
-	unsigned int cell_size;
-
-	unsigned int cell_count;
-	unsigned int used_cell_count;
-	unsigned int free_cell_count;
-
-	spinlock_t lock;
-
-	uint64_t *buffer_map;
-	unsigned int buffer_map_size;
-	int current_map_index;
-
-	struct list_head node;
-
-	bool enable_sw_zerocopy;
-};
-
-struct mif_buff_mng *init_mif_buff_mng(unsigned char *buffer_start,
-	unsigned int buffer_size, unsigned int cell_size);
-void exit_mif_buff_mng(struct mif_buff_mng *bm);
-void *alloc_mif_buff(struct mif_buff_mng *bm);
-int free_mif_buff(struct mif_buff_mng *bm, void *buffer);
-
-static inline unsigned int get_mif_buff_free_count(struct mif_buff_mng *bm)
-{
-	if (bm)
-		return bm->free_cell_count;
-	else
-		return 0;
-}
-
-static inline unsigned int get_mif_buff_used_count(struct mif_buff_mng *bm)
-{
-	if (bm)
-		return bm->used_cell_count;
-	else
-		return 0;
-}
-
-extern struct mif_buff_mng *g_mif_buff_mng;
-void set_dflags(unsigned long flag);
+#define MIF_BUFF_DEFAULT_PACKET_SIZE   (2048)
+#define MIF_BUFF_CELL_PADDING_SIZE     (512)
+#define MIF_BUFF_DEFAULT_CELL_SIZE     (MIF_BUFF_DEFAULT_PACKET_SIZE+MIF_BUFF_CELL_PADDING_SIZE)
 
 const char *get_cpif_driver_version(void);
-
-extern bool __skb_free_head_cp_zerocopy(struct sk_buff *skb);
-extern void cpif_enable_sw_zerocopy(void);
 
 static inline struct wakeup_source *cpif_wake_lock_register(struct device *dev, const char *name)
 {
@@ -682,5 +619,7 @@ static inline int cpif_wake_lock_active(struct wakeup_source *ws)
 
 	return ws->active;
 }
+
+int copy_from_user_memcpy_toio(void __iomem *dst, const void __user *src, size_t count);
 
 #endif/*__MODEM_UTILS_H__*/

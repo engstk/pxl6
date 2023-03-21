@@ -378,7 +378,9 @@ VL53L1_Error VL53L1_GetUID(VL53L1_DEV Dev, uint64_t *pUid)
 			(uint8_t)(0x1F8 >> 2),
 			(uint8_t)(8 >> 2),
 			fmtdata);
-	memcpy(pUid, fmtdata, sizeof(uint64_t));
+
+	if (Status == VL53L1_ERROR_NONE)
+		memcpy(pUid, fmtdata, sizeof(uint64_t));
 
 	LOG_FUNCTION_END(Status);
 	return Status;
@@ -3811,8 +3813,8 @@ VL53L1_Error VL53L1_PerformOffsetPerVcselCalibration(VL53L1_DEV Dev,
 	VL53L1_DistanceModes currentDist;
 	VL53L1_DistanceModes DistMode[3] = {VL53L1_DISTANCEMODE_SHORT,
 			VL53L1_DISTANCEMODE_MEDIUM, VL53L1_DISTANCEMODE_LONG};
-	int16_t offsetA[3];
-	int16_t offsetB[3];
+	int16_t offsetA[3] = {0};
+	int16_t offsetB[3] = {0};
 
 	VL53L1_Error SmudgeStatus = VL53L1_ERROR_NONE;
 	uint8_t smudge_corr_en, isc;

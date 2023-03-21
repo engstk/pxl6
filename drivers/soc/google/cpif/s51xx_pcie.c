@@ -36,11 +36,12 @@
 
 #include "modem_prj.h"
 #include "modem_utils.h"
+#include "modem_ctrl.h"
 #include "s51xx_pcie.h"
 
 static int s51xx_pcie_read_procmem(struct seq_file *m, void *v)
 {
-	pr_err("Procmem READ!\n");
+	mif_info("Procmem READ!\n");
 
 	return 0;
 }
@@ -76,6 +77,8 @@ void s51xx_pcie_chk_ep_conf(struct pci_dev *pdev)
 inline int s51xx_pcie_send_doorbell_int(struct pci_dev *pdev, int int_num)
 {
 	struct s51xx_pcie *s51xx_pcie = pci_get_drvdata(pdev);
+	struct pci_driver *driver = pdev->driver;
+	struct modem_ctl *mc = container_of(driver, struct modem_ctl, pci_driver);
 	u32 reg, count = 0;
 	int cnt = 0;
 	u16 cmd;
@@ -85,9 +88,15 @@ inline int s51xx_pcie_send_doorbell_int(struct pci_dev *pdev, int int_num)
 		return -EAGAIN;
 	}
 
+	if (exynos_pcie_rc_get_cpl_timeout_state(s51xx_pcie->pcie_channel_num)) {
+		mif_err_limited("Can't send Interrupt(cto_retry_cnt: %d)!!!\n",
+				mc->pcie_cto_retry_cnt);
+		return 0;
+	}
+
 	if (s51xx_check_pcie_link_status(s51xx_pcie->pcie_channel_num) == 0) {
 		mif_err_limited("Can't send Interrupt(not linked)!!!\n");
-		return -EAGAIN;
+		goto check_cpl_timeout;
 	}
 
 	pci_read_config_word(pdev, PCI_COMMAND, &cmd);
@@ -120,7 +129,7 @@ inline int s51xx_pcie_send_doorbell_int(struct pci_dev *pdev, int int_num)
 			mif_err_limited("BME is not set(cnt=%d)\n", cnt);
 			exynos_pcie_rc_register_dump(
 					s51xx_pcie->pcie_channel_num);
-			return -EAGAIN;
+			goto check_cpl_timeout;
 		}
 	}
 
@@ -141,20 +150,31 @@ send_doorbell_again:
 			if (!in_interrupt())
 				udelay(1000); /* 1ms */
 			else {
-				mif_err_limited("Can't send doorbell in interrupt mode (0x%08X)\n"
-						, reg);
+				mif_err_limited("Can't send doorbell in interrupt mode (0x%08X)\n",
+						reg);
 				return 0;
 			}
 
 			goto send_doorbell_again;
 		}
 		mif_err("[Need to CHECK] Can't send doorbell int (0x%x)\n", reg);
+		pci_read_config_dword(pdev, PCI_BASE_ADDRESS_0, &reg);
+		mif_err("Check BAR0 register : %#x\n", reg);
 		exynos_pcie_rc_register_dump(s51xx_pcie->pcie_channel_num);
 
-		return -EAGAIN;
+		goto check_cpl_timeout;
 	}
 
 	return 0;
+
+check_cpl_timeout:
+	if (exynos_pcie_rc_get_cpl_timeout_state(s51xx_pcie->pcie_channel_num)) {
+		mif_err_limited("Can't send Interrupt(cto_retry_cnt: %d)!!!\n",
+				mc->pcie_cto_retry_cnt);
+		return 0;
+	}
+
+	return -EAGAIN;
 }
 
 void first_save_s51xx_status(struct pci_dev *pdev)
@@ -171,7 +191,7 @@ void first_save_s51xx_status(struct pci_dev *pdev)
 	if (s51xx_pcie->pci_saved_configs == NULL)
 		mif_err("MSI-DBG: s51xx pcie.pci_saved_configs is NULL(s51xx config NOT saved)\n");
 	else
-		mif_err("first s51xx config status save: done\n");
+		mif_info("first s51xx config status save: done\n");
 }
 
 void s51xx_pcie_save_state(struct pci_dev *pdev)
@@ -215,9 +235,6 @@ void s51xx_pcie_save_state(struct pci_dev *pdev)
 void s51xx_pcie_restore_state(struct pci_dev *pdev)
 {
 	struct s51xx_pcie *s51xx_pcie = pci_get_drvdata(pdev);
-	struct pci_driver *driver = pdev->driver;
-	struct modem_ctl *mc = container_of(driver, struct modem_ctl, pci_driver);
-
 	int ret;
 	u32 val;
 
@@ -247,7 +264,9 @@ void s51xx_pcie_restore_state(struct pci_dev *pdev)
 	ret = pci_enable_device(pdev);
 
 	if (ret)
-		pr_err("Can't enable PCIe Device after linkup!\n");
+		mif_err("Can't enable PCIe Device after linkup!\n");
+
+	dev_info(&pdev->dev, "[%s] PCIe RC bme bit setting\n", __func__);
 	pci_set_master(pdev);
 
 	/* DBG: print out EP config values after restore_state */
@@ -255,22 +274,17 @@ void s51xx_pcie_restore_state(struct pci_dev *pdev)
 
 	/* BAR0 value correction  */
 	pci_read_config_dword(pdev, PCI_BASE_ADDRESS_0, &val);
-	dev_dbg(&pdev->dev, "[%s]restored:PCI_BASE_ADDRESS_0 = 0x%x\n", __func__, val);
-	if ((val & 0xfffffff0) != 0x40000000) {
-		pci_write_config_dword(pdev, PCI_BASE_ADDRESS_0, 0x40000000);
+	dev_dbg(&pdev->dev, "restored:PCI_BASE_ADDRESS_0 = %#x\n", val);
+	if ((val & PCI_BASE_ADDRESS_MEM_MASK) != s51xx_pcie->dbaddr_changed_base) {
+		pci_write_config_dword(pdev, PCI_BASE_ADDRESS_0,
+					s51xx_pcie->dbaddr_changed_base);
 		pci_write_config_dword(pdev, PCI_BASE_ADDRESS_1, 0x0);
-		mif_info("write BAR0 value: 0x40000000\n");
-		dev_info(&pdev->dev, "[%s]:VALUE CHECK\n", __func__);
+		mif_info("write BAR0 value: %#x\n", s51xx_pcie->dbaddr_changed_base);
 		s51xx_pcie_chk_ep_conf(pdev);
 	}
 
 	/* Enable L1.2 after PCIe power on */
-	if (mc->phone_state == STATE_CRASH_EXIT) {
-		pr_err("Disable L1.2 on CP CRASH!!!\n");
-		s51xx_pcie_l1ss_ctrl(0, s51xx_pcie->pcie_channel_num);
-	} else {
-		s51xx_pcie_l1ss_ctrl(1, s51xx_pcie->pcie_channel_num);
-	}
+	s51xx_pcie_l1ss_ctrl(1, s51xx_pcie->pcie_channel_num);
 
 	s51xx_pcie->link_status = 1;
 	/* pci_pme_active(s51xx_pcie.s51xx_pdev, 1); */
@@ -278,20 +292,12 @@ void s51xx_pcie_restore_state(struct pci_dev *pdev)
 
 int s51xx_check_pcie_link_status(int ch_num)
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
 	return exynos_pcie_rc_chk_link_status(ch_num);
-#else
-	return exynos_check_pcie_link_status(ch_num);
-#endif
 }
 
 void s51xx_pcie_l1ss_ctrl(int enable, int ch_num)
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
 	exynos_pcie_rc_l1ss_ctrl(enable, PCIE_L1SS_CTRL_MODEM_IF, ch_num);
-#else
-	exynos_pcie_host_v1_l1ss_ctrl(enable, PCIE_L1SS_CTRL_MODEM_IF);
-#endif
 }
 
 void disable_msi_int(struct pci_dev *pdev)
@@ -312,40 +318,57 @@ int s51xx_pcie_request_msi_int(struct pci_dev *pdev, int int_num)
 	int err = -EFAULT;
 
 	if (int_num > MAX_MSI_NUM) {
-		pr_err("Too many MSI interrupts are requested(<=16)!!!\n");
+		mif_err("Too many MSI interrupts are requested(<=16)!!!\n");
 		return -EFAULT;
 	}
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0))
-	/* old kernel(KC+S359):
-	 * err = __pci_enable_msi_range(s51xx_pcie.s51xx_pdev, int_num, int_num);
-	 */
 	err = pci_alloc_irq_vectors_affinity(pdev, int_num, int_num, PCI_IRQ_MSI, NULL);
-#else
-	err = pci_enable_msi_block(pdev, int_num);
-#endif
-
 	if (err <= 0) {
-		pr_err("Can't get msi IRQ!!!!!\n");
+		mif_err("Can't get msi IRQ!!!!!\n");
 		return -EFAULT;
 	}
 
 	return pdev->irq;
 }
 
-static void s51xx_pcie_linkdown_cb(struct exynos_pcie_notify *noti)
+static void s51xx_pcie_event_cb(struct exynos_pcie_notify *noti)
 {
 	struct pci_dev *pdev = (struct pci_dev *)noti->user;
 	struct pci_driver *driver = pdev->driver;
 	struct modem_ctl *mc = container_of(driver, struct modem_ctl, pci_driver);
+	int event = noti->event;
 
-	pr_err("s51xx Link-Down notification callback function!!!\n");
+	mif_err("0x%X pcie event received!\n", event);
 
-	if (mc->pcie_powered_on == false) {
-		pr_info("%s: skip cp crash during dislink sequence\n", __func__);
-		exynos_pcie_set_perst_gpio(mc->pcie_ch_num, 0);
-	} else {
-		s5100_force_crash_exit_ext();
+	if (event & EXYNOS_PCIE_EVENT_LINKDOWN) {
+		if (mc->pcie_powered_on == false) {
+			mif_info("skip cp crash during dislink sequence\n");
+			exynos_pcie_set_perst_gpio(mc->pcie_ch_num, 0);
+			return;
+		}
+
+		mif_err("s51xx LINK_DOWN notification callback function!!!\n");
+		mif_err("LINK_DOWN: a=%d c=%d\n", mc->pcie_linkdown_retry_cnt_all++,
+				mc->pcie_linkdown_retry_cnt);
+
+		if (mc->pcie_linkdown_retry_cnt++ < 10) {
+			mif_err("[%d] retry pcie poweron !!!\n", mc->pcie_linkdown_retry_cnt);
+			queue_work_on(2, mc->wakeup_wq, &mc->wakeup_work);
+		} else {
+			mif_err("[%d] force crash !!!\n", mc->pcie_linkdown_retry_cnt);
+			s5100_force_crash_exit_ext();
+		}
+	} else if (event & EXYNOS_PCIE_EVENT_CPL_TIMEOUT) {
+		mif_err("s51xx CPL_TIMEOUT notification callback function!!!\n");
+		mif_err("CPL: a=%d c=%d\n", mc->pcie_cto_retry_cnt_all++, mc->pcie_cto_retry_cnt);
+
+		if (mc->pcie_cto_retry_cnt++ < 10) {
+			mif_err("[%d] retry pcie poweron !!!\n", mc->pcie_cto_retry_cnt);
+			queue_work_on(2, mc->wakeup_wq, &mc->wakeup_work);
+		} else {
+			mif_err("[%d] force crash !!!\n", mc->pcie_cto_retry_cnt);
+			s5100_force_crash_exit_ext();
+		}
 	}
 }
 
@@ -384,10 +407,11 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	pci_read_config_dword(pdev, PCI_BASE_ADDRESS_0, &val);
 	val &= PCI_BASE_ADDRESS_MEM_MASK;
 	s51xx_pcie->dbaddr_offset = db_addr - val;
+	s51xx_pcie->dbaddr_changed_base = val;
 	dev_info(dev, "db_addr : 0x%x , val : 0x%x, offset : 0x%x\n",
 			db_addr, val, (unsigned int)s51xx_pcie->dbaddr_offset);
 
-	pr_err("Disable BAR resources.\n");
+	mif_info("Disable BAR resources.\n");
 	for (i = 0; i < 6; i++) {
 		pdev->resource[i].start = 0x0;
 		pdev->resource[i].end = 0x0;
@@ -406,7 +430,7 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	dev_info(&bus_self->dev, "[%s] BAR %d: tmp rsc : %pR\n", __func__, resno, tmp_rsc);
 	s51xx_pcie->dbaddr_base = tmp_rsc->start;
 
-	pr_err("Set Doorbell register address.\n");
+	mif_info("Set Doorbell register address.\n");
 	s51xx_pcie->doorbell_addr = devm_ioremap(&pdev->dev,
 			s51xx_pcie->dbaddr_base + s51xx_pcie->dbaddr_offset, SZ_4);
 
@@ -417,21 +441,22 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	 * dev_err(dev, "PCIe doorbell setting for ABOX is failed\n");
 	 */
 
-	pr_info("s51xx_pcie.doorbell_addr = %p  (start 0x%lx offset : %lx)\n",
+	mif_info("s51xx_pcie.doorbell_addr = %p  (start 0x%lx offset : %lx)\n",
 		s51xx_pcie->doorbell_addr, (unsigned long)s51xx_pcie->dbaddr_base,
 					(unsigned long)s51xx_pcie->dbaddr_offset);
 
 	if (s51xx_pcie->doorbell_addr == NULL)
-		pr_err("Can't ioremap doorbell address!!!\n");
+		mif_err("Can't ioremap doorbell address!!!\n");
 
-	pr_info("Register PCIE notification LINKDOWN event...\n");
-	s51xx_pcie->pcie_event.events = EXYNOS_PCIE_EVENT_LINKDOWN;
+	mif_info("Register PCIE notification LINKDOWN and CPL_TIMEOUT events...\n");
+	s51xx_pcie->pcie_event.events =
+		EXYNOS_PCIE_EVENT_LINKDOWN | EXYNOS_PCIE_EVENT_CPL_TIMEOUT;
 	s51xx_pcie->pcie_event.user = pdev;
 	s51xx_pcie->pcie_event.mode = EXYNOS_PCIE_TRIGGER_CALLBACK;
-	s51xx_pcie->pcie_event.callback = s51xx_pcie_linkdown_cb;
+	s51xx_pcie->pcie_event.callback = s51xx_pcie_event_cb;
 	exynos_pcie_register_event(&s51xx_pcie->pcie_event);
 
-	pr_err("Enable PCI device...\n");
+	mif_info("Enable PCI device...\n");
 	ret = pci_enable_device(pdev);
 
 	pci_set_master(pdev);
@@ -479,7 +504,7 @@ static void s51xx_pcie_remove(struct pci_dev *pdev)
 {
 	struct s51xx_pcie *s51xx_pcie = pci_get_drvdata(pdev);
 
-	pr_err("s51xx PCIe Remove!!!\n");
+	mif_err("s51xx PCIe Remove!!!\n");
 
 	if (s51xx_pcie->pci_saved_configs)
 		kfree(s51xx_pcie->pci_saved_configs);
@@ -510,7 +535,7 @@ int s51xx_pcie_init(struct modem_ctl *mc)
 	int ch_num = mc->pcie_ch_num;
 	int ret;
 
-	pr_err("Register PCIE drvier for s51xx.(chNum: %d, mc: 0x%p)\n", ch_num, mc);
+	mif_info("Register PCIE drvier for s51xx.(chNum: %d, mc: 0x%p)\n", ch_num, mc);
 
 	mc->pci_driver = s51xx_driver;
 

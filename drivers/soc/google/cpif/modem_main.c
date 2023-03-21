@@ -25,9 +25,7 @@
 #include <linux/irq.h>
 #include <linux/gpio.h>
 #include <linux/proc_fs.h>
-#if IS_ENABLED(CONFIG_OF)
 #include <linux/of_gpio.h>
-#endif
 #include <linux/delay.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of_reserved_mem.h>
@@ -37,14 +35,15 @@
 #include <net/ipv6.h>
 
 #if IS_ENABLED(CONFIG_LINK_DEVICE_SHMEM)
-#include <linux/shm_ipc.h>
-#include <linux/mcu_ipc.h>
+#include <soc/google/shm_ipc.h>
+#include <soc/google/mcu_ipc.h>
 #endif
 
 #include <soc/google/exynos-modem-ctrl.h>
 #include "modem_prj.h"
 #include "modem_variation.h"
 #include "modem_utils.h"
+#include "modem_toe_device.h"
 
 #if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
 #include "cpif_qos_info.h"
@@ -73,11 +72,11 @@ static struct modem_shared *create_modem_shared_data(
 	msd->iodevs_tree_fmt = RB_ROOT;
 
 	msd->storage.cnt = 0;
-	msd->storage.addr = devm_kzalloc(dev, MAX_MIF_BUFF_SIZE +
-		(MAX_MIF_SEPA_SIZE * 2), GFP_KERNEL);
+	msd->storage.addr = devm_kcalloc(dev, MAX_MIF_BUFF_SIZE +
+		(MAX_MIF_SEPA_SIZE * 2), sizeof(*msd->storage.addr), GFP_KERNEL);
 	if (!msd->storage.addr) {
 		mif_err("IPC logger buff alloc failed!!\n");
-		kfree(msd);
+		devm_kfree(dev, msd);
 		return NULL;
 	}
 	memset(msd->storage.addr, 0, size + (MAX_MIF_SEPA_SIZE * 2));
@@ -113,7 +112,7 @@ static struct modem_ctl *create_modemctl_device(struct platform_device *pdev,
 
 	modemctl->msd = msd;
 
-	modemctl->phone_state = STATE_INIT;
+	modemctl->phone_state = STATE_OFFLINE;
 
 	INIT_LIST_HEAD(&modemctl->modem_state_notify_list);
 	spin_lock_init(&modemctl->lock);
@@ -151,7 +150,6 @@ static struct io_device *create_io_device(struct platform_device *pdev,
 	}
 
 	INIT_LIST_HEAD(&iod->list);
-	RB_CLEAR_NODE(&iod->node_chan);
 	RB_CLEAR_NODE(&iod->node_fmt);
 
 	iod->name = io_t->name;
@@ -161,7 +159,6 @@ static struct io_device *create_io_device(struct platform_device *pdev,
 	iod->link_type = io_t->link_type;
 	iod->attrs = io_t->attrs;
 	iod->max_tx_size = io_t->ul_buffer_size;
-	iod->net_typ = pdata->modem_net;
 	iod->ipc_version = pdata->ipc_version;
 	atomic_set(&iod->opened, 0);
 	spin_lock_init(&iod->info_id_lock);
@@ -186,7 +183,7 @@ static struct io_device *create_io_device(struct platform_device *pdev,
 
 	if (iod->format == IPC_BOOT) {
 		modemctl->bootd = iod;
-		mif_err("BOOT device = %s\n", iod->name);
+		mif_info("BOOT device = %s\n", iod->name);
 	}
 
 	/* link between io device and modem shared */
@@ -210,7 +207,7 @@ static struct io_device *create_io_device(struct platform_device *pdev,
 	}
 
 	/* register misc device or net device */
-	ret = sipc5_init_io_device(iod);
+	ret = sipc5_init_io_device(iod, pdata->mld);
 	if (ret) {
 		devm_kfree(dev, iod);
 		mif_err("sipc5_init_io_device fail (%d)\n", ret);
@@ -231,6 +228,13 @@ static int attach_devices(struct io_device *iod, struct device *dev)
 		if (IS_CONNECTED(iod, ld)) {
 			mif_debug("set %s->%s\n", iod->name, ld->name);
 			set_current_link(iod, ld);
+
+			if (iod->io_typ == IODEV_NET && iod->ndev) {
+				struct vnet *vnet;
+
+				vnet = netdev_priv(iod->ndev);
+				vnet->hiprio_ack_only = ld->hiprio_ack_only;
+			}
 		}
 	}
 
@@ -254,7 +258,13 @@ static int attach_devices(struct io_device *iod, struct device *dev)
 		iod->waketime = RAW_WAKE_TIME;
 		break;
 
+#if IS_ENABLED(CONFIG_CH_EXTENSION)
+	case SIPC_CH_EX_ID_PDP_0 ... SIPC_CH_EX_ID_PDP_MAX:
+	case SIPC_CH_ID_BT_DUN ... SIPC_CH_ID_CIQ_DATA:
+	case SIPC_CH_ID_CPLOG1 ... SIPC_CH_ID_LOOPBACK2:
+#else
 	case SIPC_CH_ID_PDP_0 ... SIPC_CH_ID_LOOPBACK2:
+#endif
 		iod->waketime = NET_WAKE_TIME;
 		break;
 
@@ -279,7 +289,6 @@ static int attach_devices(struct io_device *iod, struct device *dev)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_OF)
 static int parse_dt_common_pdata(struct device_node *np,
 				 struct modem_data *pdata)
 {
@@ -333,11 +342,20 @@ static int parse_dt_mbox_pdata(struct device *dev, struct device_node *np,
 	mif_dt_read_u32(np, "mif,int_ap2cp_lcd_status",
 			mbox->int_ap2cp_lcd_status);
 #endif
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	mif_dt_read_u32(np, "mif,int_ap2cp_clatinfo_send", mbox->int_ap2cp_clatinfo_send);
+#endif
+#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
+	mif_dt_read_u32(np, "mif,int_ap2cp_pcie_link_ack", mbox->int_ap2cp_pcie_link_ack);
+#endif
 	mif_dt_read_u32(np, "mif,int_ap2cp_uart_noti", mbox->int_ap2cp_uart_noti);
 
 	mif_dt_read_u32(np, "mif,irq_cp2ap_msg", mbox->irq_cp2ap_msg);
 	mif_dt_read_u32(np, "mif,irq_cp2ap_status", mbox->irq_cp2ap_status);
 	mif_dt_read_u32(np, "mif,irq_cp2ap_active", mbox->irq_cp2ap_active);
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	mif_dt_read_u32(np, "mif,irq_cp2ap_clatinfo_ack", mbox->irq_cp2ap_clatinfo_ack);
+#endif
 	mif_dt_read_u32(np, "mif,irq_cp2ap_wakelock", mbox->irq_cp2ap_wakelock);
 	mif_dt_read_u32(np, "mif,irq_cp2ap_ratmode", mbox->irq_cp2ap_rat_mode);
 
@@ -360,6 +378,8 @@ static int parse_dt_ipc_region_pdata(struct device *dev, struct device_node *np,
 	mif_dt_read_u32(np, "legacy_raw_buffer_offset", pdata->legacy_raw_buffer_offset);
 	mif_dt_read_u32(np, "legacy_raw_txq_size", pdata->legacy_raw_txq_size);
 	mif_dt_read_u32(np, "legacy_raw_rxq_size", pdata->legacy_raw_rxq_size);
+	mif_dt_read_u32(np, "legacy_raw_rx_buffer_cached",
+			pdata->legacy_raw_rx_buffer_cached);
 
 	mif_dt_read_u32_noerr(np, "offset_ap_version", pdata->offset_ap_version);
 	mif_dt_read_u32_noerr(np, "offset_cp_version", pdata->offset_cp_version);
@@ -391,14 +411,28 @@ static int parse_dt_ipc_region_pdata(struct device *dev, struct device_node *np,
 	/* offset setting for capability */
 	if (pdata->capability_check) {
 		mif_dt_read_u32(np, "capability_offset", pdata->capability_offset);
-		mif_dt_read_u32(np, "ap_capability_0", pdata->ap_capability_0);
-		mif_dt_read_u32(np, "ap_capability_1", pdata->ap_capability_1);
+		mif_dt_read_u32(np, "ap_capability_0", pdata->ap_capability[0]);
+		mif_dt_read_u32(np, "ap_capability_1", pdata->ap_capability[1]);
 	}
 
 	of_property_read_u32_array(np, "ap2cp_msg", pdata->ap2cp_msg, 2);
 	of_property_read_u32_array(np, "cp2ap_msg", pdata->cp2ap_msg, 2);
 	of_property_read_u32_array(np, "cp2ap_united_status", pdata->cp2ap_united_status, 2);
 	of_property_read_u32_array(np, "ap2cp_united_status", pdata->ap2cp_united_status, 2);
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_xlat_v4_addr",
+			pdata->ap2cp_clatinfo_xlat_v4_addr, 2);
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_xlat_addr_0",
+			pdata->ap2cp_clatinfo_xlat_addr_0, 2);
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_xlat_addr_1",
+			pdata->ap2cp_clatinfo_xlat_addr_1, 2);
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_xlat_addr_2",
+			pdata->ap2cp_clatinfo_xlat_addr_2, 2);
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_xlat_addr_3",
+			pdata->ap2cp_clatinfo_xlat_addr_3, 2);
+	mif_dt_count_u32_array(np, "ap2cp_clatinfo_index",
+			pdata->ap2cp_clatinfo_index, 2);
+#endif
 	of_property_read_u32_array(np, "ap2cp_kerneltime", pdata->ap2cp_kerneltime, 2);
 	of_property_read_u32_array(np, "ap2cp_kerneltime_sec", pdata->ap2cp_kerneltime_sec, 2);
 	of_property_read_u32_array(np, "ap2cp_kerneltime_usec", pdata->ap2cp_kerneltime_usec, 2);
@@ -436,6 +470,10 @@ static int parse_dt_ipc_region_pdata(struct device *dev, struct device_node *np,
 			pdata->sbi_ap2cp_kerneltime_usec_mask);
 	mif_dt_read_u32_noerr(np, "sbi_ap2cp_kerneltime_usec_pos",
 			pdata->sbi_ap2cp_kerneltime_usec_pos);
+
+	/* Check pktproc use 36bit addr */
+	mif_dt_read_u32(np, "pktproc_use_36bit_addr",
+			pdata->pktproc_use_36bit_addr);
 
 	return ret;
 }
@@ -569,12 +607,6 @@ static const struct of_device_id cpif_dt_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, cpif_dt_match);
-#else
-static struct modem_data *modem_if_parse_dt_pdata(struct device *dev)
-{
-	return ERR_PTR(-ENODEV);
-}
-#endif
 
 enum mif_sim_mode {
 	MIF_SIM_NONE = 0,
@@ -698,11 +730,10 @@ static int cpif_probe(struct platform_device *pdev)
 {
 	int i;
 	struct device *dev = &pdev->dev;
-	struct modem_data *pdata = dev->platform_data;
+	struct modem_data *pdata = NULL;
 	struct modem_shared *msd;
 	struct modem_ctl *modemctl;
 	struct io_device **iod;
-	size_t size;
 	struct link_device *ld;
 	enum mif_sim_mode sim_mode;
 	int err;
@@ -713,33 +744,42 @@ static int cpif_probe(struct platform_device *pdev)
 	err = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(36));
 	if (err) {
 		mif_err("dma_set_mask_and_coherent() error:%d\n", err);
-		return err;
+		goto fail;
 	}
 
 	if (dev->of_node) {
 		pdata = modem_if_parse_dt_pdata(dev);
 		if (IS_ERR(pdata)) {
 			mif_err("MIF DT parse error!\n");
-			return PTR_ERR(pdata);
+			err = PTR_ERR(pdata);
+			goto fail;
 		}
 	} else {
 		if (!pdata) {
 			mif_err("Non-DT, incorrect pdata!\n");
-			return -EINVAL;
+			err = -EINVAL;
+			goto fail;
 		}
 	}
 
 	msd = create_modem_shared_data(pdev);
 	if (!msd) {
 		mif_err("%s: msd == NULL\n", pdata->name);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto fail;
 	}
 
 	modemctl = create_modemctl_device(pdev, msd);
 	if (!modemctl) {
 		mif_err("%s: modemctl == NULL\n", pdata->name);
 		devm_kfree(dev, msd);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto fail;
+	}
+
+	if (toe_dev_create(pdev)) {
+		mif_err("%s: toe dev not created\n", pdata->name);
+		goto free_mc;
 	}
 
 	/* create link device */
@@ -747,13 +787,13 @@ static int cpif_probe(struct platform_device *pdev)
 	if (!ld)
 		goto free_mc;
 
-	mif_err("%s: %s link created\n", pdata->name, ld->name);
+	mif_info("%s: %s link created\n", pdata->name, ld->name);
 
 	ld->mc = modemctl;
 	ld->msd = msd;
 	list_add(&ld->list, &msd->link_dev_list);
 
-	/* set sime mode */
+	/* get sim mode */
 	sim_mode = get_sim_mode(dev->of_node);
 
 	/* char device */
@@ -764,10 +804,9 @@ static int cpif_probe(struct platform_device *pdev)
 	}
 
 	/* create io deivces and connect to modemctl device */
-	size = sizeof(struct io_device *) * pdata->num_iodevs;
-	iod = kzalloc(size, GFP_KERNEL);
+	iod = kcalloc(pdata->num_iodevs, sizeof(*iod), GFP_KERNEL);
 	if (!iod) {
-		mif_err("kzalloc() err\n");
+		mif_err("kcalloc() err\n");
 		goto free_chrdev;
 	}
 
@@ -787,9 +826,10 @@ static int cpif_probe(struct platform_device *pdev)
 			goto free_iod;
 		}
 
-		if (iod[i]->format == IPC_FMT || iod[i]->format == IPC_BOOT)
-			list_add_tail(&iod[i]->list,
-					&modemctl->modem_state_notify_list);
+		/* Basically, iods of IPC_FMT and IPC_BOOT will receive the state */
+		if (iod[i]->format == IPC_FMT || iod[i]->format == IPC_BOOT ||
+		    iod[i]->attrs & IO_ATTR_STATE_RESET_NOTI)
+			list_add_tail(&iod[i]->list, &modemctl->modem_state_notify_list);
 
 		attach_devices(iod[i], dev);
 	}
@@ -809,11 +849,13 @@ static int cpif_probe(struct platform_device *pdev)
 		mif_err("failed to initialize hiprio list(%d)\n", err);
 #endif
 
-	err = mif_init_argos_notifier();
-	if (err < 0)
-		mif_err("failed to initialize argos_notifier(%d)\n", err);
+#if IS_ENABLED(CONFIG_CPIF_VENDOR_HOOK)
+	err = hook_init();
+	if (err)
+		mif_err("failed to register vendor hook\n");
+#endif
 
-	mif_err("%s: done ---\n", pdev->name);
+	mif_info("%s: done ---\n", pdev->name);
 	return 0;
 
 free_iod:
@@ -830,14 +872,21 @@ free_chrdev:
 	unregister_chrdev_region(MAJOR(msd->cdev_major), pdata->num_iodevs);
 
 free_mc:
-	if (modemctl)
+	if (modemctl) {
+		call_modem_uninit_func(modemctl, pdata);
 		devm_kfree(dev, modemctl);
+	}
 
 	if (msd)
 		devm_kfree(dev, msd);
 
+	err = -ENOMEM;
+
+fail:
 	mif_err("%s: xxx\n", pdev->name);
-	return -ENOMEM;
+
+	panic("CP interface driver probe failed\n");
+	return err;
 }
 
 static void cpif_shutdown(struct platform_device *pdev)
@@ -860,7 +909,6 @@ static int modem_suspend(struct device *pdev)
 	if (mc->ops.suspend)
 		mc->ops.suspend(mc);
 
-	mif_err("%s\n", mc->name);
 	set_wakeup_packet_log(true);
 
 	return 0;
@@ -874,8 +922,6 @@ static int modem_resume(struct device *pdev)
 
 	if (mc->ops.resume)
 		mc->ops.resume(mc);
-
-	mif_err("%s\n", mc->name);
 
 	return 0;
 }

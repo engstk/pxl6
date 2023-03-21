@@ -32,15 +32,12 @@
 #include <soc/google/s2mpu.h>
 #endif
 #endif
-#include "modem_debug.h"
 #include "modem_v1.h"
 
 #include "include/circ_queue.h"
 #include "include/sipc5.h"
 #include "include/exynos_ipc.h"
 
-#define DEBUG_MODEM_IF
-#ifdef DEBUG_MODEM_IF
 /* #define DEBUG_MODEM_IF_LINK_TX */
 /* #define DEBUG_MODEM_IF_LINK_RX */
 
@@ -51,7 +48,6 @@
 
 /* #define DEBUG_MODEM_IF_PS_DATA */
 /* #define DEBUG_MODEM_IF_IP_DATA */
-#endif
 
 /*
  * IOCTL commands
@@ -96,10 +92,6 @@ struct cp_image {
 #define IOCTL_GET_CP_BOOTLOG		_IO(IOCTL_MAGIC, 0x47)
 #define IOCTL_CLR_CP_BOOTLOG		_IO(IOCTL_MAGIC, 0x48)
 
-/* AP capability index - considers first 32bits only*/
-#define AP_CAP_PKTPROC_UL		0x00000001
-#define AP_CAP_CH_EXTENSION		0x00000002
-
 /* Log dump */
 #define IOCTL_MIF_LOG_DUMP		_IO(IOCTL_MAGIC, 0x51)
 
@@ -111,6 +103,7 @@ enum cp_log_dump_index {
 	LOG_IDX_DATABUF_DL,
 	LOG_IDX_DATABUF_UL,
 	LOG_IDX_L2B,
+	LOG_IDX_DDM,
 	MAX_LOG_DUMP_IDX
 };
 struct cp_log_dump {
@@ -187,6 +180,8 @@ struct t_handover_block_info {
 } __packed;
 #define IOCTL_HANDOVER_BLOCK_INFO	_IO('o', 0x57)
 
+#define IOCTL_SET_SPI_BOOT_MODE		_IO('o', 0x58)
+
 /*
  * Definitions for IO devices
  */
@@ -212,11 +207,16 @@ enum modem_state {
 	STATE_ONLINE,
 	STATE_NV_REBUILDING,	/* <= rebuilding start */
 	STATE_LOADER_DONE,
-	STATE_SIM_ATTACH,
-	STATE_SIM_DETACH,
+	STATE_SIM_ATTACH,	/* Deprecated */
+	STATE_SIM_DETACH,	/* Deprecated */
 	STATE_CRASH_WATCHDOG,	/* cp watchdog crash */
-	STATE_INIT,		/* cp booting has not been tried yet */
+
+	/* Internal states */
+	STATE_RESET,		/* normal reset */
 };
+
+/* Intervals in ms for the reset noti via poll */
+#define STATE_RESET_INTERVAL_MS	(200)
 
 enum link_state {
 	LINK_STATE_OFFLINE = 0,
@@ -224,16 +224,12 @@ enum link_state {
 	LINK_STATE_CP_CRASH
 };
 
-struct sim_state {
-	bool online;	/* SIM is online? */
-	bool changed;	/* online is changed? */
-};
-
 struct cp_power_stats {
 	u64 count;			/* count state was entered */
 	u64 duration_usec;		/* total time (usecs) in state */
 	u64 last_entry_timestamp_usec;	/* timestamp(usecs since boot) of last time entered */
 	u64 last_exit_timestamp_usec;	/* timestamp(usecs since boot) of last time exited */
+	bool suspended;			/* whether the modem is currently in sleep */
 };
 
 struct sec_info {
@@ -263,23 +259,8 @@ struct __packed sipc_fmt_hdr {
 #define sipc5_is_not_reserved_channel(ch) \
 	((ch) != 0 && (ch) != 5 && (ch) != 6 && (ch) != 27 && (ch) != 255)
 
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS) || IS_ENABLED(CONFIG_MODEM_IF_QOS)
-#define MAX_NDEV_TX_Q 2
-#else
-#define MAX_NDEV_TX_Q 1
-#endif
-#define MAX_NDEV_RX_Q 1
 /* mark value for high priority packet, hex QOSH */
 #define RAW_HPRIO	0x514F5348
-
-/* for fragmented data from link devices */
-struct fragmented_data {
-	struct sk_buff *skb_recv;
-	struct sipc5_frame_data f_data;
-	/* page alloc fail retry*/
-	unsigned int realloc_offset;
-};
-#define fragdata(iod, ld) (&(iod)->fragments[(ld)->link_type])
 
 /** struct skbuff_priv - private data of struct sk_buff
  * this is matched to char cb[48] of struct sk_buff
@@ -306,34 +287,10 @@ static inline struct skbuff_private *skbpriv(struct sk_buff *skb)
 	return (struct skbuff_private *)&skb->cb;
 }
 
-enum iod_rx_state {
-	IOD_RX_ON_STANDBY = 0,
-	IOD_RX_HEADER,
-	IOD_RX_PAYLOAD,
-	IOD_RX_PADDING,
-	MAX_IOD_RX_STATE
-};
-
-static const char * const rx_state_string[] = {
-	[IOD_RX_ON_STANDBY]	= "RX_ON_STANDBY",
-	[IOD_RX_HEADER]		= "RX_HEADER",
-	[IOD_RX_PAYLOAD]	= "RX_PAYLOAD",
-	[IOD_RX_PADDING]	= "RX_PADDING",
-};
-
-static const inline char *rx_state(enum iod_rx_state state)
-{
-	if (unlikely(state >= MAX_IOD_RX_STATE))
-		return "INVALID_STATE";
-	else
-		return rx_state_string[state];
-}
-
 struct io_device {
 	struct list_head list;
 
 	/* rb_tree node for an io device */
-	struct rb_node node_chan;
 	struct rb_node node_fmt;
 
 	/* Name of the IO device */
@@ -364,7 +321,6 @@ struct io_device {
 	u32 link_type;
 	u32 format;
 	u32 io_typ;
-	enum modem_network net_typ;
 
 	/* Attributes of an IO device */
 	u32 attrs;
@@ -387,10 +343,6 @@ struct io_device {
 	/* For keeping multi-frame packets temporarily */
 	struct sk_buff_head sk_multi_q[NUM_SIPC_MULTI_FRAME_IDS];
 
-	/* RX state used in RX FSM */
-	enum iod_rx_state curr_rx_state;
-	enum iod_rx_state next_rx_state;
-
 	/*
 	 * work for each io device, when delayed work needed
 	 * use this for private io device rx action
@@ -403,16 +355,11 @@ struct io_device {
 	u8 info_id;
 	spinlock_t info_id_lock;
 
-	struct fragmented_data fragments[LINKDEV_MAX];
-
 	int (*recv_skb_single)(struct io_device *iod, struct link_device *ld,
 			       struct sk_buff *skb);
 
 	int (*recv_net_skb)(struct io_device *iod, struct link_device *ld,
 			    struct sk_buff *skb);
-
-	/* inform the IO device that the SIM is not inserting or removing */
-	void (*sim_state_changed)(struct io_device *iod, bool sim_online);
 
 	struct modem_ctl *mc;
 	struct modem_shared *msd;
@@ -492,6 +439,8 @@ struct link_device {
 	/* capability check */
 	u32 capability_check;
 
+	bool hiprio_ack_only;
+
 	/* Modem data */
 	struct modem_data *mdm_data;
 
@@ -499,7 +448,6 @@ struct link_device {
 	spinlock_t netif_lock;
 
 	/* bit mask for stopped channel */
-	unsigned long netif_stop_mask;
 	unsigned long tx_flowctrl_mask;
 
 	/* flag of stopped state for all channels */
@@ -507,8 +455,8 @@ struct link_device {
 
 	struct workqueue_struct *rx_wq;
 
-	/* MIF buffer management */
-	struct mif_buff_mng *mif_buff_mng;
+	/* CP interface network rx management */
+	struct cpif_netrx_mng *cpif_netrx_mng;
 
 	/* Save reason of forced crash */
 	struct crash_reason crash_reason;
@@ -547,9 +495,6 @@ struct link_device {
 	int (*get_cp_crash_reason)(struct link_device *ld, struct io_device *iod,
 			unsigned long arg);
 
-	/* Reset buffer & dma_addr for zerocopy */
-	void (*reset_zerocopy)(struct link_device *ld);
-
 	int (*enable_rx_int)(struct link_device *ld);
 	int (*disable_rx_int)(struct link_device *ld);
 
@@ -557,18 +502,7 @@ struct link_device {
 	void (*stop_timers)(struct mem_link_device *mld);
 
 	int (*handover_block_info)(struct link_device *ld, unsigned long arg);
-
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
-	int (*register_pcie)(struct link_device *ld);
-#endif
-
-#if IS_ENABLED(CONFIG_SBD_BOOTLOG)
-	/* print cp boot/main logs */
-	struct timer_list cplog_timer;
-#endif
 };
-
-#define pm_to_link_device(pm)	container_of(pm, struct link_device, pm)
 
 static inline struct sk_buff *rx_alloc_skb(unsigned int length,
 		struct io_device *iod, struct link_device *ld)
@@ -650,12 +584,9 @@ struct modem_ctl {
 	struct device *dev;
 	char *name;
 	struct modem_data *mdm_data;
-
 	struct modem_shared *msd;
-	void __iomem *sysram_alive;
 
 	enum modem_state phone_state;
-	struct sim_state sim_state;
 
 	/* spin lock for each modem_ctl instance */
 	spinlock_t lock;
@@ -670,25 +601,24 @@ struct modem_ctl {
 	/* completion for waiting for CP power-off */
 	struct completion off_cmpl;
 
+#if IS_ENABLED(CONFIG_CP_PKTPROC_CLAT)
+	/* completion for waiting for cp2ap clatinfo ack */
+	struct completion clatinfo_ack;
+#endif
+
 	/* for broadcasting AP's PM state (active or sleep) */
 	unsigned int int_pda_active;
 	unsigned int int_cp_wakeup;
 	/* for checking aliveness of CP */
 	unsigned int irq_phone_active;
 
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	/* for broadcasting AP LCD state */
 	unsigned int int_lcd_status;
+#endif
 
 #if IS_ENABLED(CONFIG_LINK_DEVICE_SHMEM)
-	unsigned int mbx_pda_active;
-	unsigned int mbx_phone_active;
-	unsigned int mbx_ap_wakeup;
-	unsigned int mbx_ap_status;
-	unsigned int mbx_cp_wakeup;
-	unsigned int mbx_cp_status;
-
 	/* for notify uart connection with direction*/
-	unsigned int mbx_uart_noti;
 	unsigned int int_uart_noti;
 
 	/* for checking aliveness of CP */
@@ -709,8 +639,10 @@ struct modem_ctl {
 	unsigned int sbi_uart_noti_mask;
 	unsigned int sbi_uart_noti_pos;
 
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	unsigned int sbi_lcd_status_mask;
 	unsigned int sbi_lcd_status_pos;
+#endif
 
 	unsigned int ap2cp_cfg_addr;
 	void __iomem *ap2cp_cfg_ioaddr;
@@ -738,8 +670,9 @@ struct modem_ctl {
 	spinlock_t pcie_pm_lock;
 	struct pci_driver pci_driver;
 
-	int int_pcie_link_ack;
 	int pcie_ch_num;
+	int pcie_linkdown_retry_cnt;
+	int pcie_linkdown_retry_cnt_all;
 	int pcie_cto_retry_cnt;
 	int pcie_cto_retry_cnt_all;
 
@@ -762,23 +695,10 @@ struct modem_ctl {
 	atomic_t dump_toggle_issued;
 #endif
 
-	struct cpif_gpio s5100_gpio_cp_pwr;
-	struct cpif_gpio s5100_gpio_cp_reset;
-	struct cpif_gpio s5100_gpio_cp_ps_hold;
-	struct cpif_gpio s5100_gpio_cp_wakeup;
-	struct cpif_gpio s5100_gpio_cp_dump_noti;
-	struct cpif_gpio s5100_gpio_ap_status;
-	struct cpif_gpio s5100_gpio_ap_wakeup;
-	struct cpif_gpio s5100_gpio_phone_active;
-
-	struct modem_irq s5100_irq_ap_wakeup;
-	struct modem_irq s5100_irq_phone_active;
+	struct cpif_gpio cp_gpio[CP_GPIO_MAX];
+	struct modem_irq cp_gpio_irq[CP_GPIO_IRQ_MAX];
 
 	bool s5100_cp_reset_required;
-	bool s5100_iommu_map_enabled;
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_S2MPU)
-	bool s5100_s2mpu_enabled;
-#endif
 
 #if IS_ENABLED(CONFIG_GS_S2MPU)
 	struct s2mpu_info *s2mpu;
@@ -789,21 +709,7 @@ struct modem_ctl {
 #endif
 
 	struct notifier_block send_panic_nb;
-
-#if IS_ENABLED(CONFIG_EXYNOS_BUSMONITOR)
-	struct notifier_block busmon_nfb;
-#endif
-
-#if IS_ENABLED(CONFIG_MUIC_NOTIFIER)
-	struct notifier_block uart_notifier;
-#endif
-	bool uart_connect;
-	bool uart_dir;
-
-	const struct attribute_group *group;
-
-	struct delayed_work dwork;
-	struct work_struct work;
+	struct notifier_block abox_call_state_nb;
 
 	struct modemctl_ops ops;
 	struct io_device *iod;
@@ -813,13 +719,11 @@ struct modem_ctl {
 	struct notifier_block itmon_nb;
 #endif
 
-	void (*gpio_revers_bias_clear)(void);
-	void (*gpio_revers_bias_restore)(void);
 	void (*modem_complete)(struct modem_ctl *mc);
 
-	int receive_first_ipc;
-
+#if IS_ENABLED(CONFIG_CP_LCD_NOTIFIER)
 	struct notifier_block lcd_notifier;
+#endif
 
 	struct cp_power_stats cp_power_stats;
 	spinlock_t power_stats_lock;
@@ -873,20 +777,14 @@ u8 sipc5_build_config(struct io_device *iod, struct link_device *ld,
 				unsigned int count);
 void sipc5_build_header(struct io_device *iod, u8 *buff, u8 cfg,
 				unsigned int tx_bytes, unsigned int remains);
-void iodev_dump_status(struct io_device *iod, void *args);
 void vnet_setup(struct net_device *ndev);
 const struct file_operations *get_bootdump_io_fops(void);
 const struct file_operations *get_ipc_io_fops(void);
-int sipc5_init_io_device(struct io_device *iod);
+int sipc5_init_io_device(struct io_device *iod, struct mem_link_device *mld);
 void sipc5_deinit_io_device(struct io_device *iod);
 
-#if IS_ENABLED(CONFIG_RPS) && IS_ENABLED(CONFIG_ARGOS)
-extern struct net init_net;
-extern int sec_argos_register_notifier(struct notifier_block *n, char *label);
-extern int sec_argos_unregister_notifier(struct notifier_block *n, char *label);
-int mif_init_argos_notifier(void);
-#else
-static inline int mif_init_argos_notifier(void) { return 0; }
+#if IS_ENABLED(CONFIG_CPIF_VENDOR_HOOK)
+int hook_init(void);
 #endif
 
 #endif

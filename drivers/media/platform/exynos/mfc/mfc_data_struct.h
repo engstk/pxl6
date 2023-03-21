@@ -260,6 +260,7 @@ enum mfc_mb_flag {
 	MFC_FLAG_FRAMERATE_CH		= 9,
 	MFC_FLAG_SYNC_FRAME		= 10,
 	MFC_FLAG_AV1_FILM_GRAIN		= 11,
+	MFC_FLAG_MULTIFRAME		= 12,
 	/* Driver set to user when SRC DQbuf */
 	MFC_FLAG_CONSUMED_ONLY		= 15,
 	/* User set to driver when SRC Qbuf */
@@ -522,6 +523,7 @@ struct mfc_core_lock {
 struct mfc_pm {
 	struct clk	*clock;
 	atomic_t	pwr_ref;
+	atomic_t	protect_ref;
 	struct device	*device;
 	spinlock_t	clklock;
 
@@ -530,12 +532,21 @@ struct mfc_pm {
 	enum mfc_buf_usage_type base_type;
 };
 
+enum mfc_fw_status {
+	MFC_FW_NONE		= 0,
+	MFC_FW_ALLOC		= (1 << 0),	// 0x1
+	MFC_CTX_ALLOC		= (1 << 1),	// 0x2
+	MFC_FW_LOADED		= (1 << 2),	// 0x4
+	MFC_FW_VERIFIED		= (1 << 3),	// 0x8
+	MFC_FW_INITIALIZED	= (1 << 4),	// 0x10
+};
+
 struct mfc_fw {
-	int		date;
-	int		fimv_info;
-	size_t		fw_size;
-	int		status;
-	int		drm_status;
+	int			date;
+	int			fimv_info;
+	size_t			fw_size;
+	enum mfc_fw_status	status;
+	enum mfc_fw_status	drm_status;
 };
 
 struct mfc_ctx_buf_size {
@@ -849,6 +860,8 @@ struct mfc_platdata {
 	unsigned int core_balance;
 	unsigned int iova_threshold;
 	unsigned int idle_clk_ctrl;
+
+	unsigned int enc_rgb_csc_by_fw;
 };
 
 struct mfc_core_platdata {
@@ -1245,6 +1258,8 @@ struct mfc_core_ops {
 	int (*instance_deinit)(struct mfc_core *core,
 			struct mfc_ctx *ctx);
 	int (*instance_open)(struct mfc_core *core,
+			struct mfc_ctx *ctx);
+	int (*instance_cache_flush)(struct mfc_core *core,
 			struct mfc_ctx *ctx);
 	int (*instance_move_to)(struct mfc_core *core,
 			struct mfc_ctx *ctx);

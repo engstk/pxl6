@@ -25,6 +25,7 @@
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "modem_dump.h"
+#include "modem_toe_device.h"
 
 static ssize_t waketime_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -61,22 +62,22 @@ static ssize_t waketime_store(struct device *dev,
 	}
 
 	iod->waketime = msecs_to_jiffies(msec);
-#ifdef DEBUG_MODEM_IF
-	mif_err("%s: waketime = %lu ms\n", iod->name, msec);
-#endif
+	mif_info("%s: waketime = %lu ms\n", iod->name, msec);
 
 	if (iod->format == IPC_MULTI_RAW) {
 		struct modem_shared *msd = iod->msd;
 		unsigned int i;
 
+#if IS_ENABLED(CONFIG_CH_EXTENSION)
+		for (i = SIPC_CH_EX_ID_PDP_0; i <= SIPC_CH_EX_ID_PDP_MAX; i++) {
+#else
 		for (i = SIPC_CH_ID_PDP_0; i < SIPC_CH_ID_BT_DUN; i++) {
+#endif
 			iod = get_iod_with_channel(msd, i);
 			if (iod) {
 				iod->waketime = msecs_to_jiffies(msec);
-#ifdef DEBUG_MODEM_IF
 				mif_err("%s: waketime = %lu ms\n",
 					iod->name, msec);
-#endif
 			}
 		}
 	}
@@ -147,12 +148,13 @@ static struct device_attribute attr_txlink =
 	__ATTR_RW(txlink);
 
 enum gro_opt {
-	GRO_FULL_SUPPORT,
+	GRO_TCP_UDP,
 	GRO_TCP_ONLY,
 	GRO_NONE,
 	MAX_GRO_OPTION
 };
-static enum gro_opt gro_support = GRO_FULL_SUPPORT;
+
+static enum gro_opt gro_support = GRO_TCP_UDP;
 
 static ssize_t gro_option_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -213,7 +215,6 @@ static int gather_multi_frame(struct sipc5_link_header *hdr,
 	struct sk_buff_head *multi_q = &iod->sk_multi_q[ctrl.id];
 	int len = skb->len;
 
-#ifdef DEBUG_MODEM_IF
 	/* If there has been no multiple frame with this ID, ... */
 	if (skb_queue_empty(multi_q)) {
 		struct sipc_fmt_hdr *fh = (struct sipc_fmt_hdr *)skb->data;
@@ -221,7 +222,6 @@ static int gather_multi_frame(struct sipc5_link_header *hdr,
 		mif_err("%s<-%s: start of multi-frame (ID:%d len:%d)\n",
 			iod->name, mc->name, ctrl.id, fh->len);
 	}
-#endif
 	skb_queue_tail(multi_q, skb);
 
 	if (ctrl.more) {
@@ -260,7 +260,7 @@ static int gather_multi_frame_sit(struct exynos_link_header *hdr, struct sk_buff
 #ifdef DEBUG_MODEM_IF_LINK_RX
 	/* If there has been no multiple frame with this ID, ... */
 	if (skb_queue_empty(multi_q)) {
-		mif_err("%s<-%s: start of multi-frame (pkt_index:%d fr_index:%d len:%d)\n",
+		mif_debug("%s<-%s: start of multi-frame (pkt_index:%d fr_index:%d len:%d)\n",
 			iod->name, mc->name, exynos_multi_packet_index(ctrl),
 			exynos_multi_frame_index(ctrl), hdr->len);
 	}
@@ -269,21 +269,21 @@ static int gather_multi_frame_sit(struct exynos_link_header *hdr, struct sk_buff
 
 	/* The last frame has not arrived yet. */
 	if (!exynos_multi_last(ctrl)) {
-		mif_err("%s<-%s: recv of multi-frame (CH_ID:0x%02x rcvd:%d)\n",
+		mif_debug("%s<-%s: recv of multi-frame (CH_ID:0x%02x rcvd:%d)\n",
 			iod->name, mc->name, hdr->ch_id, skb->len);
 
 		return ret;
 	}
 
 	/* It is the last frame because the "more" bit is 0. */
-	mif_err("%s<-%s: end multi-frame (CH_ID:0x%02x rcvd:%d)\n",
+	mif_debug("%s<-%s: end multi-frame (CH_ID:0x%02x rcvd:%d)\n",
 		iod->name, mc->name, hdr->ch_id, skb->len);
 
 	/* check totoal multi packet size */
 	skb_queue_walk(multi_q, skb_cur)
 		total_len += skb_cur->len;
 
-	mif_info("Total multi-frame packet size is %d\n", total_len);
+	mif_debug("Total multi-frame packet size is %d\n", total_len);
 
 	skb_new = dev_alloc_skb(total_len);
 	if (unlikely(!skb_new)) {
@@ -369,27 +369,34 @@ static int rx_raw_misc(struct sk_buff *skb)
 	return queue_skb_to_iod(skb, iod);
 }
 
-static int check_gro_support(struct sk_buff *skb)
+static bool check_gro_support(struct sk_buff *skb)
 {
+	u8 proto;
 
 	if (gro_support == GRO_NONE)
-		return 0;
+		return false;
 
 	switch (skb->data[0] & 0xF0) {
 	case 0x40:
-		return (gro_support == GRO_FULL_SUPPORT) ?
-			((ip_hdr(skb)->protocol == IPPROTO_TCP) ||
-				(ip_hdr(skb)->protocol == IPPROTO_UDP)) :
-			(ip_hdr(skb)->protocol == IPPROTO_TCP);
-
+		proto = ip_hdr(skb)->protocol;
+		break;
 	case 0x60:
-		return (gro_support == GRO_FULL_SUPPORT) ?
-			((ipv6_hdr(skb)->nexthdr == NEXTHDR_TCP) ||
-				(ipv6_hdr(skb)->nexthdr == NEXTHDR_UDP)) :
-			(ipv6_hdr(skb)->nexthdr == NEXTHDR_TCP);
+		proto = ipv6_hdr(skb)->nexthdr;
+		break;
+	default:
+		return false;
 	}
 
-	return 0;
+	switch (gro_support) {
+	case GRO_TCP_UDP:
+		return proto == IPPROTO_TCP || proto == IPPROTO_UDP;
+	case GRO_TCP_ONLY:
+		return proto == IPPROTO_TCP;
+	default:
+		break;
+	}
+
+	return false;
 }
 
 static int rx_multi_pdp(struct sk_buff *skb)
@@ -403,7 +410,7 @@ static int rx_multi_pdp(struct sk_buff *skb)
 
 	skb->dev = (skbpriv(skb)->rx_clat ? iod->clat_ndev : iod->ndev);
 	if (!skb->dev || !iod->ndev) {
-		mif_info("%s: ERR! no iod->ndev\n", iod->name);
+		mif_err("%s: ERR! no iod->ndev\n", iod->name);
 		return -ENODEV;
 	}
 
@@ -464,7 +471,11 @@ static int rx_demux(struct link_device *ld, struct sk_buff *skb)
 
 	/* IP loopback */
 	if (ch == DATA_LOOPBACK_CHANNEL && ld->msd->loopback_ipaddr)
+#if IS_ENABLED(CONFIG_CH_EXTENSION)
+		ch = SIPC_CH_EX_ID_PDP_0;
+#else
 		ch = SIPC_CH_ID_PDP_0;
+#endif
 
 	iod = link_get_iod_with_channel(ld, ch);
 	if (unlikely(!iod)) {
@@ -480,19 +491,15 @@ static int rx_demux(struct link_device *ld, struct sk_buff *skb)
 
 	switch (skb_ld->protocol) {
 	case PROTOCOL_SIPC:
-		if (skb_ld->is_fmt_ch(ch)) {
-			iod->mc->receive_first_ipc = 1;
+		if (skb_ld->is_fmt_ch(ch))
 			return rx_fmt_ipc(skb);
-		} else if (skb_ld->is_ps_ch(ch))
+		else if (skb_ld->is_ps_ch(ch))
 			return rx_multi_pdp(skb);
 		else
 			return rx_raw_misc(skb);
 		break;
 	case PROTOCOL_SIT:
-		if (skb_ld->is_fmt_ch(ch) || skb_ld->is_oem_ch(ch)) {
-			iod->mc->receive_first_ipc = 1;
-			return rx_fmt_ipc(skb);
-		} else if (skb_ld->is_wfs0_ch(ch))
+		if (skb_ld->is_fmt_ch(ch) || skb_ld->is_oem_ch(ch) || skb_ld->is_wfs0_ch(ch))
 			return rx_fmt_ipc(skb);
 		else if (skb_ld->is_ps_ch(ch) || skb_ld->is_embms_ch(ch))
 			return rx_multi_pdp(skb);
@@ -546,31 +553,6 @@ static int io_dev_recv_net_skb_from_link_dev(struct io_device *iod,
 	cpif_wake_lock_timeout(iod->ws, iod->waketime ?: msecs_to_jiffies(200));
 
 	return rx_multi_pdp(skb);
-}
-
-static void io_dev_sim_state_changed(struct io_device *iod, bool sim_online)
-{
-	if (atomic_read(&iod->opened) == 0) {
-		mif_info("%s: ERR! not opened\n", iod->name);
-	} else if (iod->mc->sim_state.online == sim_online) {
-		mif_info("%s: SIM state not changed\n", iod->name);
-	} else {
-		iod->mc->sim_state.online = sim_online;
-		iod->mc->sim_state.changed = true;
-		mif_info("%s: SIM state changed {online %d, changed %d}\n",
-			iod->name, iod->mc->sim_state.online,
-			iod->mc->sim_state.changed);
-		wake_up(&iod->wq);
-	}
-}
-
-void iodev_dump_status(struct io_device *iod, void *args)
-{
-	if (iod->format == IPC_RAW && iod->io_typ == IODEV_NET) {
-		struct link_device *ld = get_current_link(iod);
-
-		mif_com_log(iod->mc->msd, "%s: %s\n", iod->name, ld->name);
-	}
 }
 
 u16 exynos_build_fr_config(struct io_device *iod, struct link_device *ld,
@@ -698,7 +680,8 @@ static int cpif_cdev_create_device(struct io_device *iod, const struct file_oper
 	}
 	idx++;
 
-	iod->cdevice = device_create(iod->msd->cdev_class, NULL, iod->cdev.dev, iod, iod->name);
+	iod->cdevice = device_create(iod->msd->cdev_class, NULL, iod->cdev.dev, iod,
+				     "%s", iod->name);
 	if (IS_ERR_OR_NULL(iod->cdevice)) {
 		mif_err("device_create() for %s failed\n", iod->name);
 		ret = -ENOMEM;
@@ -709,11 +692,12 @@ static int cpif_cdev_create_device(struct io_device *iod, const struct file_oper
 	return ret;
 }
 
-int sipc5_init_io_device(struct io_device *iod)
+int sipc5_init_io_device(struct io_device *iod, struct mem_link_device *mld)
 {
 	int ret = 0;
 	int i;
 	struct vnet *vnet;
+	unsigned int txqs = 1, rxqs = 1;
 
 	if (iod->attrs & IO_ATTR_SBD_IPC)
 		iod->sbd_ipc = true;
@@ -722,8 +706,6 @@ int sipc5_init_io_device(struct io_device *iod)
 		iod->link_header = false;
 	else
 		iod->link_header = true;
-
-	iod->sim_state_changed = io_dev_sim_state_changed;
 
 	/* Get data from link device */
 	iod->recv_skb_single = io_dev_recv_skb_single_from_link_dev;
@@ -770,12 +752,18 @@ int sipc5_init_io_device(struct io_device *iod)
 		break;
 
 	case IODEV_NET:
+#if IS_ENABLED(CONFIG_MODEM_IF_QOS)
+		txqs = 2;
+#endif
+#if IS_ENABLED(CONFIG_CP_PKTPROC)
+		rxqs = mld->pktproc.num_queue;
+#endif
 		skb_queue_head_init(&iod->sk_rx_q);
 		INIT_LIST_HEAD(&iod->node_ndev);
 
 		iod->ndev = alloc_netdev_mqs(sizeof(struct vnet),
 					iod->name, NET_NAME_UNKNOWN, vnet_setup,
-					MAX_NDEV_TX_Q, MAX_NDEV_RX_Q);
+					txqs, rxqs);
 		if (!iod->ndev) {
 			mif_info("%s: ERR! alloc_netdev fail\n", iod->name);
 			return -ENOMEM;
@@ -876,4 +864,3 @@ void sipc5_deinit_io_device(struct io_device *iod)
 		break;
 	}
 }
-

@@ -33,6 +33,7 @@
 #include <linux/kthread.h>
 #include <linux/jhash.h>
 #include <linux/ctype.h>
+#include <uapi/linux/sched/types.h>
 
 /*
  * API includes
@@ -2626,7 +2627,15 @@ static int sleep_for_data(struct stmvl53l1_data *data, pid_t pid,
 
 	add_wait_queue(&data->waiter_for_data, &wait);
 	while (!sleep_for_data_condition(data, pid, head)) {
-		wait_woken(&wait, TASK_KILLABLE, MAX_SCHEDULE_TIMEOUT);
+		/*
+		 * b/243120064: The 1st data will arrive over 300 ms if tuning parameter
+		 * is set and less than 100 ms without tuning. Hence, using a maximum 1000
+		 * ms for timeout is acceptable and sufficient to cover all use cases.
+		 */
+		if (wait_woken(&wait, TASK_KILLABLE, 1000) <= 0) {
+			rc = -ETIME;
+			break;
+		}
 		if (fatal_signal_pending(current)) {
 			rc = -ERESTARTSYS;
 			break;
@@ -3530,56 +3539,39 @@ static int stmvl53l1_ioctl_handler(
 		void __user *p)
 {
 	int rc = 0;
-	struct i2c_data *i2c_data = (struct i2c_data *)data->client_object;
-	struct device *dev = &i2c_data->client->dev;
 
 	if (!data)
 		return -EINVAL;
 
 	switch (cmd) {
 	case VL53L1_IOCTL_POWER_UP:
-		dev_dbg(dev, "VL53L1_IOCTL_POWER_UP\n");
 		rc = ctrl_power_up(data);
 		break;
-
 	case VL53L1_IOCTL_POWER_DOWN:
-		dev_dbg(dev, "VL53L1_IOCTL_POWER_DOWN\n");
 		rc = ctrl_power_down(data);
 		break;
-
 	case VL53L1_IOCTL_START:
-		dev_dbg(dev, "VL53L1_IOCTL_START\n");
 		rc = ctrl_start(data);
 		break;
-
 	case VL53L1_IOCTL_STOP:
-		dev_dbg(dev, "VL53L1_IOCTL_STOP\n");
 		rc = ctrl_stop(data);
 		break;
-
 	case VL53L1_IOCTL_GETDATAS:
 		rc = ctrl_getdata(data, p);
 		break;
-
 	case VL53L1_IOCTL_GETDATAS_BLOCKING:
 		rc = ctrl_getdata_blocking(data, p);
 		break;
-
 	/* Register tool */
 	case VL53L1_IOCTL_REGISTER:
-		dev_dbg(dev, "VL53L1_IOCTL_REGISTER\n");
 		reset_release(data);
 		rc = ctrl_reg_access(data, p);
 		reset_hold(data);
 		break;
-
 	case VL53L1_IOCTL_PARAMETER:
-		dev_dbg(dev, "VL53L1_IOCTL_PARAMETER\n");
 		rc = ctrl_params(data, p);
 		break;
-
 	case VL53L1_IOCTL_ROI:
-		dev_dbg(dev, "VL53L1_IOCTL_ROI\n");
 		rc = ctrl_roi(data, p);
 		break;
 	case VL53L1_IOCTL_MZ_DATA:
@@ -3589,19 +3581,15 @@ static int stmvl53l1_ioctl_handler(
 		rc = ctrl_mz_data_blocking(data, p);
 		break;
 	case VL53L1_IOCTL_CALIBRATION_DATA:
-		dev_dbg(dev, "VL53L1_IOCTL_CALIBRATION_DATA\n");
 		rc = ctrl_calibration_data(data, p);
 		break;
 	case VL53L1_IOCTL_PERFORM_CALIBRATION:
-		dev_dbg(dev, "VL53L1_IOCTL_PERFORM_CALIBRATION\n");
 		rc = ctrl_perform_calibration(data, p);
 		break;
 	case VL53L1_IOCTL_AUTONOMOUS_CONFIG:
-		dev_dbg(dev, "VL53L1_IOCTL_AUTONOMOUS_CONFIG\n");
 		rc = ctrl_autonomous_config(data, p);
 		break;
 	case VL53L1_IOCTL_ZONE_CALIBRATION_DATA:
-		dev_dbg(dev, "VL53L1_IOCTL_ZONE_CALIBRATION_DATA\n");
 		rc = ctrl_zone_calibration_data(data, p);
 		break;
 	case VL53L1_IOCTL_MZ_DATA_ADDITIONAL:
@@ -4256,6 +4244,9 @@ int stmvl53l1_setup(struct stmvl53l1_data *data)
 	struct VL53L1_DeviceInfo_t dev_info;
 	struct i2c_data *i2c_data = data->client_object;
 	struct device *dev = &i2c_data->client->dev;
+	struct sched_param param = {0};
+	struct irq_desc *desc;
+	struct task_struct *irq_thread;
 
 	/* acquire an id */
 	data->id = allocate_dev_id();
@@ -4417,6 +4408,20 @@ int stmvl53l1_setup(struct stmvl53l1_data *data)
 
 	/* power down after probe done */
 	stmvl53l1_module_func_tbl.power_down(data->client_object);
+
+	/* adjust policy from SCHED_FIFO to SCHED_OTHER */
+	if (i2c_data->irq > 0) {
+		desc = irq_to_desc(i2c_data->irq);
+		if (desc == NULL) {
+			dev_warn(dev, "get a null irq desc");
+			return 0;
+		}
+		raw_spin_lock_irq(&desc->lock);
+		irq_thread = desc->action->thread;
+		raw_spin_unlock_irq(&desc->lock);
+		rc = sched_setscheduler_nocheck(irq_thread, SCHED_NORMAL, &param);
+		dev_info(dev, "VL53L1 setscheduler rc = %d", rc);
+	}
 
 	return 0;
 

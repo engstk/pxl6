@@ -31,19 +31,6 @@
 #include "cpif_qos_info.h"
 #endif
 
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY) || IS_ENABLED(CONFIG_CP_PKTPROC)
-static int vnet_init(struct net_device *ndev)
-{
-	struct vnet *vnet = netdev_priv(ndev);
-
-	vnet->free_head = __skb_free_head_cp_zerocopy;
-	if (vnet->enable_zerocopy)
-		cpif_enable_sw_zerocopy();
-
-	return 0;
-}
-#endif
-
 static int vnet_open(struct net_device *ndev)
 {
 	struct vnet *vnet = netdev_priv(ndev);
@@ -116,14 +103,7 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 	unsigned int headroom;
 	unsigned int tailroom;
 	unsigned int tx_bytes;
-#ifdef DEBUG_MODEM_IF
 	struct timespec64 ts;
-#endif
-
-#ifdef DEBUG_MODEM_IF
-	/* Record the timestamp */
-	ktime_get_ts64(&ts);
-#endif
 
 	if (unlikely(!cp_online(mc))) {
 		if (!netif_queue_stopped(ndev))
@@ -131,6 +111,9 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 		/* Just drop the TX packet */
 		goto drop;
 	}
+
+	/* Record the timestamp */
+	ktime_get_ts64(&ts);
 
 #if IS_ENABLED(CONFIG_CP_PKTPROC_UL)
 	/* no need of head and tail */
@@ -182,16 +165,20 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 	skbpriv(skb_new)->lnk_hdr = iod->link_header;
 	skbpriv(skb_new)->sipc_ch = iod->ch;
 
-#ifdef DEBUG_MODEM_IF
 	/* Copy the timestamp to the skb */
 	skbpriv(skb_new)->ts = ts;
-#endif
 #if defined(DEBUG_MODEM_IF_IODEV_TX) && defined(DEBUG_MODEM_IF_PS_DATA)
 	mif_pkt(iod->ch, "IOD-TX", skb_new);
 #endif
 
 	/* Build SIPC5 link header*/
+#if IS_ENABLED(CONFIG_CP_PKTPROC_UL)
+	buff = skb_new->data;
+#else
 	buff = skb_push(skb_new, headroom);
+#endif
+
+#if !IS_ENABLED(CONFIG_CP_PKTPROC_UL)
 	if (cfg || cfg_sit) {
 		switch (ld->protocol) {
 		case PROTOCOL_SIPC:
@@ -205,6 +192,7 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 			return -EINVAL;
 		}
 	}
+#endif
 
 	/* IP loop-back */
 	if (iod->msd->loopback_ipaddr) {
@@ -216,9 +204,11 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 		}
 	}
 
+#if !IS_ENABLED(CONFIG_CP_PKTPROC_UL)
 	/* Apply padding */
 	if (tailroom)
 		skb_put(skb_new, tailroom);
+#endif
 
 	ret = ld->send(ld, iod, skb_new);
 	if (unlikely(ret < 0)) {
@@ -285,27 +275,35 @@ drop:
 
 static bool _is_tcp_ack(struct sk_buff *skb)
 {
-	switch (skb->protocol) {
-	/* TCPv4 ACKs */
-	case htons(ETH_P_IP):
-		if ((ip_hdr(skb)->protocol == IPPROTO_TCP) &&
-			(ntohs(ip_hdr(skb)->tot_len) - (ip_hdr(skb)->ihl << 2) ==
-			 tcp_hdr(skb)->doff << 2) &&
-		    ((tcp_flag_word(tcp_hdr(skb)) &
-		      cpu_to_be32(0x00FF0000)) == TCP_FLAG_ACK))
-			return true;
-		break;
+	u16 payload_len = 0;
 
-	/* TCPv6 ACKs */
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		if (ip_hdr(skb)->protocol != IPPROTO_TCP)
+			return false;
+
+		if (skb->network_header == skb->transport_header)
+			skb->transport_header += (ip_hdr(skb)->ihl << 2);
+		payload_len = ntohs(ip_hdr(skb)->tot_len) - (ip_hdr(skb)->ihl << 2);
+		break;
 	case htons(ETH_P_IPV6):
-		if ((ipv6_hdr(skb)->nexthdr == IPPROTO_TCP) &&
-			(ntohs(ipv6_hdr(skb)->payload_len) ==
-			 (tcp_hdr(skb)->doff) << 2) &&
-		    ((tcp_flag_word(tcp_hdr(skb)) &
-		      cpu_to_be32(0x00FF0000)) == TCP_FLAG_ACK))
-			return true;
+		if (ipv6_hdr(skb)->nexthdr != IPPROTO_TCP)
+			return false;
+
+		if (skb->network_header == skb->transport_header)
+			skb->transport_header += sizeof(struct ipv6hdr);
+		payload_len = ntohs(ipv6_hdr(skb)->payload_len);
+		break;
+	default:
 		break;
 	}
+
+	if (!payload_len)
+		return false;
+
+	if (payload_len == (tcp_hdr(skb)->doff << 2) &&
+	    (tcp_flag_word(tcp_hdr(skb)) & cpu_to_be32(0x00FF0000)) == TCP_FLAG_ACK)
+		return true;
 
 	return false;
 }
@@ -321,35 +319,34 @@ static inline bool is_tcp_ack(struct sk_buff *skb)
 	return false;
 }
 
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS) || IS_ENABLED(CONFIG_MODEM_IF_QOS)
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
+#if IS_ENABLED(CONFIG_MODEM_IF_QOS)
 static u16 vnet_select_queue(struct net_device *dev, struct sk_buff *skb,
 		struct net_device *sb_dev)
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
-static u16 vnet_select_queue(struct net_device *dev, struct sk_buff *skb,
-		struct net_device *sb_dev, select_queue_fallback_t fallback)
-#else
-static u16 vnet_select_queue(struct net_device *dev, struct sk_buff *skb,
-		void *accel_priv, select_queue_fallback_t fallback)
-#endif
 {
-#if IS_ENABLED(CONFIG_MODEM_IF_QOS)
-	return (skb && is_tcp_ack(skb)) ? 1 : 0;
-#elif IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
-	return ((skb && skb->truesize == 2) ||
-			(skb && skb->sk && cpif_qos_get_node(skb->sk->sk_uid.val))) ? 1 : 0;
+#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
+	struct vnet *vnet = netdev_priv(dev);
 #endif
+
+	if (!skb)
+		return 0;
+
+	if (is_tcp_ack(skb))
+		return 1;
+
+#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS)
+	if (!vnet->hiprio_ack_only && skb->sk && cpif_qos_get_node(skb->sk->sk_uid.val))
+		return 1;
+#endif
+
+	return 0;
 }
 #endif
 
 static const struct net_device_ops vnet_ops = {
-#if IS_ENABLED(CONFIG_CP_ZEROCOPY) || IS_ENABLED(CONFIG_CP_PKTPROC)
-	.ndo_init = vnet_init,
-#endif
 	.ndo_open = vnet_open,
 	.ndo_stop = vnet_stop,
 	.ndo_start_xmit = vnet_xmit,
-#if IS_ENABLED(CONFIG_MODEM_IF_LEGACY_QOS) || IS_ENABLED(CONFIG_MODEM_IF_QOS)
+#if IS_ENABLED(CONFIG_MODEM_IF_QOS)
 	.ndo_select_queue = vnet_select_queue,
 #endif
 };
