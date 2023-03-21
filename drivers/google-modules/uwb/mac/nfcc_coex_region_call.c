@@ -68,6 +68,9 @@ static int nfcc_coex_session_set_parameters(struct nfcc_coex_local *local,
 		(S32_MAX * NS_PER_SECOND) / local->llhw->dtu_freq_hz;
 	int r;
 
+	if (!params)
+		return -EINVAL;
+
 	r = nla_parse_nested(attrs, NFCC_COEX_CCC_SESSION_PARAM_ATTR_MAX,
 			     params, nfcc_coex_session_param_nla_policy,
 			     info->extack);

@@ -194,8 +194,6 @@ struct kbase_jd_atom_dependency {
 static inline const struct kbase_jd_atom *
 kbase_jd_katom_dep_atom(const struct kbase_jd_atom_dependency *dep)
 {
-	KBASE_DEBUG_ASSERT(dep != NULL);
-
 	return (const struct kbase_jd_atom *)(dep->atom);
 }
 
@@ -209,8 +207,6 @@ kbase_jd_katom_dep_atom(const struct kbase_jd_atom_dependency *dep)
 static inline u8 kbase_jd_katom_dep_type(
 		const struct kbase_jd_atom_dependency *dep)
 {
-	KBASE_DEBUG_ASSERT(dep != NULL);
-
 	return dep->dep_type;
 }
 
@@ -227,8 +223,6 @@ static inline void kbase_jd_katom_dep_set(
 {
 	struct kbase_jd_atom_dependency *dep;
 
-	KBASE_DEBUG_ASSERT(const_dep != NULL);
-
 	dep = (struct kbase_jd_atom_dependency *)const_dep;
 
 	dep->atom = a;
@@ -244,8 +238,6 @@ static inline void kbase_jd_katom_dep_clear(
 		const struct kbase_jd_atom_dependency *const_dep)
 {
 	struct kbase_jd_atom_dependency *dep;
-
-	KBASE_DEBUG_ASSERT(const_dep != NULL);
 
 	dep = (struct kbase_jd_atom_dependency *)const_dep;
 
@@ -504,7 +496,6 @@ enum kbase_atom_exit_protected_state {
  *                 BASE_JD_REQ_START_RENDERPASS set in its core requirements
  *                 with an atom that has BASE_JD_REQ_END_RENDERPASS set.
  * @jc_fragment:          Set of GPU fragment job chains
- * @retry_count:          TODO: Not used,to be removed
  */
 struct kbase_jd_atom {
 	struct kthread_work work;
@@ -615,8 +606,6 @@ struct kbase_jd_atom {
 
 	u32 atom_flags;
 
-	int retry_count;
-
 	enum kbase_atom_gpu_rb_state gpu_rb_state;
 
 	bool need_cache_flush_cores_retained;
@@ -660,7 +649,7 @@ static inline bool kbase_jd_katom_is_protected(
 }
 
 /**
- * kbase_atom_is_younger - query if one atom is younger by age than another
+ * kbase_jd_atom_is_younger - query if one atom is younger by age than another
  *
  * @katom_a: the first atom
  * @katom_b: the second atom

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -31,6 +31,7 @@
 #include <mali_kbase_mem_pool_group.h>
 #include <mmu/mali_kbase_mmu.h>
 #include <tl/mali_kbase_timeline.h>
+#include <backend/gpu/mali_kbase_pm_internal.h>
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 #include <csf/mali_kbase_csf_csg_debugfs.h>
@@ -38,11 +39,13 @@
 #include <csf/mali_kbase_csf_tiler_heap_debugfs.h>
 #include <csf/mali_kbase_csf_cpu_queue_debugfs.h>
 #include <mali_kbase_debug_mem_view.h>
+#include <mali_kbase_debug_mem_zones.h>
 #include <mali_kbase_mem_pool_debugfs.h>
 
 void kbase_context_debugfs_init(struct kbase_context *const kctx)
 {
 	kbase_debug_mem_view_init(kctx);
+	kbase_debug_mem_zones_init(kctx);
 	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, kctx);
 	kbase_jit_debugfs_init(kctx);
 	kbase_csf_queue_group_debugfs_init(kctx);
@@ -100,6 +103,8 @@ static const struct kbase_context_init context_init[] = {
 	  "CSF context initialization failed" },
 	{ kbase_context_add_to_dev_list, kbase_context_remove_from_dev_list,
 	  "Adding kctx to device failed" },
+	{ kbasep_platform_context_init, kbasep_platform_context_term,
+	  "Platform callback for kctx initialization failed" },
 };
 
 static void kbase_context_term_partial(
@@ -172,6 +177,7 @@ KBASE_EXPORT_SYMBOL(kbase_create_context);
 void kbase_destroy_context(struct kbase_context *kctx)
 {
 	struct kbase_device *kbdev;
+	int err;
 
 	if (WARN_ON(!kctx))
 		return;
@@ -191,6 +197,17 @@ void kbase_destroy_context(struct kbase_context *kctx)
 			 "Suspend in progress when destroying context");
 		wait_event(kbdev->pm.resume_wait,
 			   !kbase_pm_is_suspending(kbdev));
+	}
+	/*
+	 * Taking a pm reference does not guarantee that the GPU has finished powering up.
+	 * It's possible that the power up has been deferred until after a scheduled power down.
+	 * We must wait here for the L2 to be powered up, and holding a pm reference guarantees that
+	 * it will not be powered down afterwards.
+	 */
+	err = kbase_pm_wait_for_l2_powered(kbdev);
+	if (err) {
+		dev_err(kbdev->dev, "Wait for L2 power up failed on term of ctx %d_%d",
+			kctx->tgid, kctx->id);
 	}
 
 	kbase_mem_pool_group_mark_dying(&kctx->mem_pools);

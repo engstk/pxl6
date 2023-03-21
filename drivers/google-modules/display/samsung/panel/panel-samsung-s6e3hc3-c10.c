@@ -525,6 +525,9 @@ static void s6e3hc3_c10_panel_idle_notification(struct exynos_panel *ctx,
 	char *envp[] = { event_string, NULL };
 	struct drm_device *dev = ctx->bridge.dev;
 
+	if (vrefresh == idle_te_vrefresh)
+		return;
+
 	if (!dev) {
 		dev_warn(ctx->dev, "%s: drm_device is null\n", __func__);
 	} else {
@@ -776,6 +779,10 @@ static int s6e3hc3_c10_disable(struct drm_panel *panel)
 	if (ret)
 		return ret;
 
+	/* HBM is disabled in exynos_panel_disable() */
+	clear_bit(C10_FEAT_HBM, spanel->feat);
+	clear_bit(C10_FEAT_IRC_OFF, spanel->feat);
+
 	/* panel register state gets reset after disabling hardware */
 	bitmap_clear(spanel->hw_feat, 0, C10_FEAT_MAX);
 	spanel->hw_vrefresh = 60;
@@ -805,20 +812,21 @@ static int s6e3hc3_c10_disable(struct drm_panel *panel)
  * - trigger early exit by command if it's changeable TE, which could result in
  *   fast 120 Hz boost and seeing 120 Hz TE earlier
  */
-static void s6e3hc3_c10_update_idle_state(struct exynos_panel *ctx)
+static bool s6e3hc3_c10_update_idle_state(struct exynos_panel *ctx)
 {
 	s64 delta_us;
 	struct s6e3hc3_c10_panel *spanel = to_spanel(ctx);
+	bool updated = false;
 
 	ctx->panel_idle_vrefresh = 0;
 	if (!test_bit(C10_FEAT_FRAME_AUTO, spanel->feat))
-		return;
+		return false;
 
 	delta_us = ktime_us_delta(ktime_get(), ctx->last_commit_ts);
 	if (delta_us < EARLY_EXIT_THRESHOLD_US) {
 		dev_dbg(ctx->dev, "skip early exit. %lldus since last commit\n",
 			delta_us);
-		return;
+		return false;
 	}
 
 	/* triggering early exit causes a switch to 120hz */
@@ -832,6 +840,7 @@ static void s6e3hc3_c10_update_idle_state(struct exynos_panel *ctx)
 	if (ctx->idle_delay_ms) {
 		const struct exynos_panel_mode *pmode = ctx->current_mode;
 		s6e3hc3_c10_update_refresh_mode(ctx, pmode, 0);
+		updated = true;
 	} else if (spanel->force_changeable_te) {
 		dev_dbg(ctx->dev, "sending early exit out cmd\n");
 		EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
@@ -840,14 +849,18 @@ static void s6e3hc3_c10_update_idle_state(struct exynos_panel *ctx)
 	}
 
 	DPU_ATRACE_END(__func__);
+
+	return updated;
 }
 
+/* TODO: move update te2 to common display driver for other panel drivers */
 static void s6e3hc3_c10_commit_done(struct exynos_panel *ctx)
 {
 	if (!ctx->enabled || !ctx->current_mode)
 		return;
 
-	s6e3hc3_c10_update_idle_state(ctx);
+	if (s6e3hc3_c10_update_idle_state(ctx))
+		s6e3hc3_c10_update_te2(ctx);
 }
 
 static void s6e3hc3_c10_set_hbm_mode(struct exynos_panel *ctx,
@@ -922,29 +935,9 @@ static DEFINE_EXYNOS_CMD_SET(s6e3hc3_c10_lhbm_extra);
 static void s6e3hc3_c10_set_local_hbm_mode(struct exynos_panel *ctx,
 				 bool local_hbm_en)
 {
-	const struct exynos_panel_mode *pmode;
+	const struct exynos_panel_mode *pmode = ctx->current_mode;
 	const u32 flags = PANEL_CMD_SET_IGNORE_VBLANK | PANEL_CMD_SET_BATCH;
 
-	if (ctx->hbm.local_hbm.enabled == local_hbm_en)
-		return;
-
-	pmode = ctx->current_mode;
-	if (unlikely(pmode == NULL)) {
-		dev_err(ctx->dev, "%s: unknown current mode\n", __func__);
-		return;
-	}
-
-	if (local_hbm_en) {
-		const int vrefresh = drm_mode_vrefresh(&pmode->mode);
-		/* Add check to turn on LHBM @ 120hz only to comply with HW requirement */
-		if (vrefresh != 120) {
-			dev_err(ctx->dev, "unexpected mode `%s` while enabling LHBM, give up\n",
-				pmode->mode.name);
-			return;
-		}
-	}
-
-	ctx->hbm.local_hbm.enabled = local_hbm_en;
 	if (local_hbm_en)
 		exynos_panel_send_cmd_set_flags(ctx,
 			&s6e3hc3_c10_lhbm_extra_cmd_set, flags);
@@ -954,13 +947,6 @@ static void s6e3hc3_c10_set_local_hbm_mode(struct exynos_panel *ctx,
 static void s6e3hc3_c10_mode_set(struct exynos_panel *ctx,
 			     const struct exynos_panel_mode *pmode)
 {
-	if (!is_panel_active(ctx))
-		return;
-
-	if (ctx->hbm.local_hbm.enabled == true)
-		dev_warn(ctx->dev, "do mode change (`%s`) unexpectedly when LHBM is ON\n",
-			pmode->mode.name);
-
 	s6e3hc3_c10_change_frequency(ctx, pmode);
 }
 
@@ -1326,6 +1312,7 @@ const struct exynos_panel_desc samsung_s6e3hc3_c10 = {
 	.binned_lp = s6e3hc3_c10_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(s6e3hc3_c10_binned_lp),
 	.is_panel_idle_supported = true,
+	.vrr_switch_duration = 1,
 	.panel_func = &s6e3hc3_c10_drm_funcs,
 	.exynos_panel_func = &s6e3hc3_c10_exynos_funcs,
 };

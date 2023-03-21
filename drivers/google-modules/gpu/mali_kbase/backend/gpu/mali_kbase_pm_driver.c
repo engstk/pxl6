@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2010-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -46,6 +46,7 @@
 #include <backend/gpu/mali_kbase_irq_internal.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
 #include <backend/gpu/mali_kbase_l2_mmu_config.h>
+#include <backend/gpu/mali_kbase_pm_event_log.h>
 #include <mali_kbase_dummy_job_wa.h>
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
 #include <arbiter/mali_kbase_arbiter_pm.h>
@@ -148,9 +149,9 @@ bool kbase_pm_is_l2_desired(struct kbase_device *kbdev)
 	if (unlikely(kbdev->pm.backend.policy_change_clamp_state_to_off))
 		return false;
 
-	/* Power up the L2 cache only when MCU is desired */
-	if (likely(kbdev->csf.firmware_inited))
-		return kbase_pm_is_mcu_desired(kbdev);
+	/* We need to power up the L2 when the MCU is desired */
+	if (kbase_pm_is_mcu_desired(kbdev))
+		return true;
 #endif
 
 	return kbdev->pm.backend.l2_desired;
@@ -655,8 +656,39 @@ static void kbase_pm_enable_mcu_db_notification(struct kbase_device *kbdev)
 	val &= ~MCU_CNTRL_DOORBELL_DISABLE_MASK;
 	kbase_reg_write(kbdev, GPU_CONTROL_REG(MCU_CONTROL), val);
 }
-#endif
 
+/**
+ * wait_mcu_as_inactive - Wait for AS used by MCU FW to get configured
+ *
+ * @kbdev: Pointer to the device.
+ *
+ * This function is called to wait for the AS used by MCU FW to get configured
+ * before DB notification on MCU is enabled, as a workaround for HW issue.
+ */
+static void wait_mcu_as_inactive(struct kbase_device *kbdev)
+{
+	unsigned int max_loops = KBASE_AS_INACTIVE_MAX_LOOPS;
+
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	if (!kbase_hw_has_issue(kbdev, BASE_HW_ISSUE_TURSEHW_2716))
+		return;
+
+	/* Wait for the AS_ACTIVE_INT bit to become 0 for the AS used by MCU FW */
+	while (--max_loops &&
+	       kbase_reg_read(kbdev, MMU_AS_REG(MCU_AS_NR, AS_STATUS)) &
+			      AS_STATUS_AS_ACTIVE_INT)
+		;
+
+	if (!WARN_ON_ONCE(max_loops == 0))
+		return;
+
+	dev_err(kbdev->dev, "AS_ACTIVE_INT bit stuck for AS %d used by MCU FW", MCU_AS_NR);
+
+	if (kbase_prepare_to_reset_gpu(kbdev, 0))
+		kbase_reset_gpu(kbdev);
+}
+#endif
 
 /**
  * kbasep_pm_toggle_power_interrupt - Toggles the IRQ mask for power interrupts
@@ -665,10 +697,10 @@ static void kbase_pm_enable_mcu_db_notification(struct kbase_device *kbdev)
  * @kbdev:  Pointer to the device
  * @enable: boolean indicating to enable interrupts or not
  *
- * The POWER_CHANGED_ALL and POWER_CHANGED_SINGLE interrupts can be disabled
- * after L2 has been turned on when FW is controlling the power for the shader
- * cores. Correspondingly, the interrupts can be re-enabled after the MCU has
- * been disabled before the power down of L2.
+ * The POWER_CHANGED_ALL interrupt can be disabled after L2 has been turned on
+ * when FW is controlling the power for the shader cores. Correspondingly, the
+ * interrupts can be re-enabled after the MCU has been disabled before the
+ * power down of L2.
  */
 static void kbasep_pm_toggle_power_interrupt(struct kbase_device *kbdev, bool enable)
 {
@@ -678,10 +710,16 @@ static void kbasep_pm_toggle_power_interrupt(struct kbase_device *kbdev, bool en
 
 	irq_mask = kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_IRQ_MASK));
 
-	if (enable)
-		irq_mask |= POWER_CHANGED_ALL | POWER_CHANGED_SINGLE;
-	else
-		irq_mask &= ~(POWER_CHANGED_ALL | POWER_CHANGED_SINGLE);
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	/* For IFPO, we require the POWER_CHANGED_ALL interrupt to be always on */
+	enable = true;
+#endif
+	if (enable) {
+		irq_mask |= POWER_CHANGED_ALL;
+		kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR), POWER_CHANGED_ALL);
+	} else {
+		irq_mask &= ~POWER_CHANGED_ALL;
+	}
 
 	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_MASK), irq_mask);
 }
@@ -742,6 +780,14 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 						backend->shaders_desired_mask;
 				backend->pm_shaders_core_mask = 0;
 				if (kbdev->csf.firmware_hctl_core_pwr) {
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+					/* On rail up, this state machine will be re-invoked */
+					if (backend->sc_power_rails_off) {
+						/* The work should already be queued or executing */
+						WARN_ON(!work_busy(&backend->sc_rails_on_work));
+						break;
+					}
+#endif
 					kbase_pm_invoke(kbdev, KBASE_PM_CORE_SHADER,
 						backend->shaders_avail, ACTION_PWRON);
 					backend->mcu_state =
@@ -907,7 +953,7 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 
 		case KBASE_MCU_ON_PEND_HALT:
 			if (kbase_csf_firmware_mcu_halted(kbdev)) {
-				KBASE_KTRACE_ADD(kbdev, MCU_HALTED, NULL,
+				KBASE_KTRACE_ADD(kbdev, CSF_FIRMWARE_MCU_HALTED, NULL,
 					kbase_csf_ktrace_gpu_cycle_cnt(kbdev));
 				if (kbdev->csf.firmware_hctl_core_pwr)
 					backend->mcu_state =
@@ -954,7 +1000,7 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 
 		case KBASE_MCU_ON_PEND_SLEEP:
 			if (kbase_csf_firmware_is_mcu_in_sleep(kbdev)) {
-				KBASE_KTRACE_ADD(kbdev, MCU_IN_SLEEP, NULL,
+				KBASE_KTRACE_ADD(kbdev, CSF_FIRMWARE_MCU_SLEEP, NULL,
 					kbase_csf_ktrace_gpu_cycle_cnt(kbdev));
 				backend->mcu_state = KBASE_MCU_IN_SLEEP;
 				kbase_pm_enable_db_mirror_interrupt(kbdev);
@@ -970,6 +1016,7 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 		case KBASE_MCU_IN_SLEEP:
 			if (kbase_pm_is_mcu_desired(kbdev) &&
 			    backend->l2_state == KBASE_L2_ON) {
+				wait_mcu_as_inactive(kbdev);
 				KBASE_TLSTREAM_TL_KBASE_CSFFW_FW_REQUEST_WAKEUP(
 					kbdev, kbase_backend_get_cycle_cnt(kbdev));
 				kbase_pm_enable_mcu_db_notification(kbdev);
@@ -980,6 +1027,7 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 				if (!kbdev->csf.firmware_hctl_core_pwr)
 					kbasep_pm_toggle_power_interrupt(kbdev, false);
 				backend->mcu_state = KBASE_MCU_ON_HWCNT_ENABLE;
+				kbase_csf_ring_doorbell(kbdev, CSF_KERNEL_DOORBELL_NR);
 			}
 			break;
 #endif
@@ -994,10 +1042,17 @@ static int kbase_pm_mcu_update_state(struct kbase_device *kbdev)
 			     backend->mcu_state);
 		}
 
-		if (backend->mcu_state != prev_state)
+		if (backend->mcu_state != prev_state) {
+			struct kbase_pm_event_log_event *event =
+					kbase_pm_add_log_event(kbdev);
+			event->type = KBASE_PM_LOG_EVENT_MCU_STATE;
+			event->state.prev = prev_state;
+			event->state.next = backend->mcu_state;
+
 			dev_dbg(kbdev->dev, "MCU state transition: %s to %s\n",
 				kbase_mcu_state_to_string(prev_state),
 				kbase_mcu_state_to_string(backend->mcu_state));
+		}
 
 	} while (backend->mcu_state != prev_state);
 
@@ -1032,6 +1087,31 @@ static void core_idle_worker(struct work_struct *work)
 }
 #endif
 
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+static void sc_rails_on_worker(struct work_struct *work)
+{
+	struct kbase_device *kbdev =
+		container_of(work, struct kbase_device, pm.backend.sc_rails_on_work);
+	unsigned long flags;
+
+	/*
+	 * Intentionally not synchronized using the scheduler.lock, as the scheduler may be waiting
+	 * on the SC rail to power up
+	 */
+	kbase_pm_lock(kbdev);
+
+	kbase_pm_turn_on_sc_power_rails_locked(kbdev);
+
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	/* Push the state machine forward in case it was waiting on SC rail power up */
+	kbase_pm_update_state(kbdev);
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	kbase_pm_unlock(kbdev);
+}
+#endif /* CONFIG_MALI_HOST_CONTROLS_SC_RAILS */
+
+
 static const char *kbase_l2_core_state_to_string(enum kbase_l2_core_state state)
 {
 	const char *const strings[] = {
@@ -1062,6 +1142,54 @@ static void kbase_pm_l2_clear_backend_slot_submit_kctx(struct kbase_device *kbde
 }
 #endif
 
+/* wait_as_active_int - Wait for AS_ACTIVE_INT bits to become 0 for all AS
+ *
+ * @kbdev: Pointer to the device.
+ *
+ * This function is supposed to be called before the write to L2_PWROFF register
+ * to wait for AS_ACTIVE_INT bit to become 0 for all the GPU address space slots.
+ * AS_ACTIVE_INT bit can become 1 for an AS, only when L2_READY becomes 1, based
+ * on the value in TRANSCFG register and would become 0 once AS has been reconfigured.
+ */
+static void wait_as_active_int(struct kbase_device *kbdev)
+{
+#if MALI_USE_CSF && !IS_ENABLED(CONFIG_MALI_NO_MALI)
+	int as_no;
+
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	if (!kbase_hw_has_issue(kbdev, BASE_HW_ISSUE_GPU2019_3878))
+		return;
+
+	for (as_no = 0; as_no != kbdev->nr_hw_address_spaces; as_no++) {
+		unsigned int max_loops = KBASE_AS_INACTIVE_MAX_LOOPS;
+
+		/* Wait for the AS_ACTIVE_INT bit to become 0 for the AS.
+		 * The wait is actually needed only for the enabled AS.
+		 */
+		while (--max_loops &&
+			kbase_reg_read(kbdev, MMU_AS_REG(as_no, AS_STATUS)) &
+				AS_STATUS_AS_ACTIVE_INT)
+			;
+
+#ifdef CONFIG_MALI_DEBUG
+		/* For a disabled AS the loop should run for a single iteration only. */
+		if (!kbdev->as_to_kctx[as_no] && (max_loops != (KBASE_AS_INACTIVE_MAX_LOOPS -1)))
+			dev_warn(kbdev->dev, "AS_ACTIVE_INT bit found to be set for disabled AS %d", as_no);
+#endif
+
+		if (max_loops)
+			continue;
+
+		dev_warn(kbdev->dev, "AS_ACTIVE_INT bit stuck for AS %d", as_no);
+
+		if (kbase_prepare_to_reset_gpu(kbdev, 0))
+			kbase_reset_gpu(kbdev);
+		return;
+	}
+#endif
+}
+
 static bool can_power_down_l2(struct kbase_device *kbdev)
 {
 #if MALI_USE_CSF
@@ -1074,13 +1202,24 @@ static bool can_power_down_l2(struct kbase_device *kbdev)
 #endif
 }
 
+static bool need_tiler_control(struct kbase_device *kbdev)
+{
+#if MALI_USE_CSF
+	if (kbase_pm_no_mcu_core_pwroff(kbdev))
+		return true;
+	else
+		return false;
+#else
+	return true;
+#endif
+}
+
 static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 {
 	struct kbase_pm_backend_data *backend = &kbdev->pm.backend;
 	u64 l2_present = kbdev->gpu_props.curr_config.l2_present;
-#if !MALI_USE_CSF
 	u64 tiler_present = kbdev->gpu_props.props.raw_props.tiler_present;
-#endif
+	bool l2_power_up_done;
 	enum kbase_l2_core_state prev_state;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
@@ -1091,24 +1230,18 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 				KBASE_PM_CORE_L2);
 		u64 l2_ready = kbase_pm_get_ready_cores(kbdev,
 				KBASE_PM_CORE_L2);
-
-#if !MALI_USE_CSF
-		u64 tiler_trans = kbase_pm_get_trans_cores(kbdev,
-				KBASE_PM_CORE_TILER);
-		u64 tiler_ready = kbase_pm_get_ready_cores(kbdev,
-				KBASE_PM_CORE_TILER);
-#endif
+#ifdef CONFIG_MALI_ARBITER_SUPPORT
+		u64 tiler_trans = kbase_pm_get_trans_cores(
+				kbdev, KBASE_PM_CORE_TILER);
+		u64 tiler_ready = kbase_pm_get_ready_cores(
+				kbdev, KBASE_PM_CORE_TILER);
 
 		/*
 		 * kbase_pm_get_ready_cores and kbase_pm_get_trans_cores
 		 * are vulnerable to corruption if gpu is lost
 		 */
 		if (kbase_is_gpu_removed(kbdev)
-#ifdef CONFIG_MALI_ARBITER_SUPPORT
 				|| kbase_pm_is_gpu_lost(kbdev)) {
-#else
-				) {
-#endif
 			backend->shaders_state =
 				KBASE_SHADERS_OFF_CORESTACK_OFF;
 			backend->hwcnt_desired = false;
@@ -1131,32 +1264,47 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 			}
 			break;
 		}
+#endif /* CONFIG_MALI_ARBITER_SUPPORT */
 
 		/* mask off ready from trans in case transitions finished
 		 * between the register reads
 		 */
 		l2_trans &= ~l2_ready;
-#if !MALI_USE_CSF
-		tiler_trans &= ~tiler_ready;
-#endif
+
 		prev_state = backend->l2_state;
 
 		switch (backend->l2_state) {
 		case KBASE_L2_OFF:
 			if (kbase_pm_is_l2_desired(kbdev)) {
+				// Workaround: give a short pause here before starting L2 transition.
+				udelay(200);
+#if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
+				/* Enable HW timer of IPA control before
+				 * L2 cache is powered-up.
+				 */
+				kbase_ipa_control_handle_gpu_sleep_exit(kbdev);
+#endif
 				/*
 				 * Set the desired config for L2 before
 				 * powering it on
 				 */
 				kbase_pm_l2_config_override(kbdev);
 				kbase_pbha_write_settings(kbdev);
-#if !MALI_USE_CSF
-				/* L2 is required, power on.  Powering on the
-				 * tiler will also power the first L2 cache.
-				 */
-				kbase_pm_invoke(kbdev, KBASE_PM_CORE_TILER,
-						tiler_present, ACTION_PWRON);
 
+				/* If Host is controlling the power for shader
+				 * cores, then it also needs to control the
+				 * power for Tiler.
+				 * Powering on the tiler will also power the
+				 * L2 cache.
+				 */
+				if (need_tiler_control(kbdev)) {
+					kbase_pm_invoke(kbdev, KBASE_PM_CORE_TILER, tiler_present,
+							ACTION_PWRON);
+				} else {
+					kbase_pm_invoke(kbdev, KBASE_PM_CORE_L2, l2_present,
+							ACTION_PWRON);
+				}
+#if !MALI_USE_CSF
 				/* If we have more than one L2 cache then we
 				 * must power them on explicitly.
 				 */
@@ -1166,30 +1314,36 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 							ACTION_PWRON);
 				/* Clear backend slot submission kctx */
 				kbase_pm_l2_clear_backend_slot_submit_kctx(kbdev);
-#else
-				/* With CSF firmware, Host driver doesn't need to
-				 * handle power management with both shader and tiler cores.
-				 * The CSF firmware will power up the cores appropriately.
-				 * So only power the l2 cache explicitly.
-				 */
-				kbase_pm_invoke(kbdev, KBASE_PM_CORE_L2,
-						l2_present, ACTION_PWRON);
 #endif
 				backend->l2_state = KBASE_L2_PEND_ON;
 			}
 			break;
 
 		case KBASE_L2_PEND_ON:
-#if !MALI_USE_CSF
-			if (!l2_trans && l2_ready == l2_present && !tiler_trans
-					&& tiler_ready == tiler_present) {
-				KBASE_KTRACE_ADD(kbdev, PM_CORES_CHANGE_AVAILABLE_TILER, NULL,
-						tiler_ready);
-#else
+			l2_power_up_done = false;
 			if (!l2_trans && l2_ready == l2_present) {
-				KBASE_KTRACE_ADD(kbdev, PM_CORES_CHANGE_AVAILABLE_L2, NULL,
-						l2_ready);
+				if (need_tiler_control(kbdev)) {
+#ifndef CONFIG_MALI_ARBITER_SUPPORT
+					u64 tiler_trans = kbase_pm_get_trans_cores(
+						kbdev, KBASE_PM_CORE_TILER);
+					u64 tiler_ready = kbase_pm_get_ready_cores(
+						kbdev, KBASE_PM_CORE_TILER);
 #endif
+
+					tiler_trans &= ~tiler_ready;
+					if (!tiler_trans && tiler_ready == tiler_present) {
+						KBASE_KTRACE_ADD(kbdev,
+								 PM_CORES_CHANGE_AVAILABLE_TILER,
+								 NULL, tiler_ready);
+						l2_power_up_done = true;
+					}
+				} else {
+					KBASE_KTRACE_ADD(kbdev, PM_CORES_CHANGE_AVAILABLE_L2, NULL,
+							 l2_ready);
+					l2_power_up_done = true;
+				}
+			}
+			if (l2_power_up_done) {
 				/*
 				 * Ensure snoops are enabled after L2 is powered
 				 * up. Note that kbase keeps track of the snoop
@@ -1356,14 +1510,15 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 			if (kbase_pm_is_l2_desired(kbdev))
 				backend->l2_state = KBASE_L2_PEND_ON;
 			else if (can_power_down_l2(kbdev)) {
-				if (!backend->l2_always_on)
+				if (!backend->l2_always_on) {
+					wait_as_active_int(kbdev);
 					/* Powering off the L2 will also power off the
 					 * tiler.
 					 */
 					kbase_pm_invoke(kbdev, KBASE_PM_CORE_L2,
 							l2_present,
 							ACTION_PWROFF);
-				else
+				} else
 					/* If L2 cache is powered then we must flush it
 					 * before we power off the GPU. Normally this
 					 * would have been handled when the L2 was
@@ -1385,12 +1540,26 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 				/* We only need to check the L2 here - if the L2
 				 * is off then the tiler is definitely also off.
 				 */
-				if (!l2_trans && !l2_ready)
+				if (!l2_trans && !l2_ready) {
+#if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
+					/* Allow clock gating within the GPU and prevent it
+					 * from being seen as active during sleep.
+					 */
+					kbase_ipa_control_handle_gpu_sleep_enter(kbdev);
+#endif
 					/* L2 is now powered off */
 					backend->l2_state = KBASE_L2_OFF;
+				}
 			} else {
-				if (!kbdev->cache_clean_in_progress)
+				if (!kbdev->cache_clean_in_progress) {
+#if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
+					/* Allow clock gating within the GPU and prevent it
+					 * from being seen as active during sleep.
+					 */
+					kbase_ipa_control_handle_gpu_sleep_enter(kbdev);
+#endif
 					backend->l2_state = KBASE_L2_OFF;
+				}
 			}
 			break;
 
@@ -1405,11 +1574,18 @@ static int kbase_pm_l2_update_state(struct kbase_device *kbdev)
 					backend->l2_state);
 		}
 
-		if (backend->l2_state != prev_state)
+		if (backend->l2_state != prev_state) {
+			struct kbase_pm_event_log_event *event =
+					kbase_pm_add_log_event(kbdev);
+			event->type = KBASE_PM_LOG_EVENT_L2_STATE;
+			event->state.prev = prev_state;
+			event->state.next = backend->l2_state;
+
 			dev_dbg(kbdev->dev, "L2 state transition: %s to %s\n",
 				kbase_l2_core_state_to_string(prev_state),
 				kbase_l2_core_state_to_string(
 					backend->l2_state));
+		}
 
 	} while (backend->l2_state != prev_state);
 
@@ -1845,11 +2021,18 @@ static int kbase_pm_shaders_update_state(struct kbase_device *kbdev)
 			break;
 		}
 
-		if (backend->shaders_state != prev_state)
+		if (backend->shaders_state != prev_state) {
+			struct kbase_pm_event_log_event *event =
+					kbase_pm_add_log_event(kbdev);
+			event->type = KBASE_PM_LOG_EVENT_SHADERS_STATE;
+			event->state.prev = prev_state;
+			event->state.next = backend->shaders_state;
+
 			dev_dbg(kbdev->dev, "Shader state transition: %s to %s\n",
 				kbase_shader_core_state_to_string(prev_state),
 				kbase_shader_core_state_to_string(
 					backend->shaders_state));
+		}
 
 	} while (backend->shaders_state != prev_state);
 
@@ -1873,7 +2056,7 @@ static bool kbase_pm_is_in_desired_state_nolock(struct kbase_device *kbdev)
 			kbdev->pm.backend.shaders_state != KBASE_SHADERS_OFF_CORESTACK_OFF)
 		in_desired_state = false;
 #else
-	in_desired_state = kbase_pm_mcu_is_in_desired_state(kbdev);
+	in_desired_state &= kbase_pm_mcu_is_in_desired_state(kbdev);
 #endif
 
 	return in_desired_state;
@@ -1909,6 +2092,22 @@ static bool kbase_pm_is_in_desired_state_with_l2_powered(
 static void kbase_pm_trace_power_state(struct kbase_device *kbdev)
 {
 	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	{
+		struct kbase_pm_event_log_event *event =
+				kbase_pm_add_log_event(kbdev);
+		event->type = KBASE_PM_LOG_EVENT_CORES;
+		event->cores.l2 = kbase_pm_get_state(
+				kbdev, KBASE_PM_CORE_L2, ACTION_READY);
+		event->cores.shader = kbase_pm_get_state(
+				kbdev, KBASE_PM_CORE_SHADER, ACTION_READY);
+		event->cores.tiler = kbase_pm_get_state(
+				kbdev, KBASE_PM_CORE_TILER, ACTION_READY);
+		if (corestack_driver_control) {
+			event->cores.stack = kbase_pm_get_state(
+					kbdev, KBASE_PM_CORE_STACK, ACTION_READY);
+		}
+	}
 
 	KBASE_TLSTREAM_AUX_PM_STATE(
 			kbdev,
@@ -2048,6 +2247,9 @@ int kbase_pm_state_machine_init(struct kbase_device *kbdev)
 	}
 
 	INIT_WORK(&kbdev->pm.backend.core_idle_work, core_idle_worker);
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	INIT_WORK(&kbdev->pm.backend.sc_rails_on_work, sc_rails_on_worker);
+#endif
 #endif
 
 	return 0;
@@ -2214,12 +2416,14 @@ int kbase_pm_wait_for_l2_powered(struct kbase_device *kbdev)
 
 	/* Wait for cores */
 #if KERNEL_VERSION(4, 13, 1) <= LINUX_VERSION_CODE
-	remaining = wait_event_killable_timeout(
+	remaining = wait_event_killable_timeout(kbdev->pm.backend.gpu_in_desired_state_wait,
+						kbase_pm_is_in_desired_state_with_l2_powered(kbdev),
+						timeout);
 #else
 	remaining = wait_event_timeout(
-#endif
 		kbdev->pm.backend.gpu_in_desired_state_wait,
 		kbase_pm_is_in_desired_state_with_l2_powered(kbdev), timeout);
+#endif
 
 	if (!remaining) {
 		kbase_pm_timed_out(kbdev);
@@ -2273,6 +2477,66 @@ int kbase_pm_wait_for_desired_state(struct kbase_device *kbdev)
 	return err;
 }
 KBASE_EXPORT_TEST_API(kbase_pm_wait_for_desired_state);
+
+#if MALI_USE_CSF
+/**
+ * core_mask_update_done - Check if downscaling of shader cores is done
+ *
+ * @kbdev: The kbase device structure for the device.
+ *
+ * This function checks if the downscaling of cores is effectively complete.
+ *
+ * Return: true if the downscale is done.
+ */
+static bool core_mask_update_done(struct kbase_device *kbdev)
+{
+	bool update_done = false;
+	unsigned long flags;
+
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	/* If MCU is in stable ON state then it implies that the downscale
+	 * request had completed.
+	 * If MCU is not active then it implies all cores are off, so can
+	 * consider the downscale request as complete.
+	 */
+	if ((kbdev->pm.backend.mcu_state == KBASE_MCU_ON) ||
+	    kbase_pm_is_mcu_inactive(kbdev, kbdev->pm.backend.mcu_state))
+		update_done = true;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	return update_done;
+}
+
+int kbase_pm_wait_for_cores_down_scale(struct kbase_device *kbdev)
+{
+	long timeout = kbase_csf_timeout_in_jiffies(kbase_get_timeout_ms(kbdev, CSF_PM_TIMEOUT));
+	long remaining;
+	int err = 0;
+
+	/* Wait for core mask update to complete  */
+#if KERNEL_VERSION(4, 13, 1) <= LINUX_VERSION_CODE
+	remaining = wait_event_killable_timeout(
+		kbdev->pm.backend.gpu_in_desired_state_wait,
+		core_mask_update_done(kbdev), timeout);
+#else
+	remaining = wait_event_timeout(
+		kbdev->pm.backend.gpu_in_desired_state_wait,
+		core_mask_update_done(kbdev), timeout);
+#endif
+
+	if (!remaining) {
+		kbase_pm_timed_out(kbdev);
+		err = -ETIMEDOUT;
+	} else if (remaining < 0) {
+		dev_info(
+			kbdev->dev,
+			"Wait for cores down scaling got interrupted");
+		err = (int)remaining;
+	}
+
+	return err;
+}
+#endif
 
 void kbase_pm_enable_interrupts(struct kbase_device *kbdev)
 {
@@ -2337,14 +2601,21 @@ static void update_user_reg_page_mapping(struct kbase_device *kbdev)
 	lockdep_assert_held(&kbdev->pm.lock);
 
 	mutex_lock(&kbdev->csf.reg_lock);
-	if (kbdev->csf.mali_file_inode) {
-		/* This would zap the pte corresponding to the mapping of User
-		 * register page for all the Kbase contexts.
-		 */
-		unmap_mapping_range(kbdev->csf.mali_file_inode->i_mapping,
-				    BASEP_MEM_CSF_USER_REG_PAGE_HANDLE,
-				    PAGE_SIZE, 1);
+
+	/* Only if the mappings for USER page exist, update all PTEs associated to it */
+	if (kbdev->csf.nr_user_page_mapped > 0) {
+		if (likely(kbdev->csf.mali_file_inode)) {
+			/* This would zap the pte corresponding to the mapping of User
+			 * register page for all the Kbase contexts.
+			 */
+			unmap_mapping_range(kbdev->csf.mali_file_inode->i_mapping,
+					    BASEP_MEM_CSF_USER_REG_PAGE_HANDLE, PAGE_SIZE, 1);
+		} else {
+			dev_err(kbdev->dev,
+				"Device file inode not exist even if USER page previously mapped");
+		}
 	}
+
 	mutex_unlock(&kbdev->csf.reg_lock);
 }
 #endif
@@ -2827,6 +3098,53 @@ static void reenable_protected_mode_hwcnt(struct kbase_device *kbdev)
 }
 #endif
 
+static int kbase_pm_hw_reset(struct kbase_device *kbdev)
+{
+	unsigned long flags;
+	bool gpu_ready;
+
+	lockdep_assert_held(&kbdev->pm.lock);
+
+	if (!kbdev->pm.backend.callback_hardware_reset) {
+		dev_warn(kbdev->dev, "No hardware reset provided");
+		return -EINVAL;
+	}
+
+	/* Save GPU power state */
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	WARN_ON(!kbdev->pm.backend.gpu_powered);
+	gpu_ready = kbdev->pm.backend.gpu_ready;
+	kbdev->pm.backend.gpu_ready = false;
+	kbdev->pm.backend.gpu_powered = false;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+#if MALI_USE_CSF
+	/* Swap for dummy page */
+	update_user_reg_page_mapping(kbdev);
+#endif
+
+	/* Delegate hardware reset to platform */
+	kbdev->pm.backend.callback_hardware_reset(kbdev);
+
+#if MALI_USE_CSF
+	/* Swap for real page */
+	update_user_reg_page_mapping(kbdev);
+#endif
+
+	/* GPU is powered again, restore state */
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	kbdev->pm.backend.gpu_powered = true;
+	kbdev->pm.backend.gpu_ready = gpu_ready;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	/* Check register access for success */
+	if (kbase_is_gpu_removed(kbdev)) {
+		dev_err(kbdev->dev, "Registers in-accessible after platform reset");
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static int kbase_pm_do_reset(struct kbase_device *kbdev)
 {
 	struct kbasep_reset_timeout_data rtdata;
@@ -2921,8 +3239,12 @@ static int kbase_pm_do_reset(struct kbase_device *kbdev)
 
 		destroy_hrtimer_on_stack(&rtdata.timer);
 
-		dev_err(kbdev->dev, "Failed to hard-reset the GPU (timed out after %d ms)\n",
-					RESET_TIMEOUT);
+		dev_err(kbdev->dev,
+			"Failed to hard-reset the GPU (timed out after %d ms) GPU_IRQ_RAWSTAT: %d\n",
+			RESET_TIMEOUT, kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_IRQ_RAWSTAT)));
+
+		/* Last resort, trigger a hardware reset of the GPU */
+		return kbase_pm_hw_reset(kbdev);
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
 	}
 #endif /* CONFIG_MALI_ARBITER_SUPPORT */
@@ -2959,6 +3281,10 @@ int kbase_pm_init_hw(struct kbase_device *kbdev, unsigned int flags)
 
 		kbdev->pm.backend.gpu_powered = true;
 	}
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	/* Ensure the SC rail is up otherwise the FW will get stuck during reset */
+	kbase_pm_turn_on_sc_power_rails_locked(kbdev);
+#endif
 
 	/* Ensure interrupts are off to begin with, this also clears any
 	 * outstanding interrupts

@@ -51,7 +51,12 @@ int kbase_csf_protected_memory_init(struct kbase_device *const kbdev)
 				dev_err(kbdev->dev, "Failed to get Protected memory allocator module\n");
 				err = -ENODEV;
 			} else {
-				dev_info(kbdev->dev, "Protected memory allocator successfully loaded\n");
+				err = dma_set_mask_and_coherent(&pdev->dev,
+					DMA_BIT_MASK(kbdev->gpu_props.mmu.pa_bits));
+				if (err)
+					dev_err(&(pdev->dev), "protected_memory_allocator set dma fail\n");
+				else
+					dev_info(kbdev->dev, "Protected memory allocator successfully loaded\n");
 			}
 		}
 		of_node_put(pma_node);

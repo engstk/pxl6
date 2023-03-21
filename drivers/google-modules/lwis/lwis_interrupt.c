@@ -194,7 +194,6 @@ static int lwis_interrupt_set_mask(struct lwis_interrupt *irq, int int_reg_bit, 
 					       &mask_value, irq->irq_reg_access_size);
 	if (ret) {
 		pr_err("Failed to read IRQ mask register: %d\n", ret);
-		mutex_unlock(&irq->lwis_dev->reg_rw_lock);
 		return ret;
 	}
 

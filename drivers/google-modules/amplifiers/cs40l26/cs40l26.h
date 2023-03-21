@@ -3,7 +3,7 @@
  * cs40l26.h -- CS40L26 Boosted Haptic Driver with Integrated DSP and
  * Waveform Memory with Advanced Closed Loop Algorithms and LRA protection
  *
- * Copyright 2021 Cirrus Logic, Inc.
+ * Copyright 2022 Cirrus Logic, Inc.
  *
  * Author: Fred Treven <fred.treven@cirrus.com>
  */
@@ -703,7 +703,7 @@
 #define CS40L26_MAILBOX_ALGO_ID	0x0001F203
 #define CS40L26_MDSYNC_ALGO_ID		0x0001F20F
 #define CS40L26_PM_ALGO_ID		0x0001F206
-#define CS40l26_SVC_ALGO_ID		0x0001F207
+#define CS40L26_SVC_ALGO_ID		0x0001F207
 #define CS40L26_VIBEGEN_ALGO_ID	0x000100BD
 #define CS40L26_LOGGER_ALGO_ID		0x0004013D
 #define CS40L26_EXT_ALGO_ID		0x0004013C
@@ -780,7 +780,11 @@
 /* DSP mailbox controls */
 #define CS40L26_DSP_TIMEOUT_US_MIN		1000
 #define CS40L26_DSP_TIMEOUT_US_MAX		1100
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+#define CS40L26_DSP_TIMEOUT_COUNT		3
+#else
 #define CS40L26_DSP_TIMEOUT_COUNT		100
+#endif
 
 #define CS40L26_DSP_MBOX_RESET			0x0
 
@@ -833,7 +837,7 @@
 #define CS40L26_FW_CALIB_NAME		"cs40l26-calib.wmfw"
 
 #define CS40L26_TUNING_FILES_RUNTIME	4
-#define CS40L26_TUNING_FILES_CAL	2
+#define CS40L26_TUNING_FILES_CAL	3
 
 #define CS40L26_WT_FILE_NAME			"cs40l26.bin"
 #define CS40L26_WT_FILE_PREFIX			"cs40l26-wt"
@@ -852,17 +856,19 @@
 #define CS40L26_SVC_LE_MAX_ATTEMPTS	2
 #define CS40L26_SVC_DT_PREFIX		"svc-le"
 
-#define CS40L26_FW_ID			0x1800D4
-#define CS40L26_FW_MIN_REV		0x07021C
-#define CS40L26_FW_BRANCH		0x07
-#define CS40L26_FW_CALIB_ID		0x1800DA
-#define CS40L26_FW_CALIB_MIN_REV	0x010014
-#define CS40L26_FW_CALIB_BRANCH		0x01
-#define CS40L26_FW_MAINT_MIN_REV	0x270216
-#define CS40L26_FW_MAINT_BRANCH		0x27
-#define CS40L26_FW_MAINT_CALIB_MIN_REV	0x21010D
-#define CS40L26_FW_MAINT_CALIB_BRANCH	0x21
-#define CS40L26_FW_BRANCH_MASK		GENMASK(23, 21)
+#define CS40L26_FW_ID				0x1800D4
+#define CS40L26_FW_MIN_REV			0x07021C
+#define CS40L26_FW_BRANCH			0x07
+#define CS40L26_FW_CALIB_ID			0x1800DA
+#define CS40L26_FW_CALIB_MIN_REV		0x010014
+#define CS40L26_FW_CALIB_BRANCH			0x01
+#define CS40L26_FW_MAINT_MIN_REV		0x270216
+#define CS40L26_FW_MAINT_BRANCH			0x27
+#define CS40L26_FW_MAINT_CALIB_MIN_REV		0x21010D
+#define CS40L26_FW_MAINT_CALIB_BRANCH		0x21
+#define CS40L26_FW_GPI_TIMEOUT_MIN_REV		0x07022A
+#define CS40L26_FW_GPI_TIMEOUT_CALIB_MIN_REV	0x010122
+#define CS40L26_FW_BRANCH_MASK			GENMASK(23, 21)
 
 #define CS40L26_CCM_CORE_RESET		0x00000200
 #define CS40L26_CCM_CORE_ENABLE	0x00000281
@@ -934,7 +940,7 @@
 #define CS40L26_GPIO1			1
 #define CS40L26_EVENT_MAP_INDEX_MASK	GENMASK(8, 0)
 #define CS40L26_EVENT_MAP_NUM_GPI_REGS	4
-#define CS40L26_EVENT_MAP_GPI_EVENT_DISABLE 0x1FF
+#define CS40L26_EVENT_MAP_GPI_DISABLE	0x1FF
 
 #define CS40L26_BTN_INDEX_MASK	GENMASK(7, 0)
 #define CS40L26_BTN_BUZZ_MASK	BIT(7)
@@ -1167,9 +1173,6 @@
 
 #define CS40L26_A2H_DELAY_MAX		0x190
 
-#define CS40L26_PDATA_PRESENT		0x80000000
-#define CS40L26_PDATA_MASK			~CS40L26_PDATA_PRESENT
-
 #define CS40L26_VMON_DEC_OUT_DATA_MASK	GENMASK(23, 0)
 #define CS40L26_VMON_OVFL_FLAG_MASK	BIT(31)
 #define CS40L26_VMON_DEC_OUT_DATA_MAX	CS40L26_VMON_DEC_OUT_DATA_MASK
@@ -1289,6 +1292,13 @@
 #define CS40L26_SAMPS_TO_MS(n)	((n) / 8)
 
 /* enums */
+enum cs40l26_gpio_map {
+	CS40L26_GPIO_MAP_A_PRESS,
+	CS40L26_GPIO_MAP_A_RELEASE,
+	CS40L26_GPIO_MAP_NUM_AVAILABLE,
+	CS40L26_GPIO_MAP_INVALID,
+};
+
 enum cs40l26_dbc {
 	CS40L26_DBC_ENV_REL_COEF, /* 0 */
 	CS40L26_DBC_RISE_HEADROOM,
@@ -1472,6 +1482,7 @@ struct cs40l26_private {
 	struct input_dev *input;
 	struct cl_dsp *dsp;
 	unsigned int trigger_indices[FF_MAX_EFFECTS];
+	int gpi_ids[CS40L26_GPIO_MAP_NUM_AVAILABLE];
 	struct ff_effect *trigger_effect;
 	struct ff_effect upload_effect;
 	struct ff_effect *erase_effect;
@@ -1518,6 +1529,7 @@ struct cs40l26_private {
 	struct completion i2s_cont;
 	struct completion erase_cont;
 	u8 vpbr_thld;
+	unsigned int svc_le_est_stored;
 };
 
 struct cs40l26_codec {
@@ -1551,7 +1563,7 @@ int cs40l26_dbc_set(struct cs40l26_private *cs40l26, enum cs40l26_dbc dbc,
 		u32 val);
 int cs40l26_asp_start(struct cs40l26_private *cs40l26);
 int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves);
-int cs40l26_fw_swap(struct cs40l26_private *cs40l26, u32 id);
+int cs40l26_fw_swap(struct cs40l26_private *cs40l26, const u32 id);
 void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26,
 		enum cs40l26_vibe_state_event event);
 int cs40l26_pm_stdby_timeout_ms_get(struct cs40l26_private *cs40l26,
@@ -1566,6 +1578,8 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 		enum cs40l26_pm_state state);
 int cs40l26_ack_write(struct cs40l26_private *cs40l26, u32 reg, u32 write_val,
 		u32 reset_val);
+int cs40l26_pm_enter(struct device *dev);
+void cs40l26_pm_exit(struct device *dev);
 void cs40l26_resume_error_handle(struct device *dev, int ret);
 int cs40l26_resume(struct device *dev);
 int cs40l26_sys_resume(struct device *dev);

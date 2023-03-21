@@ -53,6 +53,8 @@ struct dual_fg_drv {
 
 	struct gbms_chg_profile chg_profile;
 
+	struct notifier_block fg_nb;
+
 	u32 battery_capacity;
 	int cc_max;
 
@@ -327,6 +329,17 @@ static int gdbatt_get_property(struct power_supply *psy,
 		/* TODO: need hash SN */
 		val->strval = fg_1.strval;
 		break;
+	/* support bhi */
+	case GBMS_PROP_HEALTH_ACT_IMPEDANCE:
+	case GBMS_PROP_HEALTH_IMPEDANCE:
+	case GBMS_PROP_RESISTANCE:
+	case GBMS_PROP_RESISTANCE_RAW:
+	case GBMS_PROP_RESISTANCE_AVG:
+	case GBMS_PROP_BATTERY_AGE:
+	case GBMS_PROP_CHARGE_FULL_ESTIMATE:
+	case GBMS_PROP_CAPACITY_FADE_RATE:
+		val->intval = fg_1.intval;
+		break;
 	default:
 		pr_debug("getting unsupported property: %d\n", psp);
 		break;
@@ -375,6 +388,14 @@ static int gdbatt_set_property(struct power_supply *psy,
 				pr_err("Cannot set the second BATT_CE_CTRL, ret=%d\n", ret);
 		}
 		dual_fg_drv->cable_in = !!val->intval;
+		break;
+	case GBMS_PROP_HEALTH_ACT_IMPEDANCE:
+		/* TODO: discuss with BattEng to decide save data */
+		/* if (dual_fg_drv->first_fg_psy) {
+			ret = GPSY_SET_PROP(dual_fg_drv->first_fg_psy, psp, val->intval);
+			if (ret < 0)
+				pr_err("Cannot set the first HEALTH_ACT_IMPEDANCE, ret=%d\n", ret);
+		} */
 		break;
 	default:
 		return -EINVAL;
@@ -436,6 +457,31 @@ static int gdbatt_init_chg_profile(struct dual_fg_drv *dual_fg_drv)
 	return ret;
 }
 
+static int psy_changed(struct notifier_block *nb,
+		       unsigned long action, void *data)
+{
+	struct power_supply *psy = data;
+	struct dual_fg_drv *dual_fg_drv = container_of(nb, struct dual_fg_drv, fg_nb);
+
+	if ((action != PSY_EVENT_PROP_CHANGED) || (psy == NULL) || (psy->desc == NULL) ||
+	    (psy->desc->name == NULL))
+		return NOTIFY_OK;
+
+	pr_debug("name=%s evt=%lu\n", psy->desc->name, action);
+
+	if (action == PSY_EVENT_PROP_CHANGED) {
+		bool is_first_fg = (dual_fg_drv->first_fg_psy_name != NULL) &&
+				   !strcmp(psy->desc->name, dual_fg_drv->first_fg_psy_name);
+		bool is_second_fg = (dual_fg_drv->second_fg_psy_name != NULL) &&
+				    !strcmp(psy->desc->name, dual_fg_drv->second_fg_psy_name);
+
+		if (is_first_fg || is_second_fg)
+			power_supply_changed(dual_fg_drv->psy);
+	}
+
+	return NOTIFY_OK;
+}
+
 static void google_dual_batt_gauge_init_work(struct work_struct *work)
 {
 	struct dual_fg_drv *dual_fg_drv = container_of(work, struct dual_fg_drv,
@@ -494,6 +540,11 @@ static void google_dual_batt_gauge_init_work(struct work_struct *work)
 	err = gdbatt_init_chg_profile(dual_fg_drv);
 	if (err < 0)
 		dev_info(dual_fg_drv->device,"fail to init chg profile (%d)\n", err);
+
+	dual_fg_drv->fg_nb.notifier_call = psy_changed;
+	err = power_supply_reg_notifier(&dual_fg_drv->fg_nb);
+	if (err < 0)
+		pr_err("cannot register power supply notifer (%d)\n", err);
 
 	dual_fg_drv->init_complete = true;
 	dual_fg_drv->resume_complete = true;

@@ -273,7 +273,7 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 	const struct fira_ranging_info *ranging_info =
 		&local->ranging_info[slot->ranging_index];
 	bool tof_present, aoa_azimuth_present, aoa_elevation_present,
-		aoa_fom_present;
+		aoa_fom_present, neg_tof_present;
 	u8 *p;
 
 	tof_present = ranging_info->tof_present && params->report_tof;
@@ -284,12 +284,13 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 	aoa_fom_present = (ranging_info->local_aoa_azimuth.aoa_fom ||
 			   ranging_info->local_aoa_elevation.aoa_fom) &&
 			  params->report_aoa_fom;
+	neg_tof_present = tof_present && (ranging_info->tof_rctu < 0);
 
 	p = fira_frame_common_payload_put(
 		skb,
 		FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(
 			tof_present, aoa_azimuth_present, aoa_elevation_present,
-			aoa_fom_present),
+			aoa_fom_present, neg_tof_present),
 		FIRA_MESSAGE_ID_RESULT_REPORT);
 
 	*p++ = FIELD_PREP(FIRA_RESULT_REPORT_CONTROL_TOF_PRESENT, tof_present) |
@@ -298,7 +299,9 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 	       FIELD_PREP(FIRA_RESULT_REPORT_CONTROL_AOA_ELEVATION_PRESENT,
 			  aoa_elevation_present) |
 	       FIELD_PREP(FIRA_RESULT_REPORT_CONTROL_AOA_FOM_PRESENT,
-			  aoa_fom_present);
+			  aoa_fom_present) |
+		   FIELD_PREP(FIRA_RESULT_REPORT_CONTROL_NEG_TOF_PRESENT,
+			  neg_tof_present);
 
 	if (tof_present) {
 		put_unaligned_le32(
@@ -322,6 +325,10 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 			*p = ranging_info->local_aoa_elevation.aoa_fom;
 			p++;
 		}
+	}
+	if (neg_tof_present) {
+		put_unaligned_le32(-ranging_info->tof_rctu, p);
+		p += sizeof(u32);
 	}
 }
 
@@ -660,7 +667,7 @@ fira_frame_measurement_report_fill_ranging_info(struct fira_local *local,
 		tof_rctu =
 			((s32)remote_round_trip_rctu - adjusted_reply_rctu) / 2;
 	}
-	ranging_info->tof_rctu = tof_rctu > 0 ? tof_rctu : 0;
+	ranging_info->tof_rctu = (!slot->controller_tx) ? -tof_rctu : tof_rctu;
 	ranging_info->tof_present = true;
 
 	session->controlee.hopping_mode = hopping_mode;
@@ -729,7 +736,7 @@ fira_frame_result_report_fill_ranging_info(struct fira_local *local,
 	struct fira_ranging_info *ranging_info =
 		&local->ranging_info[slot->ranging_index];
 	u8 control;
-	bool tof_present, aoa_azimuth_present, aoa_elevation_present,
+	bool tof_present, neg_tof_present, aoa_azimuth_present, aoa_elevation_present,
 		aoa_fom_present;
 
 	control = *p++;
@@ -740,9 +747,10 @@ fira_frame_result_report_fill_ranging_info(struct fira_local *local,
 		!!(control & FIRA_RESULT_REPORT_CONTROL_AOA_ELEVATION_PRESENT);
 	aoa_fom_present =
 		!!(control & FIRA_RESULT_REPORT_CONTROL_AOA_FOM_PRESENT);
+	neg_tof_present = !!(control & FIRA_RESULT_REPORT_CONTROL_NEG_TOF_PRESENT);
 	if (ie_len < FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(
 			     tof_present, aoa_azimuth_present,
-			     aoa_elevation_present, aoa_fom_present))
+			     aoa_elevation_present, aoa_fom_present, neg_tof_present))
 		return false;
 
 	if (tof_present) {
@@ -760,6 +768,13 @@ fira_frame_result_report_fill_ranging_info(struct fira_local *local,
 		ranging_info->remote_aoa_elevation_pi = get_unaligned_le16(p);
 		p += sizeof(s16);
 	}
+	if (neg_tof_present) {
+		/* When negative ToF is present at end of frame,
+		 * ToF read ahead MUST be 0, so, is safe to overwrite */
+		ranging_info->tof_rctu = -get_unaligned_le32(p);
+		p += sizeof(u32);
+	}
+
 	if (aoa_fom_present) {
 		ranging_info->remote_aoa_fom_present = true;
 		if (aoa_azimuth_present)
@@ -795,7 +810,7 @@ bool fira_frame_result_report_payload_check(
 				continue;
 
 			if (ie_get->len < FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(
-						  false, false, false, false))
+						  false, false, false, false, false))
 				return false;
 			message_id = (*p++) & 0xf;
 			if (message_id != FIRA_MESSAGE_ID_RESULT_REPORT)

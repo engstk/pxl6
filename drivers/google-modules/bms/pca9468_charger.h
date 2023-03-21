@@ -266,6 +266,8 @@ struct pca9468_charger {
 	u32 wlc_ramp_out_vout_target;
 
 	struct p9468_chg_stats	chg_data;
+
+	struct gvotable_election *dc_avail;
 /* Google Integration END */
 
 };

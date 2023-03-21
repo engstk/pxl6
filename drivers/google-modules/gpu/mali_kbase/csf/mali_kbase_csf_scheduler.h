@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -24,6 +24,7 @@
 
 #include "mali_kbase_csf.h"
 #include "mali_kbase_csf_event.h"
+#include "mali_kbase_csf_tiler_heap_def.h"
 
 /**
  * kbase_csf_scheduler_queue_start() - Enable the running of GPU command queue
@@ -410,6 +411,17 @@ void kbase_csf_scheduler_pm_idle(struct kbase_device *kbdev);
 int kbase_csf_scheduler_wait_mcu_active(struct kbase_device *kbdev);
 
 /**
+ * kbase_csf_scheduler_pm_resume_no_lock - Reactivate the scheduler on system resume
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * This function will make the scheduler resume the scheduling of queue groups
+ * and take the power managemenet reference, if there are any runnable groups.
+ * The caller must have acquired the global Scheduler lock.
+ */
+void kbase_csf_scheduler_pm_resume_no_lock(struct kbase_device *kbdev);
+
+/**
  * kbase_csf_scheduler_pm_resume - Reactivate the scheduler on system resume
  *
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
@@ -418,6 +430,19 @@ int kbase_csf_scheduler_wait_mcu_active(struct kbase_device *kbdev);
  * and take the power managemenet reference, if there are any runnable groups.
  */
 void kbase_csf_scheduler_pm_resume(struct kbase_device *kbdev);
+
+/**
+ * kbase_csf_scheduler_pm_suspend_no_lock - Idle the scheduler on system suspend
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * This function will make the scheduler suspend all the running queue groups
+ * and drop its power managemenet reference.
+ * The caller must have acquired the global Scheduler lock.
+ *
+ * Return: 0 on success.
+ */
+int kbase_csf_scheduler_pm_suspend_no_lock(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_scheduler_pm_suspend - Idle the scheduler on system suspend
@@ -448,7 +473,7 @@ static inline bool kbase_csf_scheduler_all_csgs_idle(struct kbase_device *kbdev)
 }
 
 /**
- * kbase_csf_scheduler_advance_tick_nolock() - Advance the scheduling tick
+ * kbase_csf_scheduler_tick_advance_nolock() - Advance the scheduling tick
  *
  * @kbdev: Pointer to the device
  *
@@ -458,23 +483,23 @@ static inline bool kbase_csf_scheduler_all_csgs_idle(struct kbase_device *kbdev)
  * The caller must hold the interrupt lock.
  */
 static inline void
-kbase_csf_scheduler_advance_tick_nolock(struct kbase_device *kbdev)
+kbase_csf_scheduler_tick_advance_nolock(struct kbase_device *kbdev)
 {
 	struct kbase_csf_scheduler *const scheduler = &kbdev->csf.scheduler;
 
 	lockdep_assert_held(&scheduler->interrupt_lock);
 
 	if (scheduler->tick_timer_active) {
-		KBASE_KTRACE_ADD(kbdev, SCHEDULER_ADVANCE_TICK, NULL, 0u);
+		KBASE_KTRACE_ADD(kbdev, SCHEDULER_TICK_ADVANCE, NULL, 0u);
 		scheduler->tick_timer_active = false;
-		queue_work(scheduler->wq, &scheduler->tick_work);
+		kthread_queue_work(&scheduler->csf_worker, &scheduler->tick_work);
 	} else {
-		KBASE_KTRACE_ADD(kbdev, SCHEDULER_NOADVANCE_TICK, NULL, 0u);
+		KBASE_KTRACE_ADD(kbdev, SCHEDULER_TICK_NOADVANCE, NULL, 0u);
 	}
 }
 
 /**
- * kbase_csf_scheduler_advance_tick() - Advance the scheduling tick
+ * kbase_csf_scheduler_tick_advance() - Advance the scheduling tick
  *
  * @kbdev: Pointer to the device
  *
@@ -482,13 +507,13 @@ kbase_csf_scheduler_advance_tick_nolock(struct kbase_device *kbdev)
  * immediate execution, but only if the tick hrtimer is active. If the timer
  * is inactive then the tick work item is already in flight.
  */
-static inline void kbase_csf_scheduler_advance_tick(struct kbase_device *kbdev)
+static inline void kbase_csf_scheduler_tick_advance(struct kbase_device *kbdev)
 {
 	struct kbase_csf_scheduler *const scheduler = &kbdev->csf.scheduler;
 	unsigned long flags;
 
 	spin_lock_irqsave(&scheduler->interrupt_lock, flags);
-	kbase_csf_scheduler_advance_tick_nolock(kbdev);
+	kbase_csf_scheduler_tick_advance_nolock(kbdev);
 	spin_unlock_irqrestore(&scheduler->interrupt_lock, flags);
 }
 
@@ -508,8 +533,24 @@ static inline void kbase_csf_scheduler_invoke_tick(struct kbase_device *kbdev)
 
 	spin_lock_irqsave(&scheduler->interrupt_lock, flags);
 	if (!scheduler->tick_timer_active)
-		queue_work(scheduler->wq, &scheduler->tick_work);
+		kthread_queue_work(&scheduler->csf_worker, &scheduler->tick_work);
 	spin_unlock_irqrestore(&scheduler->interrupt_lock, flags);
+}
+
+/**
+ * kbase_csf_scheduler_invoke_tock() - Invoke the scheduling tock
+ *
+ * @kbdev: Pointer to the device
+ *
+ * This function will queue the scheduling tock work item for immediate
+ * execution.
+ */
+static inline void kbase_csf_scheduler_invoke_tock(struct kbase_device *kbdev)
+{
+	struct kbase_csf_scheduler *const scheduler = &kbdev->csf.scheduler;
+
+	if (atomic_cmpxchg(&scheduler->pending_tock_work, false, true) == false)
+		kthread_mod_delayed_work(&scheduler->csf_worker, &scheduler->tock_work, 0);
 }
 
 /**
@@ -570,15 +611,6 @@ int kbase_csf_scheduler_handle_runtime_suspend(struct kbase_device *kbdev);
 #endif
 
 /**
- * kbase_csf_scheduler_process_gpu_idle_event() - Process GPU idle IRQ
- *
- * @kbdev: Pointer to the device
- *
- * This function is called when a GPU idle IRQ has been raised.
- */
-void kbase_csf_scheduler_process_gpu_idle_event(struct kbase_device *kbdev);
-
-/**
  * kbase_csf_scheduler_get_nr_active_csgs() - Get the number of active CSGs
  *
  * @kbdev: Pointer to the device
@@ -633,5 +665,61 @@ void kbase_csf_scheduler_force_wakeup(struct kbase_device *kbdev);
  */
 void kbase_csf_scheduler_force_sleep(struct kbase_device *kbdev);
 #endif
+
+/**
+ * kbase_csf_scheduler_process_gpu_idle_event() - Process GPU idle event
+ *
+ * @kbdev: Pointer to the device
+ *
+ * This function is called when a IRQ for GPU idle event has been raised.
+ *
+ * Return: true if the GPU idle event can be acknowledged.
+ */
+bool kbase_csf_scheduler_process_gpu_idle_event(struct kbase_device *kbdev);
+
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+/**
+ * turn_on_sc_power_rails - Turn on the shader core power rails.
+ *
+ * @kbdev: Pointer to the device.
+ *
+ * This function is called to synchronously turn on the shader core power rails,
+ * before execution is resumed on the cores.
+ *
+ * scheduler lock must be held when calling this function
+ */
+void turn_on_sc_power_rails(struct kbase_device *kbdev);
+#endif
+
+/* Forward declaration */
+struct kbase_csf_tiler_heap_shrink_control;
+
+/**
+ * kbase_csf_scheduler_count_free_heap_pages() - Undertake shrinker reclaim count action
+ *
+ * @kbdev:        Pointer to the device
+ * @shrink_ctrl:  Pointer to the kbase CSF schrink control object.
+ *
+ * This function is called from CSF tiler heap memory shrinker reclaim 'count_objects' operation.
+ *
+ * Return: number of potentially freeable tiler heap pages.
+ */
+unsigned long
+kbase_csf_scheduler_count_free_heap_pages(struct kbase_device *kbdev,
+					  struct kbase_csf_tiler_heap_shrink_control *shrink_ctrl);
+
+/**
+ * kbase_csf_scheduler_scan_free_heap_pages() - Undertake shrinker reclaim scan action
+ *
+ * @kbdev:        Pointer to the device
+ * @shrink_ctrl:  Pointer to the kbase CSF schrink control object.
+ *
+ * This function is called from CSF tiler heap memory shrinker reclaim 'scan_objects' operation.
+ *
+ * Return: number of actually freed tiler heap pagess.
+ */
+unsigned long
+kbase_csf_scheduler_scan_free_heap_pages(struct kbase_device *kbdev,
+					 struct kbase_csf_tiler_heap_shrink_control *shrink_ctrl);
 
 #endif /* _KBASE_CSF_SCHEDULER_H_ */

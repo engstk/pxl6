@@ -35,6 +35,7 @@ enum EXYNOS9_DPP_FEATURES {
 enum dpp_state {
 	DPP_STATE_OFF = 0,
 	DPP_STATE_ON,
+	DPP_STATE_HANDOVER,
 };
 
 struct eotf_debug_override {

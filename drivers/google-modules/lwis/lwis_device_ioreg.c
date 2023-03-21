@@ -128,8 +128,7 @@ static int lwis_ioreg_device_probe(struct platform_device *plat_dev)
 	}
 
 	/* Create associated kworker threads */
-	ret = lwis_create_kthread_workers(&ioreg_dev->base_dev, "lwis_ioreg_trans_kthread",
-					 "lwis_ioreg_prd_io_kthread");
+	ret = lwis_create_kthread_workers(&ioreg_dev->base_dev);
 	if (ret) {
 		dev_err(ioreg_dev->base_dev.dev, "Failed to create lwis_ioreg_kthread");
 		lwis_base_unprobe(&ioreg_dev->base_dev);

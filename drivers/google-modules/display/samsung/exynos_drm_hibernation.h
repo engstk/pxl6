@@ -28,7 +28,7 @@ struct writeback_device;
 
 struct exynos_hibernation_funcs {
 	int (*enter)(struct exynos_hibernation *hiber, bool nonblock);
-	void (*exit)(struct exynos_hibernation *hiber);
+	int (*exit)(struct exynos_hibernation *hiber, bool nonblock);
 	bool (*cancel)(struct exynos_hibernation *hiber);
 	bool (*check)(struct exynos_hibernation *hiber);
 };
@@ -72,6 +72,15 @@ void hibernation_block_exit(struct exynos_hibernation *hiber);
  * @hiber: hibernation block ptr
  */
 void hibernation_unblock_enter(struct exynos_hibernation *hiber);
+
+/**
+ * exynos_hibernation_async_exit - queues work to exit hibernation and schedules hibernation for
+ *	later if no one else blocks it
+ * @hiber: hibernation block ptr
+ *
+ * Return: %true if hibernation exit work was queued, %false otherwise
+ */
+bool exynos_hibernation_async_exit(struct exynos_hibernation *hiber);
 
 struct exynos_hibernation *
 exynos_hibernation_register(struct decon_device *decon);

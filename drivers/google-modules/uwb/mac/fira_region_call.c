@@ -306,6 +306,9 @@ static int fira_session_params_set_measurement_sequence_step(
 	GET_ANTENNA(step_attrs[STEP_ATTR(TX_ANT_SET_RANGING)],
 		    step->tx_ant_set_ranging);
 
+	if (!step_attrs[STEP_ATTR(RX_ANT_SETS_RANGING)])
+		return -EINVAL;
+
 	r = nla_parse_nested(rx_ant_sets_attrs, ASR_ATTR(MAX),
 			     step_attrs[STEP_ATTR(RX_ANT_SETS_RANGING)],
 			     rx_ant_sets_ranging_policy, info->extack);

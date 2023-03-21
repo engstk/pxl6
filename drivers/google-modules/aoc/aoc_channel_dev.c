@@ -36,7 +36,6 @@ module_param(received_msg_count, long, S_IRUGO);
 module_param(sent_msg_count, long, S_IRUGO);
 
 struct chan_prvdata {
-	struct wakeup_source *queue_wakelock;
 	struct wakeup_source *user_wakelock;
 	struct task_struct *demux_task;
 };
@@ -57,19 +56,13 @@ static DEFINE_MUTEX(aocc_write_lock);
 static DEFINE_MUTEX(s_open_files_lock);
 
 #define AOCC_MAX_MSG_SIZE 1024
-#define AOCC_MAX_PENDING_MSGS 32
-#define AOCC_BLOCK_CHANNEL_THRESHOLD (AOCC_MAX_PENDING_MSGS - 3)
+#define AOCC_MAX_PENDING_MSGS 128
+#define AOCC_BLOCK_CHANNEL_THRESHOLD 64
 static atomic_t channel_index_counter = ATOMIC_INIT(1);
 
 /* Driver methods */
 static int aocc_probe(struct aoc_service_dev *dev);
 static int aocc_remove(struct aoc_service_dev *dev);
-
-static const char * const wakelock_names[] = {
-	"usf_queue",
-	"usf_queue_non_wake_up",
-	NULL,
-};
 
 static const char * const channel_service_names[] = {
 	"com.google.usf",
@@ -211,7 +204,9 @@ static int aocc_demux_kthread(void *data)
 		list_for_each_entry(entry, &s_open_files, open_files_list) {
 			if (channel == entry->channel_index) {
 				handler_found = 1;
-				if (!node->msg.non_wake_up) {
+				if (!node->msg.non_wake_up &&
+				    strcmp(dev_name(&service->dev),
+					   "com.google.usf") == 0) {
 					take_wake_lock = true;
 				}
 
@@ -247,15 +242,11 @@ static int aocc_demux_kthread(void *data)
 		mutex_unlock(&s_open_files_lock);
 
 		/*
-		 * If the message is "waking", take a longer wakelock to allow userspace to
-		 * dequeue the message.  If non-waking, take a short wakelock until the queue
-		 * has been drained to make sure non-waking messages are not preventing us from
-		 * reading a waking message at the end.
+		 * If the message is "waking", take wakelock to allow userspace to dequeue
+                 * the message.
 		 */
 		if (take_wake_lock) {
 			pm_wakeup_ws_event(service_prvdata->user_wakelock, 200, true);
-		} else if (aoc_service_can_read(service)) {
-			pm_wakeup_ws_event(service_prvdata->queue_wakelock, 10, true);
 		}
 
 		if (!handler_found) {
@@ -769,8 +760,7 @@ static void aocc_sh_mem_doorbell_probe(struct aoc_service_dev *dev)
 static int aocc_probe(struct aoc_service_dev *dev)
 {
 	struct chan_prvdata *prvdata;
-	int ret = 0, i = 0;
-	bool service_found = false;
+	int ret = 0;
 	struct sched_param param = {
 		.sched_priority = 10,
 	};
@@ -786,16 +776,6 @@ static int aocc_probe(struct aoc_service_dev *dev)
 		if (ret)
 			return ret;
 		prvdata->user_wakelock = wakeup_source_register(&dev->dev, dev_name(&dev->dev));
-		for (i = 0; i < ARRAY_SIZE(wakelock_names); i++) {
-			if (strcmp(dev_name(&dev->dev), channel_service_names[i]) == 0) {
-				prvdata->queue_wakelock = wakeup_source_register(&dev->dev,
-										 wakelock_names[i]);
-				service_found = true;
-				break;
-			}
-		}
-		if (!service_found)
-			return -EINVAL;
 		dev->prvdata = prvdata;
 		prvdata->demux_task =  kthread_run(&aocc_demux_kthread, dev, dev_name(&dev->dev));
 		sched_setscheduler(prvdata->demux_task, SCHED_FIFO, &param);
@@ -821,11 +801,6 @@ static int aocc_remove(struct aoc_service_dev *dev)
 	} else {
 		prvdata = dev->prvdata;
 		kthread_stop(prvdata->demux_task);
-		if (prvdata->queue_wakelock) {
-			wakeup_source_unregister(prvdata->queue_wakelock);
-			prvdata->queue_wakelock = NULL;
-		}
-
 		if (prvdata->user_wakelock) {
 			wakeup_source_unregister(prvdata->user_wakelock);
 			prvdata->user_wakelock = NULL;

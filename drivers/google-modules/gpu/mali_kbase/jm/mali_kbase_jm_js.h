@@ -29,6 +29,8 @@
 
 #include "mali_kbase_js_ctx_attr.h"
 
+#define JS_MAX_RUNNING_JOBS 8
+
 /**
  * kbasep_js_devdata_init - Initialize the Job Scheduler
  * @kbdev: The kbase_device to operate on
@@ -618,7 +620,7 @@ bool kbase_js_atom_blocked_on_x_dep(struct kbase_jd_atom *katom);
 void kbase_js_sched(struct kbase_device *kbdev, int js_mask);
 
 /**
- * kbase_jd_zap_context - Attempt to deschedule a context that is being
+ * kbase_js_zap_context - Attempt to deschedule a context that is being
  *                        destroyed
  * @kctx: Context pointer
  *
@@ -705,8 +707,10 @@ static inline bool kbasep_js_is_submit_allowed(
 	bool is_allowed;
 
 	/* Ensure context really is scheduled in */
-	KBASE_DEBUG_ASSERT(kctx->as_nr != KBASEP_AS_NR_INVALID);
-	KBASE_DEBUG_ASSERT(kbase_ctx_flag(kctx, KCTX_SCHEDULED));
+	if (WARN((kctx->as_nr == KBASEP_AS_NR_INVALID) || !kbase_ctx_flag(kctx, KCTX_SCHEDULED),
+		 "%s: kctx %pK has assigned AS %d and context flag %d\n", __func__, (void *)kctx,
+		 kctx->as_nr, atomic_read(&kctx->flags)))
+		return false;
 
 	test_bit = (u16) (1u << kctx->as_nr);
 
@@ -733,8 +737,10 @@ static inline void kbasep_js_set_submit_allowed(
 	u16 set_bit;
 
 	/* Ensure context really is scheduled in */
-	KBASE_DEBUG_ASSERT(kctx->as_nr != KBASEP_AS_NR_INVALID);
-	KBASE_DEBUG_ASSERT(kbase_ctx_flag(kctx, KCTX_SCHEDULED));
+	if (WARN((kctx->as_nr == KBASEP_AS_NR_INVALID) || !kbase_ctx_flag(kctx, KCTX_SCHEDULED),
+		 "%s: kctx %pK has assigned AS %d and context flag %d\n", __func__, (void *)kctx,
+		 kctx->as_nr, atomic_read(&kctx->flags)))
+		return;
 
 	set_bit = (u16) (1u << kctx->as_nr);
 
@@ -763,8 +769,10 @@ static inline void kbasep_js_clear_submit_allowed(
 	u16 clear_mask;
 
 	/* Ensure context really is scheduled in */
-	KBASE_DEBUG_ASSERT(kctx->as_nr != KBASEP_AS_NR_INVALID);
-	KBASE_DEBUG_ASSERT(kbase_ctx_flag(kctx, KCTX_SCHEDULED));
+	if (WARN((kctx->as_nr == KBASEP_AS_NR_INVALID) || !kbase_ctx_flag(kctx, KCTX_SCHEDULED),
+		 "%s: kctx %pK has assigned AS %d and context flag %d\n", __func__, (void *)kctx,
+		 kctx->as_nr, atomic_read(&kctx->flags)))
+		return;
 
 	clear_bit = (u16) (1u << kctx->as_nr);
 	clear_mask = ~clear_bit;
@@ -798,7 +806,7 @@ static inline void kbasep_js_atom_retained_state_init_invalid(
  * @retained_state: where to copy
  * @katom:          where to copy from
  *
- * Copy atom state that can be made available after jd_done_nolock() is called
+ * Copy atom state that can be made available after kbase_jd_done_nolock() is called
  * on that atom.
  */
 static inline void kbasep_js_atom_retained_state_copy(
@@ -872,9 +880,6 @@ static inline void kbase_js_runpool_inc_context_count(
 	struct kbasep_js_device_data *js_devdata;
 	struct kbasep_js_kctx_info *js_kctx_info;
 
-	KBASE_DEBUG_ASSERT(kbdev != NULL);
-	KBASE_DEBUG_ASSERT(kctx != NULL);
-
 	js_devdata = &kbdev->js_data;
 	js_kctx_info = &kctx->jctx.sched_info;
 
@@ -882,13 +887,12 @@ static inline void kbase_js_runpool_inc_context_count(
 	lockdep_assert_held(&js_devdata->runpool_mutex);
 
 	/* Track total contexts */
-	KBASE_DEBUG_ASSERT(js_devdata->nr_all_contexts_running < S8_MAX);
+	WARN_ON_ONCE(js_devdata->nr_all_contexts_running >= JS_MAX_RUNNING_JOBS);
 	++(js_devdata->nr_all_contexts_running);
 
 	if (!kbase_ctx_flag(kctx, KCTX_SUBMIT_DISABLED)) {
 		/* Track contexts that can submit jobs */
-		KBASE_DEBUG_ASSERT(js_devdata->nr_user_contexts_running <
-									S8_MAX);
+		WARN_ON_ONCE(js_devdata->nr_user_contexts_running >= JS_MAX_RUNNING_JOBS);
 		++(js_devdata->nr_user_contexts_running);
 	}
 }
@@ -909,9 +913,6 @@ static inline void kbase_js_runpool_dec_context_count(
 	struct kbasep_js_device_data *js_devdata;
 	struct kbasep_js_kctx_info *js_kctx_info;
 
-	KBASE_DEBUG_ASSERT(kbdev != NULL);
-	KBASE_DEBUG_ASSERT(kctx != NULL);
-
 	js_devdata = &kbdev->js_data;
 	js_kctx_info = &kctx->jctx.sched_info;
 
@@ -920,12 +921,12 @@ static inline void kbase_js_runpool_dec_context_count(
 
 	/* Track total contexts */
 	--(js_devdata->nr_all_contexts_running);
-	KBASE_DEBUG_ASSERT(js_devdata->nr_all_contexts_running >= 0);
+	WARN_ON_ONCE(js_devdata->nr_all_contexts_running < 0);
 
 	if (!kbase_ctx_flag(kctx, KCTX_SUBMIT_DISABLED)) {
 		/* Track contexts that can submit jobs */
 		--(js_devdata->nr_user_contexts_running);
-		KBASE_DEBUG_ASSERT(js_devdata->nr_user_contexts_running >= 0);
+		WARN_ON_ONCE(js_devdata->nr_user_contexts_running < 0);
 	}
 }
 
@@ -984,6 +985,7 @@ static inline int kbasep_js_atom_prio_to_sched_prio(base_jd_prio atom_prio)
  * kbasep_js_sched_prio_to_atom_prio - Convert relative scheduler priority
  *                                     to atom priority (base_jd_prio).
  *
+ * @kbdev:    Device pointer
  * @sched_prio: Relative scheduler priority to translate.
  *
  * This function will convert relative scheduler priority back into base_jd_prio
@@ -999,7 +1001,7 @@ static inline int kbasep_js_atom_prio_to_sched_prio(base_jd_prio atom_prio)
  *         0..BASE_JD_NR_PRIO_LEVELS-1. On failure: BASE_JD_PRIO_INVALID.
  */
 static inline base_jd_prio kbasep_js_sched_prio_to_atom_prio(struct kbase_device *kbdev,
-															int sched_prio)
+							     int sched_prio)
 {
 	if (likely(sched_prio >= 0 && sched_prio < KBASE_JS_ATOM_SCHED_PRIO_COUNT))
 		return kbasep_js_relative_priority_to_atom[sched_prio];

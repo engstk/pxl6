@@ -519,6 +519,7 @@
 #define DECON_CON_WIN(_id)			(WIN_OFFSET(_id) + 0x0)
 #define WIN_CHMAP_F(_ch)			(((_ch) & 0x7) << 4)
 #define WIN_CHMAP_MASK				(0x7 << 4)
+#define WIN_CHMAP_GET(_v)			((_v >> 4) & 0x7)
 #define WIN_MAPCOLOR_EN_F			(1 << 1)
 #define _WIN_EN_F				(1 << 0)
 #define WIN_EN_F(_win)				_WIN_EN_F

@@ -219,6 +219,7 @@ struct dpp_params_info {
 	unsigned long rcv_num;
 	enum dpp_comp_type comp_type;
 	enum dpp_sbwc_blk_size blk_size;
+	bool is_lossy;
 };
 
 void dpp_regs_desc_init(void __iomem *regs, phys_addr_t start, const char *name,

@@ -51,12 +51,13 @@
 #define PANEL_REV_PROTO1_2	BIT(2)
 #define PANEL_REV_PROTO2	BIT(3)
 #define PANEL_REV_EVT1		BIT(4)
-#define PANEL_REV_EVT1_1	BIT(5)
-#define PANEL_REV_EVT1_2	BIT(6)
-#define PANEL_REV_EVT2		BIT(7)
-#define PANEL_REV_DVT1		BIT(8)
-#define PANEL_REV_DVT1_1	BIT(9)
-#define PANEL_REV_PVT		BIT(10)
+#define PANEL_REV_EVT1_0_2	BIT(5)
+#define PANEL_REV_EVT1_1	BIT(6)
+#define PANEL_REV_EVT1_2	BIT(7)
+#define PANEL_REV_EVT2		BIT(8)
+#define PANEL_REV_DVT1		BIT(9)
+#define PANEL_REV_DVT1_1	BIT(10)
+#define PANEL_REV_PVT		BIT(11)
 #define PANEL_REV_LATEST	BIT(31)
 #define PANEL_REV_ALL		(~0)
 #define PANEL_REV_GE(rev)	(~((rev) - 1))
@@ -423,6 +424,13 @@ struct exynos_panel_funcs {
 	 * List supported OSC2 clock for panel.
 	 */
 	ssize_t (*list_osc2_clk_khz)(struct exynos_panel *exynos_panel, char *buf);
+
+	/**
+	 * @parse_regulators
+	 *
+	 * Parse regulators for panel.
+	 */
+	int (*parse_regulators)(struct exynos_panel *ctx);
 };
 
 /**
@@ -475,11 +483,15 @@ struct exynos_panel_desc {
 	u32 min_luminance;
 	u32 max_brightness;
 	u32 min_brightness;
+	u32 lower_min_brightness; /* extreme low brightness */
 	u32 dft_brightness; /* default brightness */
+	u32 vrr_switch_duration;
 	/* extra frame is needed to apply brightness change if it's not at next VSYNC */
 	bool dbv_extra_frame;
 	bool is_partial;
 	bool is_panel_idle_supported;
+	bool no_lhbm_rr_constraints;
+	const u32 lhbm_effective_delay_frames;
 	const unsigned int delay_dsc_reg_init_us;
 	const struct brightness_capability *brt_capability;
 	const u32 *bl_range;
@@ -497,10 +509,16 @@ struct exynos_panel_desc {
 	const struct exynos_panel_funcs *exynos_panel_func;
 };
 
-#define PANEL_ID_MAX		32
+#define PANEL_ID_MAX		40
 #define PANEL_EXTINFO_MAX	16
 #define LOCAL_HBM_MAX_TIMEOUT_MS 3000 /* 3000 ms */
 #define LOCAL_HBM_GAMMA_CMD_SIZE_MAX 16
+
+enum local_hbm_enable_state {
+	LOCAL_HBM_DISABLED = 0,
+	LOCAL_HBM_ENABLED,
+	LOCAL_HBM_ENABLING,
+};
 
 struct exynos_bl_notifier {
 	u32 ranges[MAX_BL_RANGES];
@@ -576,6 +594,7 @@ struct exynos_panel {
 	 * at least the delay time provided after a refresh rate update.
 	 */
 	u32 idle_delay_ms;
+	int peak_vrefresh;
 
 	enum exynos_hbm_mode hbm_mode;
 	bool dimming_on;
@@ -602,6 +621,7 @@ struct exynos_panel {
 	ktime_t last_commit_ts;
 	ktime_t last_mode_set_ts;
 	ktime_t last_self_refresh_active_ts;
+	ktime_t last_panel_idle_set_ts;
 	struct delayed_work idle_work;
 
 	/* Record the current CABC mode if force_off enabled */
@@ -618,12 +638,19 @@ struct exynos_panel {
 		struct local_hbm {
 			bool gamma_para_ready;
 			u8 gamma_cmd[LOCAL_HBM_GAMMA_CMD_SIZE_MAX];
-			/* indicate if local hbm enabled or not */
-			bool enabled;
+			union {
+				enum local_hbm_enable_state state;
+				enum local_hbm_enable_state enabled;
+			};
 			/* max local hbm on period in ms */
 			u32 max_timeout_ms;
 			/* work used to turn off local hbm if reach max_timeout */
 			struct delayed_work timeout_work;
+			struct kthread_worker worker;
+			struct task_struct *thread;
+			struct kthread_work post_work;
+			ktime_t en_cmd_ts;
+			ktime_t next_vblank_ts;
 		} local_hbm;
 
 		struct workqueue_struct *wq;
@@ -735,6 +762,21 @@ static inline void backlight_state_changed(struct backlight_device *bl)
 static inline void te2_state_changed(struct backlight_device *bl)
 {
 	sysfs_notify(&bl->dev.kobj, NULL, "te2_state");
+}
+
+static inline u32 get_current_frame_duration_us(struct exynos_panel *ctx)
+{
+	return USEC_PER_SEC / drm_mode_vrefresh(&ctx->current_mode->mode);
+}
+
+static inline bool is_local_hbm_post_enabling_supported(struct exynos_panel *ctx)
+{
+	return (ctx->desc && ctx->desc->lhbm_effective_delay_frames);
+}
+
+static inline bool is_local_hbm_disabled(struct exynos_panel *ctx)
+{
+	return (ctx->hbm.local_hbm.state == LOCAL_HBM_DISABLED);
 }
 
 #define EXYNOS_DSI_CMD_REV(cmd, delay, rev) { sizeof(cmd), cmd, delay, (u32)rev }

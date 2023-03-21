@@ -49,6 +49,7 @@ enum decon_state {
 	DECON_STATE_ON,
 	DECON_STATE_HIBERNATION,
 	DECON_STATE_OFF,
+	DECON_STATE_HANDOVER,
 };
 
 enum dpu_win_state {
@@ -163,8 +164,7 @@ struct dpu_bts {
 	/* includes writeback dpp */
 	struct dpu_bts_bw rt_bw[MAX_DPP_CNT];
 
-	/* each decon must know other decon's BW to get overall BW */
-	u32 ch_bw[3][MAX_DECON_CNT];
+	u32 ch_bw[MAX_AXI_PORT];
 	int bw_idx;
 	struct dpu_bts_ops *ops;
 #if IS_ENABLED(CONFIG_EXYNOS_PM_QOS) || IS_ENABLED(CONFIG_EXYNOS_PM_QOS_MODULE)
@@ -219,6 +219,12 @@ enum dpu_event_type {
 
 	DPU_EVT_DECON_RUNTIME_SUSPEND,
 	DPU_EVT_DECON_RUNTIME_RESUME,
+	DPU_EVT_DECON_SUSPEND,
+	DPU_EVT_DECON_RESUME,
+	DPU_EVT_DSIM_RUNTIME_SUSPEND,
+	DPU_EVT_DSIM_RUNTIME_RESUME,
+	DPU_EVT_DSIM_SUSPEND,
+	DPU_EVT_DSIM_RESUME,
 	DPU_EVT_ENTER_HIBERNATION_IN,
 	DPU_EVT_ENTER_HIBERNATION_OUT,
 	DPU_EVT_EXIT_HIBERNATION_IN,
@@ -273,6 +279,7 @@ enum dpu_event_condition {
 	DPU_EVT_CONDITION_FAIL_UPDATE_BW	= 1U << 2,
 	DPU_EVT_CONDITION_FIFO_TIMEOUT		= 1U << 3,
 	DPU_EVT_CONDITION_IDMA_ERROR		= 1U << 4,
+	DPU_EVT_CONDITION_IDMA_ERROR_COMPACT	= 1U << 5,
 };
 
 #define DPU_CALLSTACK_MAX 10
@@ -309,6 +316,8 @@ struct dpu_log_atomic {
 struct dpu_log_pd {
 	enum decon_state decon_state;
 	bool rpm_active;
+	enum dsim_state dsim_state;
+	bool dsim_rpm_active;
 };
 
 struct dpu_log_crtc_info {
@@ -441,10 +450,10 @@ struct decon_device {
 	struct exynos_dqe		*dqe;
 	struct task_struct		*thread;
 	struct kthread_worker		worker;
-	struct kthread_work		early_wakeup_work;
 	struct kthread_work		buf_dump_work;
 	struct exynos_recovery		recovery;
 	struct exynos_dma		*cgc_dma;
+	struct exynos_fb_handover	fb_handover;
 
 	u32				irq_fs;	/* frame start irq number*/
 	u32				irq_fd;	/* frame done irq number*/
@@ -480,6 +489,7 @@ static inline struct decon_device *get_decon_drvdata(u32 id)
 	return NULL;
 }
 
+bool decon_dump_ignore(enum dpu_event_condition condition);
 void decon_dump(const struct decon_device *decon);
 void decon_dump_all(struct decon_device *decon,
 		enum dpu_event_condition cond, bool async_buf_dump);

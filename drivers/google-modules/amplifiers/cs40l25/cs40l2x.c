@@ -1393,41 +1393,56 @@ static ssize_t cs40l2x_cp_trigger_queue_show(struct device *dev,
 {
 	struct cs40l2x_private *cs40l2x = cs40l2x_get_private(dev);
 	struct wt_type10_comp_section *section = cs40l2x->pbq_comp.sections;
+	char *pbq_str;
 	int i, len = 0;
+
+	if (!cs40l2x->pbq_str_size) {
+		dev_err(dev, "PBQ string is not set\n");
+		return -EPERM;
+	}
+
+	pbq_str = kzalloc(cs40l2x->pbq_str_size + 1, GFP_KERNEL);
+	if (!pbq_str)
+		return -ENOMEM;
 
 	mutex_lock(&cs40l2x->lock);
 
 	for (i = 0; i < cs40l2x->pbq_comp.nsections; i++, section++) {
 		if (section->repeat == WT_REPEAT_LOOP_MARKER)
-			len += snprintf(buf + len, PAGE_SIZE - len, "!!, ");
+			len += snprintf(pbq_str + len, PAGE_SIZE - len, "!!, ");
 
 		if (section->amplitude)
-			len += snprintf(buf + len, PAGE_SIZE - len, "%d.%d, ",
+			len += snprintf(pbq_str + len, PAGE_SIZE - len, "%d.%d, ",
 					section->index, section->amplitude);
 
 		if (section->delay)
-			len += snprintf(buf + len, PAGE_SIZE - len, "%d, ",
+			len += snprintf(pbq_str + len, PAGE_SIZE - len, "%d, ",
 					section->delay);
 
 		if (section->repeat && section->repeat != WT_REPEAT_LOOP_MARKER)
-			len += snprintf(buf + len, PAGE_SIZE - len, "%d!!, ",
+			len += snprintf(pbq_str + len, PAGE_SIZE - len, "%d!!, ",
 					section->repeat);
 	}
 
 	switch (cs40l2x->pbq_comp.repeat) {
 	case WT_REPEAT_LOOP_MARKER:
-		len += snprintf(buf + len, PAGE_SIZE - len, "~\n");
+		len += snprintf(pbq_str + len, PAGE_SIZE - len, "~\n");
 		break;
 	case 0:
 		len -= 2; // Remove ", " from end of string
-		len += snprintf(buf + len, PAGE_SIZE - len, "\n");
+		len += snprintf(pbq_str + len, PAGE_SIZE - len, "\n");
 		break;
 	default:
-		len += snprintf(buf + len, PAGE_SIZE - len, "%d!\n",
+		len += snprintf(pbq_str + len, PAGE_SIZE - len, "%d!\n",
 				cs40l2x->pbq_comp.repeat);
 	}
 
+	len = strscpy(buf, pbq_str, PAGE_SIZE);
+	if (len == -E2BIG)
+		dev_err(dev, "String too large for buffer\n");
+
 	mutex_unlock(&cs40l2x->lock);
+	kfree(pbq_str);
 
 	return len;
 }
@@ -1493,9 +1508,16 @@ static ssize_t cs40l2x_cp_trigger_queue_store(struct device *dev,
 	bool inner_loop = false;
 	int ret;
 
+	if (count >= PAGE_SIZE) {
+		dev_err(dev, "Trigger queue string too large\n");
+		return -E2BIG;
+	}
+
 	pbq_str = kstrndup(buf, count, GFP_KERNEL);
 	if (!pbq_str)
 		return -ENOMEM;
+
+	cs40l2x->pbq_str_size = count;
 
 	disable_irq(i2c_client->irq);
 

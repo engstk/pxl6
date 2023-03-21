@@ -124,7 +124,12 @@ struct max77759_foreach_cb_data {
 	u8 raw_value;	/* hard override */
 	bool use_raw;
 
+	bool pogo_vin;	/* pogo ovp_en */
+	bool pogo_vout;	/* pogo 5v vout */
+
 	u8 reg;
+
+	struct gvotable_election *dc_avail_votable;	/* DC_AVAIL */
 };
 
 /* internal system values */

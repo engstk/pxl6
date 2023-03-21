@@ -142,27 +142,99 @@ void gpu_dvfs_governor_term(struct kbase_device *kbdev);
  * @active_kctx_count: Count of active kernel contexts operating under this UID. Should only be
  *                     accessed while holding the kctx_list lock.
  * @uid:               The UID for this stats block.
- * @atoms_in_flight:   The number of atoms currently executing on the GPU from this UID. Should only
- *                     be accessed while holding the hwaccess lock.
+ * @active_work_count: Count of currently executing units of work on the GPU from this UID. Should
+ *                     only be accessed while holding the hwaccess lock if using a job manager GPU,
+ *                     CSF GPUs require holding the csf.scheduler.lock.
  * @period_start:      The time (in nanoseconds) that the current active period for this UID began.
- *                     Should only be accessed while holding the hwaccess lock.
+ *                     Should only be accessed while holding the hwaccess lock if using a job
+ *                     manager GPU, CSF GPUs require holding the csf.scheduler.lock.
  * @tis_stats:         &struct gpu_dvfs_opp_metrics block storing time in state data for this UID.
- *                     Should only be accessed while holding the hwaccess lock.
+ *                     Should only be accessed while holding the hwaccess lock if using a job
+ *                     manager GPU, CSF GPUs require holding the csf.scheduler.lock.
  */
 struct gpu_dvfs_metrics_uid_stats {
 	struct list_head uid_list_link;
 	int active_kctx_count;
 	kuid_t uid;
-	int atoms_in_flight;
+	int active_work_count;
 	u64 period_start;
 	struct gpu_dvfs_opp_metrics *tis_stats;
 };
 
+/**
+ * gpu_dvfs_metrics_update() - Updates GPU metrics on level or power change.
+ *
+ * @kbdev:       The &struct kbase_device for the GPU.
+ * @old_level:   The level that the GPU has just moved from. Can be the same as &new_level.
+ * @new_level:   The level that the GPU has just moved to. Can be the same as &old_level. This
+ *               parameter is ignored if &power_state is false.
+ * @power_state: The current power state of the GPU. Can be the same as the current power state.
+ *
+ * This function should be called (1) right after a change in power state of the GPU, or (2) just
+ * after changing the level of a powered on GPU. It will update the metrics for each of the GPU
+ * DVFS level metrics and the power metrics as appropriate.
+ *
+ * Context: Expects the caller to hold the dvfs.lock & dvfs.metrics.lock.
+ */
 void gpu_dvfs_metrics_update(struct kbase_device *kbdev, int old_level, int new_level,
 	bool power_state);
-void gpu_dvfs_metrics_job_start(struct kbase_jd_atom *atom);
-void gpu_dvfs_metrics_job_end(struct kbase_jd_atom *atom);
+
+/**
+ * gpu_dvfs_metrics_work_begin() - Notification of when a unit of work starts on
+ *                                 the GPU
+ *
+ * @param:
+ * - If job manager GPU: The &struct kbase_jd_atom that has just been submitted to the GPU.
+ * - If CSF GPU: The &struct kbase_queue_group that has just been submitted to the GPU.
+ *
+ * For job manager GPUs:
+ * This function is called when an atom is submitted to the GPU by way of writing to the
+ * JSn_HEAD_NEXTn register.
+ *
+ * For CSF GPUs:
+ * This function is called when an group resident in a CSG slot starts executing.
+ *
+ * Context: Acquires the dvfs.metrics.lock. May be in IRQ context
+ */
+void gpu_dvfs_metrics_work_begin(void *param);
+
+/**
+ * gpu_dvfs_metrics_work_end() - Notification of when a unit of work stops
+ *                               running on the GPU
+ *
+ * @param:
+ * - If job manager GPU: The &struct kbase_jd_atom that has just stopped running on the GPU
+ * - If CSF GPU: The &struct kbase_queue_group that has just stopped running on the GPU
+ *
+ * This function is called when a unit of work is no longer running on the GPU,
+ * either due to successful completion, failure, preemption, or GPU reset.
+ *
+ * For job manager GPUs, a unit of work refers to an atom.
+ *
+ * For CSF GPUs, it refers to a group resident in a CSG slot, and so this
+ * function is called when a that CSG slot completes or suspends execution of
+ * the group.
+ *
+ * Context: Acquires the dvfs.metrics.lock. May be in IRQ context
+ */
+void gpu_dvfs_metrics_work_end(void *param);
+
+/**
+ * gpu_dvfs_metrics_init() - Initializes DVFS metrics.
+ *
+ * @kbdev: The &struct kbase_device for the GPU.
+ *
+ * Context: Process context. Takes and releases the DVFS lock.
+ *
+ * Return: On success, returns 0 otherwise returns an error code.
+ */
 int gpu_dvfs_metrics_init(struct kbase_device *kbdev);
+
+/**
+ * gpu_dvfs_metrics_term() - Terminates DVFS metrics
+ *
+ * @kbdev: The &struct kbase_device for the GPU.
+ */
 void gpu_dvfs_metrics_term(struct kbase_device *kbdev);
 
 /**

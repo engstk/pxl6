@@ -62,6 +62,7 @@ static const char *const audio_service_names[] = {
 	"audio_android_aec",
 	"audio_ultrasonic",
 	"audio_immersive",
+	"audio_capture_inject",
 	NULL,
 };
 

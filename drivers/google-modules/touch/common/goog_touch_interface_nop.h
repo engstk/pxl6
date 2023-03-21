@@ -9,8 +9,6 @@
 
 #include <linux/input/mt.h>
 
-#define KTIME_RELEASE_ALL (ktime_set(0, 0))
-
 enum gti_cmd_type : u32{
 	GTI_CMD_NOP,
 };

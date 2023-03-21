@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2014-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -136,7 +136,7 @@ struct kbasep_pm_metrics {
  *           or removed from a GPU slot.
  *  @active_cl_ctx: number of CL jobs active on the GPU. Array is per-device.
  *  @active_gl_ctx: number of GL jobs active on the GPU. Array is per-slot.
- *  @lock: spinlock protecting the kbasep_pm_metrics_data structure
+ *  @lock: spinlock protecting the kbasep_pm_metrics_state structure
  *  @platform_data: pointer to data controlled by platform specific code
  *  @kbdev: pointer to kbase device for which metrics are collected
  *  @values: The current values of the power management metrics. The
@@ -145,7 +145,7 @@ struct kbasep_pm_metrics {
  *  @initialized: tracks whether metrics_state has been initialized or not.
  *  @timer: timer to regularly make DVFS decisions based on the power
  *           management metrics.
- *  @timer_active: boolean indicating @timer is running
+ *  @timer_state: atomic indicating current @timer state, on, off, or stopped.
  *  @dvfs_last: values of the PM metrics from the last DVFS tick
  *  @dvfs_diff: different between the current and previous PM metrics.
  */
@@ -169,7 +169,7 @@ struct kbasep_pm_metrics_state {
 #ifdef CONFIG_MALI_MIDGARD_DVFS
 	bool initialized;
 	struct hrtimer timer;
-	bool timer_active;
+	atomic_t timer_state;
 	struct kbasep_pm_metrics dvfs_last;
 	struct kbasep_pm_metrics dvfs_diff;
 #endif
@@ -212,6 +212,60 @@ union kbase_pm_policy_data {
 	struct kbasep_pm_policy_always_on always_on;
 	struct kbasep_pm_policy_coarse_demand coarse_demand;
 	struct kbasep_pm_policy_adaptive adaptive;
+};
+
+/**
+ * enum kbase_pm_log_event_type - The types of core in a GPU.
+ *
+ * @KBASE_PM_LOG_EVENT_NONE: an unused log event, default state at
+ *                           initialization. Carries no data.
+ * @KBASE_PM_LOG_EVENT_SHADERS_STATE: a transition of the JM shader state
+ *                               machine.  .state is populated.
+ * @KBASE_PM_LOG_EVENT_L2_STATE: a transition of the L2 state machine.
+ *                               .state is populated.
+ * @KBASE_PM_LOG_EVENT_MCU_STATE: a transition of the MCU state machine.
+ *                                .state is populated.
+ * @KBASE_PM_LOG_EVENT_CORES: a transition of core availability.
+ *                            .cores is populated.
+ *
+ * Each event log event has a type which determines the data it carries.
+ */
+enum kbase_pm_log_event_type {
+	KBASE_PM_LOG_EVENT_NONE = 0,
+	KBASE_PM_LOG_EVENT_SHADERS_STATE,
+	KBASE_PM_LOG_EVENT_L2_STATE,
+	KBASE_PM_LOG_EVENT_MCU_STATE,
+	KBASE_PM_LOG_EVENT_CORES
+};
+
+/**
+ * struct kbase_pm_event_log_event - One event in the PM log.
+ *
+ * @type: The type of the event, from &enum kbase_pm_log_event_type.
+ * @timestamp: The time the log event was generated.
+ **/
+struct kbase_pm_event_log_event {
+	u8 type;
+	ktime_t timestamp;
+	union {
+		struct {
+			u8 next;
+			u8 prev;
+		} state;
+		struct {
+			u64 l2;
+			u64 shader;
+			u64 tiler;
+			u64 stack;
+		} cores;
+	};
+};
+
+#define EVENT_LOG_MAX (PAGE_SIZE / sizeof(struct kbase_pm_event_log_event))
+
+struct kbase_pm_event_log {
+	u32 last_event;
+	struct kbase_pm_event_log_event events[EVENT_LOG_MAX];
 };
 
 /**
@@ -279,6 +333,8 @@ union kbase_pm_policy_data {
  *                               &struct kbase_pm_callback_conf
  * @callback_soft_reset: Optional callback to software reset the GPU. See
  *                       &struct kbase_pm_callback_conf
+ * @callback_hardware_reset: Optional callback to hardware reset the GPU. See
+ *                           &struct kbase_pm_callback_conf
  * @callback_power_runtime_gpu_idle: Callback invoked by Kbase when GPU has
  *                                   become idle.
  *                                   See &struct kbase_pm_callback_conf.
@@ -286,6 +342,10 @@ union kbase_pm_policy_data {
  *                                     @callback_power_runtime_gpu_idle was
  *                                     called previously.
  *                                     See &struct kbase_pm_callback_conf.
+ * @callback_power_on_sc_rails: Callback invoked to turn on the shader core
+ *                              power rails. See &struct kbase_pm_callback_conf.
+ * @callback_power_off_sc_rails: Callback invoked to turn off the shader core
+ *                               power rails. See &struct kbase_pm_callback_conf.
  * @ca_cores_enabled: Cores that are currently available
  * @mcu_state: The current state of the micro-control unit, only applicable
  *             to GPUs that have such a component
@@ -391,6 +451,7 @@ union kbase_pm_policy_data {
  *                         work function, kbase_pm_gpu_clock_control_worker.
  * @gpu_clock_control_work: work item to set GPU clock during L2 power cycle
  *                          using gpu_clock_control
+ * @event_log: data for the always-on event log
  *
  * This structure contains data for the power management framework. There is one
  * instance of this structure per device in the system.
@@ -444,8 +505,13 @@ struct kbase_pm_backend_data {
 	void (*callback_power_runtime_off)(struct kbase_device *kbdev);
 	int (*callback_power_runtime_idle)(struct kbase_device *kbdev);
 	int (*callback_soft_reset)(struct kbase_device *kbdev);
+	void (*callback_hardware_reset)(struct kbase_device *kbdev);
 	void (*callback_power_runtime_gpu_idle)(struct kbase_device *kbdev);
 	void (*callback_power_runtime_gpu_active)(struct kbase_device *kbdev);
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	void (*callback_power_on_sc_rails)(struct kbase_device *kbdev);
+	void (*callback_power_off_sc_rails)(struct kbase_device *kbdev);
+#endif
 
 	u64 ca_cores_enabled;
 
@@ -463,6 +529,11 @@ struct kbase_pm_backend_data {
 	struct mutex policy_change_lock;
 	struct workqueue_struct *core_idle_wq;
 	struct work_struct core_idle_work;
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+	struct work_struct sc_rails_on_work;
+	bool sc_power_rails_off;
+	bool sc_pwroff_safe;
+#endif
 
 #ifdef KBASE_PM_RUNTIME
 	bool gpu_sleep_supported;
@@ -496,10 +567,12 @@ struct kbase_pm_backend_data {
 	bool gpu_clock_slow_down_desired;
 	bool gpu_clock_slowed_down;
 	struct work_struct gpu_clock_control_work;
+
+	struct kbase_pm_event_log event_log;
 };
 
 #if MALI_USE_CSF
-/* CSF PM flag, signaling that the MCU CORE should be kept on */
+/* CSF PM flag, signaling that the MCU shader Core should be kept on */
 #define  CSF_DYNAMIC_PM_CORE_KEEP_ON (1 << 0)
 /* CSF PM flag, signaling no scheduler suspension on idle groups */
 #define CSF_DYNAMIC_PM_SCHED_IGNORE_IDLE (1 << 1)
