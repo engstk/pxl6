@@ -191,3 +191,5 @@ obj-$(CONFIG_INTERCONNECT)	+= interconnect/
 obj-$(CONFIG_COUNTER)		+= counter/
 obj-$(CONFIG_MOST)		+= most/
 obj-$(CONFIG_EXYNOS_BTS)        += bts/
+
+obj-$(CONFIG_SOC_GS101)		+= google-modules/
