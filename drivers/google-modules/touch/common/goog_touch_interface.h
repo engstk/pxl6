@@ -16,7 +16,7 @@
 
 #include "heatmap.h"
 #include "touch_offload.h"
-#include "uapi/input/touch_offload.h"
+#include "include/uapi/input/touch_offload.h"
 
 #define GTI_NAME "goog_touch_interface"
 #define GOOG_LOG_NAME(gti) ((gti && gti->dev) ? dev_name(gti->dev) : "GTI")

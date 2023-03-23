@@ -7,7 +7,7 @@
 #include <linux/mutex.h>
 #include <linux/completion.h>
 
-#include "uapi/input/touch_offload.h"
+#include "include/uapi/input/touch_offload.h"
 
 /* Maximum number of channels of touch data */
 #define MAX_CHANNELS 5
