@@ -11,5 +11,7 @@ EXTRA_CFLAGS=-I$(KERNEL_SRC)/../google-modules/aoc_ipc -I$(KERNEL_SRC)/../google
 KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../google-modules/aoc/Module.symvers\
 		     $(OUT_DIR)/../google-modules/aoc/alsa/Module.symvers
 
+EXTRA_CFLAGS += -I$(srctree)/$(src)/../../aoc_ipc -I$(srctree)/$(src)/.. -I$(srctree)/$(src)/../../../usb/host -I$(srctree)/$(src)/../../../../sound/usb
+
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(KBUILD_EXTRA_SYMBOLS)" $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" $(@)
