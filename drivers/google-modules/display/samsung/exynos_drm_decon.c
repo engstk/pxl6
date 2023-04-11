@@ -836,8 +836,6 @@ static void decon_atomic_flush(struct exynos_drm_crtc *exynos_crtc,
 
 	if (new_exynos_crtc_state->wb_type == EXYNOS_WB_CWB)
 		decon_reg_set_cwb_enable(decon->id, true);
-	else if (old_exynos_crtc_state->wb_type == EXYNOS_WB_CWB)
-		decon_reg_set_cwb_enable(decon->id, false);
 
 	/* if there are no dpp planes attached, enable colormap as fallback */
 	if ((new_crtc_state->plane_mask & ~exynos_crtc->rcd_plane_mask) == 0) {
@@ -1407,6 +1405,8 @@ static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
 	struct decon_device *decon = crtc->ctx;
 	struct drm_crtc_commit *commit = new_crtc_state->commit;
 	struct decon_mode *mode;
+	struct exynos_drm_crtc_state *new_exynos_crtc_state =
+					to_exynos_crtc_state(new_crtc_state);
 	int fps, recovering;
 
 	if (!new_crtc_state->active)
@@ -1452,6 +1452,9 @@ static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
 		DPU_EVENT_LOG(DPU_EVT_DECON_TRIG_MASK, decon->id, NULL);
 		decon_reg_set_trigger(decon->id, mode, DECON_TRIG_MASK);
 	}
+
+	if (new_exynos_crtc_state->wb_type == EXYNOS_WB_CWB)
+		decon_reg_set_cwb_enable(decon->id, false);
 }
 
 static const struct exynos_drm_crtc_ops decon_crtc_ops = {
