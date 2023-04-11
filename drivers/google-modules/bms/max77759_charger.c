@@ -2999,7 +2999,7 @@ done_relax:
 	__pm_relax(data->otg_fccm_wake_lock);
 }
 
-#define MAX77759_FCCM_UPPERBD_VOL 4400
+#define MAX77759_FCCM_UPPERBD_VOL 4600
 #define MAX77759_FCCM_LOWERBD_VOL 3600
 static int max77759_charger_probe(struct i2c_client *client,
 				  const struct i2c_device_id *id)

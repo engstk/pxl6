@@ -748,6 +748,17 @@ int exynos_atomic_enter_tui(void)
 			struct exynos_drm_connector_state *exynos_conn_state =
 				to_exynos_connector_state(conn_state);
 
+			/*
+			 * TODO: revert on completion of b/241837873
+			 * avoid blanked mode for panels with video operation
+			 * mode
+			 */
+			if (conn_state->crtc) {
+				decon = crtc_to_decon(conn_state->crtc);
+				if (decon->config.mode.op_mode == DECON_VIDEO_MODE)
+					continue;
+			}
+
 			exynos_conn_state->blanked_mode = true;
 		}
 	}

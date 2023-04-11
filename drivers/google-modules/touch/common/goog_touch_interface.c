@@ -3499,10 +3499,13 @@ struct goog_touch_interface *goog_touch_interface_probe(
 	}
 
 	if (gti && gti->dev) {
-		goog_init_input(gti);
 		goog_init_proc(gti);
 		goog_init_options(gti, options);
 		goog_offload_probe(gti);
+		/*
+		 * goog_init_input() needs the offload.cap initialization by goog_offload_probe().
+		 */
+		goog_init_input(gti);
 		goog_update_fw_settings(gti);
 		goog_register_tbn(gti);
 		goog_pm_probe(gti);

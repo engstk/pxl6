@@ -65,6 +65,11 @@ struct s6e3hc4_panel {
 	u32 auto_mode_vrefresh;
 	/** @force_changeable_te: force changeable TE (instead of fixed) during early exit */
 	bool force_changeable_te;
+	/**
+	 * @is_pixel_off: pixel-off command is sent to panel. Only sending normal-on or resetting
+	 *			panel can recover to normal mode after entering pixel-off state.
+	 */
+	bool is_pixel_off;
 };
 
 #define to_spanel(ctx) container_of(ctx, struct s6e3hc4_panel, base)
@@ -117,6 +122,8 @@ static const u8 display_on[] = { 0x29 };
 static const u8 sleep_in[] = { 0x10 };
 static const u8 freq_update[] = { 0xF7, 0x0F };
 static const u8 nop[] = { 0x00 };
+static const u8 pixel_off[] = { 0x22 };
+static const u8 normal_on[] = { 0x13 };
 
 static const struct exynos_dsi_cmd s6e3hc4_sleepin_cmds[] = {
 	/* SP back failure workaround on EVT */
@@ -746,14 +753,33 @@ static void s6e3hc4_write_display_mode(struct exynos_panel *ctx,
 static int s6e3hc4_set_brightness(struct exynos_panel *ctx, u16 br)
 {
 	u16 brightness;
+	struct s6e3hc4_panel *spanel = to_spanel(ctx);
 
 	if (ctx->current_mode->exynos_mode.is_lp_mode) {
 		const struct exynos_panel_funcs *funcs;
 
+		/* don't stay at pixel-off state in AOD, or black screen is possibly seen */
+		if (spanel->is_pixel_off) {
+			EXYNOS_DCS_WRITE_TABLE(ctx, normal_on);
+			spanel->is_pixel_off = false;
+		}
 		funcs = ctx->desc->exynos_panel_func;
 		if (funcs && funcs->set_binned_lp)
 			funcs->set_binned_lp(ctx, br);
 		return 0;
+	}
+
+	/* Use pixel off command instead of setting DBV 0 */
+	if (!br) {
+		if (!spanel->is_pixel_off) {
+			EXYNOS_DCS_WRITE_TABLE(ctx, pixel_off);
+			spanel->is_pixel_off = true;
+			dev_dbg(ctx->dev, "%s: pixel off instead of dbv 0\n", __func__);
+		}
+		return 0;
+	} else if (br && spanel->is_pixel_off) {
+		EXYNOS_DCS_WRITE_TABLE(ctx, normal_on);
+		spanel->is_pixel_off = false;
 	}
 
 	if (ctx->panel_rev <= PANEL_REV_EVT1 && br >= MAX_BR_HBM_EVT1) {
@@ -767,15 +793,18 @@ static int s6e3hc4_set_brightness(struct exynos_panel *ctx, u16 br)
 	return exynos_dcs_set_brightness(ctx, brightness);
 }
 
+static void s6e3hc4_sleep(const struct exynos_panel *ctx, int frames)
+{
+	const struct exynos_panel_mode *pmode = ctx->current_mode;
+	u32 vrefresh = pmode ? drm_mode_vrefresh(&pmode->mode) : 60;
+	u32 delay_us = mult_frac(1000, 1020, vrefresh) * frames;
+
+	usleep_range(delay_us, delay_us + 10);
+}
+
 static void s6e3hc4_set_nolp_mode(struct exynos_panel *ctx,
 				  const struct exynos_panel_mode *pmode)
 {
-	u32 vrefresh = drm_mode_vrefresh(&pmode->mode);
-	u32 delay_us = mult_frac(1000, 1020, vrefresh);
-
-	/* clear the brightness level */
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0x51, 0x00, 0x00);
-
 	EXYNOS_DCS_WRITE_TABLE(ctx, display_off);
 	/* AOD low mode setting off */
 	EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
@@ -786,7 +815,7 @@ static void s6e3hc4_set_nolp_mode(struct exynos_panel *ctx,
 	/* backlight control and dimming */
 	s6e3hc4_write_display_mode(ctx, &pmode->mode);
 	s6e3hc4_change_frequency(ctx, pmode);
-	usleep_range(delay_us, delay_us + 10);
+	s6e3hc4_sleep(ctx, 1);
 	EXYNOS_DCS_WRITE_TABLE(ctx, display_on);
 
 	dev_info(ctx->dev, "exit LP mode\n");
@@ -799,11 +828,18 @@ static const struct exynos_dsi_cmd s6e3hc4_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_LT(PANEL_REV_EVT1_1), 0xB0, 0x01, 0x37, 0x90),
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_LT(PANEL_REV_EVT1_1), 0x90, 0x00),
 	EXYNOS_DSI_CMD0_REV(lock_cmd_fc, PANEL_REV_LT(PANEL_REV_DVT1_1)),
+
+	EXYNOS_DSI_CMD0(unlock_cmd_f0),
+	/* VLIN1 7.9V */
+	EXYNOS_DSI_CMD_SEQ(0xB0, 0x00, 0x12, 0xB1),
+	EXYNOS_DSI_CMD_SEQ(0xB1, 0x08),
+	/* VGH 7.4V */
+	EXYNOS_DSI_CMD_SEQ(0xB0, 0x00, 0x0E, 0xF4),
+	EXYNOS_DSI_CMD_SEQ(0xF4, 0x18, 0x18, 0x18, 0x18, 0x18),
 	EXYNOS_DSI_CMD(nop, 120),
 
 	/* Enable TE*/
 	EXYNOS_DSI_CMD_SEQ(0x35),
-	EXYNOS_DSI_CMD0(unlock_cmd_f0),
 
 	/* Enable SP */
 	EXYNOS_DSI_CMD_SEQ_REV(PANEL_REV_LT(PANEL_REV_EVT1_1), 0xB0, 0x00, 0x58, 0x69),
@@ -829,6 +865,9 @@ static const struct exynos_dsi_cmd s6e3hc4_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ(0xBD, 0x00),
 
 	EXYNOS_DSI_CMD0(freq_update),
+	/* VREG 6.8V */
+	EXYNOS_DSI_CMD_SEQ(0xB0, 0x00, 0x31, 0xF4),
+	EXYNOS_DSI_CMD_SEQ(0xF4, 0x17, 0x17, 0x17, 0x17, 0x17),
 	EXYNOS_DSI_CMD0(lock_cmd_f0),
 
 	/* CASET */
@@ -863,10 +902,17 @@ static int s6e3hc4_enable(struct drm_panel *panel)
 	EXYNOS_PPS_WRITE_BUF(ctx, is_fhd ? FHD_PPS_SETTING : WQHD_PPS_SETTING);
 
 	if (needs_reset) {
-		u32 delay = 10;
+		struct s6e3hc4_panel *spanel = to_spanel(ctx);
 
-		EXYNOS_DCS_WRITE_SEQ_DELAY(ctx, delay, MIPI_DCS_EXIT_SLEEP_MODE);
+		EXYNOS_DCS_BUF_ADD(ctx, MIPI_DCS_EXIT_SLEEP_MODE);
+		/* VREG 6.4V */
+		EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
+		EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x00, 0x31, 0xF4);
+		EXYNOS_DCS_BUF_ADD(ctx, 0xF4, 0x13, 0x13, 0x13, 0x13, 0x13);
+		EXYNOS_DCS_BUF_ADD_SET_AND_FLUSH(ctx, lock_cmd_f0);
+		usleep_range(10000, 10010);
 		exynos_panel_send_cmd_set(ctx, &s6e3hc4_init_cmd_set);
+		spanel->is_pixel_off = false;
 	}
 
 	EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
@@ -881,10 +927,12 @@ static int s6e3hc4_enable(struct drm_panel *panel)
 	s6e3hc4_write_display_mode(ctx, mode); /* dimming and HBM */
 	s6e3hc4_change_frequency(ctx, pmode);
 
-	if (pmode->exynos_mode.is_lp_mode)
+	if (pmode->exynos_mode.is_lp_mode) {
 		exynos_panel_set_lp_mode(ctx, pmode);
-	else if (needs_reset || (ctx->panel_state == PANEL_STATE_BLANK))
+	} else if (needs_reset || (ctx->panel_state == PANEL_STATE_BLANK)) {
+		s6e3hc4_sleep(ctx, 1);
 		EXYNOS_DCS_WRITE_TABLE(ctx, display_on);
+	}
 
 	return 0;
 }
@@ -912,7 +960,13 @@ static int s6e3hc4_disable(struct drm_panel *panel)
 	spanel->hw_vrefresh = 60;
 	spanel->hw_idle_vrefresh = 0;
 
-	EXYNOS_DCS_WRITE_TABLE_DELAY(ctx, 20, display_off);
+	EXYNOS_DCS_WRITE_TABLE(ctx, display_off);
+	/* VREG 6.4V */
+	EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x00, 0x31, 0xF4);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xF4, 0x13, 0x13, 0x13, 0x13, 0x13);
+	EXYNOS_DCS_BUF_ADD_SET_AND_FLUSH(ctx, lock_cmd_f0);
+	usleep_range(20000, 20010);
 
 	if (ctx->panel_state == PANEL_STATE_OFF)
 		exynos_panel_send_cmd_set(ctx, &s6e3hc4_sleepin_cmd_set);
@@ -1348,6 +1402,8 @@ static int s6e3hc4_panel_probe(struct mipi_dsi_device *dsi)
 
 	spanel->base.op_hz = 120;
 	spanel->hw_vrefresh = 60;
+	spanel->is_pixel_off = false;
+
 	return exynos_panel_common_init(dsi, &spanel->base);
 }
 
