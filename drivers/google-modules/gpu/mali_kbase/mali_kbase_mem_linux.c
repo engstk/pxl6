@@ -3167,6 +3167,9 @@ void *kbase_vmap_prot(struct kbase_context *kctx, u64 gpu_addr, size_t size,
 	if (kbase_is_region_invalid_or_free(reg))
 		goto out_unlock;
 
+	if (reg->gpu_alloc->type != KBASE_MEM_TYPE_NATIVE)
+		goto out_unlock;
+
 	addr = kbase_vmap_reg(kctx, reg, gpu_addr, size, prot_request, map, 0u);
 
 out_unlock:

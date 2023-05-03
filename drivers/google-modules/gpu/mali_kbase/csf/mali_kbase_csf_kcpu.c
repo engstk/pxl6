@@ -2097,14 +2097,30 @@ int kbase_csf_kcpu_queue_enqueue(struct kbase_context *kctx,
 		return -EINVAL;
 	}
 
+	/* There might be a race between one thread trying to enqueue commands to the queue
+	 * and other thread trying to delete the same queue.
+	 * This racing could lead to use-after-free problem by enqueuing thread if
+	 * resources for the queue has already been freed by deleting thread.
+	 *
+	 * To prevent the issue, two mutexes are acquired/release asymmetrically as follows.
+	 *
+	 * Lock A (kctx mutex)
+	 * Lock B (queue mutex)
+	 * Unlock A
+	 * Unlock B
+	 *
+	 * With the kctx mutex being held, enqueuing thread will check the queue
+	 * and will return error code if the queue had already been deleted.
+	 */
 	mutex_lock(&kctx->csf.kcpu_queues.lock);
 	queue = kctx->csf.kcpu_queues.array[enq->id];
-	mutex_unlock(&kctx->csf.kcpu_queues.lock);
-
-	if (queue == NULL)
+	if (queue == NULL) {
+		dev_dbg(kctx->kbdev->dev, "Invalid KCPU queue (id:%u)", enq->id);
+		mutex_unlock(&kctx->csf.kcpu_queues.lock);
 		return -EINVAL;
-
+	}
 	mutex_lock(&queue->lock);
+	mutex_unlock(&kctx->csf.kcpu_queues.lock);
 
 	if (kcpu_queue_get_space(queue) < enq->nr_commands) {
 		ret = -EBUSY;
