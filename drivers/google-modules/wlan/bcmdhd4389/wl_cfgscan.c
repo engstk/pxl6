@@ -6519,7 +6519,8 @@ bool wl_check_active_2g_chan(struct bcm_cfg80211 *cfg, drv_acs_params_t *paramet
 #ifdef WL_CELLULAR_CHAN_AVOID
 	if (wl_cellavoid_mandatory_isset(cfg->cellavoid_info, NL80211_IFTYPE_AP) &&
 		!wl_cellavoid_is_safe(cfg->cellavoid_info, sta_chanspec)) {
-		WL_INFORM_MEM(("Not allow unsafe channel and mandatory chspec:0x%x\n",
+		WL_INFORM_MEM((
+			"Not allow unsafe channel and mandatory chspec:0x%x\n",
 			sta_chanspec));
 		goto exit;
 	}
@@ -7045,11 +7046,14 @@ wl_acs_check_scc(struct bcm_cfg80211 *cfg, drv_acs_params_t *parameter,
 	 */
 	if (scc == FALSE && CHSPEC_IS2G(sta_chanspec)) {
 #ifdef WL_CELLULAR_CHAN_AVOID
-		scc = wl_cellavoid_operation_allowed(cfg->cellavoid_info,
-			sta_chanspec, NL80211_IFTYPE_AP);
-		if (scc == FALSE) {
-			WL_INFORM_MEM(("Not allow unsafe channel and mandatory chspec:0x%x\n",
-			sta_chanspec));
+		if (!wl_is_chanspec_restricted(cfg, sta_chanspec)) {
+			scc = wl_cellavoid_operation_allowed(cfg->cellavoid_info,
+				sta_chanspec, NL80211_IFTYPE_AP);
+			if (scc == FALSE) {
+				WL_INFORM_MEM((
+				"Not allow unsafe channel and mandatory chspec:0x%x\n",
+				sta_chanspec));
+			}
 		}
 #endif /* WL_CELLULAR_CHAN_AVOID */
 	}
@@ -7129,8 +7133,7 @@ wl_handle_acs_concurrency_cases(struct bcm_cfg80211 *cfg, drv_acs_params_t *para
 		bool scc_case = false;
 		u32 sta_band = CHSPEC_TO_WLC_BAND(chspec);
 		if (sta_band == WLC_BAND_2G) {
-			if (wl_is_chanspec_restricted(cfg, chspec) ||
-				(parameter->freq_bands & (WLC_BAND_5G | WLC_BAND_6G))) {
+			if (parameter->freq_bands & (WLC_BAND_5G | WLC_BAND_6G)) {
 				/* Remove the 2g band from incoming ACS bands */
 				parameter->freq_bands &= ~WLC_BAND_2G;
 			} else if (wl_acs_check_scc(cfg, parameter, chspec, qty, pList)) {

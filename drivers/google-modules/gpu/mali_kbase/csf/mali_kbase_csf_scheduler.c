@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2018-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -2025,15 +2025,28 @@ static bool evaluate_sync_update(struct kbase_queue *queue)
 	struct kbase_vmap_struct *mapping;
 	bool updated = false;
 	u32 *sync_ptr;
+	u32 sync_wait_size;
+	u32 sync_wait_align_mask;
 	u32 sync_wait_cond;
 	u32 sync_current_val;
 	struct kbase_device *kbdev;
+	bool sync_wait_align_valid = false;
 
 	if (WARN_ON(!queue))
 		return false;
 
 	kbdev = queue->kctx->kbdev;
 	lockdep_assert_held(&kbdev->csf.scheduler.lock);
+
+	sync_wait_size = CS_STATUS_WAIT_SYNC_WAIT_SIZE_GET(queue->status_wait);
+	sync_wait_align_mask =
+		(sync_wait_size == 0 ? BASEP_EVENT32_ALIGN_BYTES : BASEP_EVENT64_ALIGN_BYTES) - 1;
+	sync_wait_align_valid = ((uintptr_t)queue->sync_ptr & sync_wait_align_mask) == 0;
+	if (!sync_wait_align_valid) {
+		dev_dbg(queue->kctx->kbdev->dev, "sync memory VA 0x%016llX is misaligned",
+			queue->sync_ptr);
+		goto out;
+	}
 
 	sync_ptr = kbase_phy_alloc_mapping_get(queue->kctx, queue->sync_ptr,
 					&mapping);
@@ -5688,6 +5701,14 @@ static int wait_csg_slots_suspend(struct kbase_device *kbdev,
 		}
 	}
 
+	if (err == -ETIMEDOUT) {
+		//TODO: should introduce SSCD report if this happens.
+		kbase_gpu_timeout_debug_message(kbdev);
+		dev_warn(kbdev->dev, "[%llu] Firmware ping %d",
+				kbase_backend_get_cycle_cnt(kbdev),
+				kbase_csf_firmware_ping_wait(kbdev));
+	}
+
 	return err;
 }
 
@@ -5729,6 +5750,11 @@ static int suspend_active_queue_groups_on_reset(struct kbase_device *kbdev)
 	if (ret) {
 		dev_warn(kbdev->dev, "Timeout waiting for CSG slots to suspend before reset, slot_mask: 0x%*pb\n",
 			 kbdev->csf.global_iface.group_num, slot_mask);
+		//TODO: should introduce SSCD report if this happens.
+		kbase_gpu_timeout_debug_message(kbdev);
+		dev_warn(kbdev->dev, "[%llu] Firmware ping %d",
+				kbase_backend_get_cycle_cnt(kbdev),
+				kbase_csf_firmware_ping_wait(kbdev));
 	}
 
 	/* Need to flush the GPU cache to ensure suspend buffer

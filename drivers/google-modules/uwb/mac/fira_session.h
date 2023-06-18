@@ -81,6 +81,10 @@ struct fira_controlee {
 	 */
 	enum fira_controlee_state state;
 	/**
+	 * @range_data_ntf_status: range_data_ntf status of the controlee.
+	 */
+	enum fira_range_data_ntf_status range_data_ntf_status;
+	/**
 	 * @entry: Entry in list of controlees.
 	 */
 	struct list_head entry;
@@ -154,8 +158,12 @@ struct fira_session_params {
 	/* Misc */
 	enum fira_sts_length sts_length;
 	enum fira_range_data_ntf_config range_data_ntf_config;
-	u32 range_data_ntf_proximity_near_mm;
-	u32 range_data_ntf_proximity_far_mm;
+	u32 range_data_ntf_proximity_near_rctu;
+	u32 range_data_ntf_proximity_far_rctu;
+	s16 range_data_ntf_lower_bound_aoa_azimuth_2pi;
+	s16 range_data_ntf_upper_bound_aoa_azimuth_2pi;
+	s16 range_data_ntf_lower_bound_aoa_elevation_2pi;
+	s16 range_data_ntf_upper_bound_aoa_elevation_2pi;
 };
 
 /**
@@ -282,6 +290,11 @@ struct fira_session {
 		 * is present in measurement report frame.
 		 */
 		bool next_round_index_valid;
+		/**
+		* @ctlr_range_data_ntf_status: range_data_ntf status of the
+		* controller.
+		*/
+		enum fira_range_data_ntf_status ctlr_range_data_ntf_status;
 	} controlee;
 	/**
 	 * @controller: Group of persistent variable(s) used when session
@@ -412,7 +425,7 @@ struct fira_report_info {
 	 * @ranging_data: Base address of ranging data per peer, or null
 	 * pointer.
 	 */
-	const struct fira_ranging_info *ranging_data;
+	struct fira_ranging_info *ranging_data;
 	/**
 	 * @n_ranging_data: Number of entry in ranging_data above.
 	 */
@@ -505,6 +518,24 @@ int fira_session_del_controlees(struct fira_session *session,
 				struct list_head *controlees, bool async);
 
 /**
+ * fira_session_get_controlee() - Get controlee info from short address.
+ * @session: Session.
+ * @short_addr: Short address of the controlee.
+ *
+ * Return: The corresponding controlee object or NULL.
+ */
+static inline struct fira_controlee *
+fira_session_get_controlee(struct fira_session *session, u16 short_addr)
+{
+        struct fira_controlee *controlee;
+        list_for_each_entry (controlee, &session->current_controlees, entry) {
+                if (controlee->short_addr == short_addr)
+                        return controlee;
+        }
+        return NULL;
+}
+
+/**
  * fira_session_stop_controlees() - Stop controlees.
  * @session: Session.
  */
@@ -590,13 +621,23 @@ fira_session_get_rx_ant_set(const struct fira_session *session,
 }
 
 /**
+ * fira_session_set_range_data_ntf_status() - Update range_data_ntf_status
+ * for a given ranging.
+ * @session: FiRa session.
+ * @ranging_info: ranging data to be evaluated.
+ */
+void fira_session_set_range_data_ntf_status(
+	const struct fira_session *session,
+	struct fira_ranging_info *ranging_info);
+
+/**
  * fira_session_report() - Report state change and ranging result for a session.
  * @local: FiRa context.
  * @session: Session to report.
  * @report_info: report information to exploit for the reporting.
  */
 void fira_session_report(struct fira_local *local, struct fira_session *session,
-			 const struct fira_report_info *report_info);
+			 struct fira_report_info *report_info);
 
 /**
  * fira_session_controlee_active() - Return whether the controlee is currently active.

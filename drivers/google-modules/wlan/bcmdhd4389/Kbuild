@@ -947,6 +947,9 @@ else ifneq ($(CONFIG_ARCH_HISI),)
 	# Allow wl event forwarding as network packet
 	DHDCFLAGS += -DWL_EVENT_ENAB
 
+	# Enable memdump for logset beyond range only internal builds
+	DHDCFLAGS += -DDHD_LOGSET_BEYOND_MEMDUMP
+
 ifneq ($(CONFIG_BCMDHD_PCIE),)
 	# LB RXP Flow control to avoid OOM
 	DHDCFLAGS += -DLB_RXP_STOP_THR=200 -DLB_RXP_STRT_THR=199

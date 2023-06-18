@@ -669,10 +669,9 @@ int exynos_atomic_enter_tui(void)
 	struct drm_plane *plane;
 	struct drm_crtc_state *crtc_state;
 	struct drm_crtc *crtc;
-	struct drm_connector *conn;
-	struct drm_connector_state *conn_state;
 	u32 tui_crtc_mask = 0;
 	struct exynos_drm_private *private = drm_to_exynos_dev(dev);
+	struct exynos_drm_connector_state *exynos_conn_state;
 
 	pr_debug("%s +\n", __func__);
 
@@ -701,8 +700,6 @@ int exynos_atomic_enter_tui(void)
 	state->acquire_ctx = &ctx;
 
 	drm_for_each_crtc(crtc, dev) {
-		struct exynos_drm_crtc_state *exynos_crtc_state;
-
 		crtc_state = drm_atomic_get_crtc_state(state, crtc);
 		if (IS_ERR(crtc_state)) {
 			ret = PTR_ERR(crtc_state);
@@ -712,14 +709,10 @@ int exynos_atomic_enter_tui(void)
 		if (!crtc_state->enable || !crtc_state->active)
 			continue;
 
-		exynos_crtc_state = to_exynos_crtc_state(crtc_state);
+		decon = crtc_to_decon(crtc);
+		/* get an extra ref count while in TUI, to keep power domain active */
+		pm_runtime_get_sync(decon->dev);
 
-		exynos_crtc_state->bypass = true;
-		/*
-		 * set crtc in self refresh, this will keep power/regulators
-		 * enabled but disable everything else
-		 */
-		crtc_state->self_refresh_active = true;
 		crtc_state->active = false;
 		tui_crtc_mask |= drm_crtc_mask(crtc);
 
@@ -730,37 +723,25 @@ int exynos_atomic_enter_tui(void)
 		ret = drm_atomic_add_affected_connectors(state, crtc);
 		if (ret)
 			goto err;
+
+		exynos_conn_state = crtc_get_exynos_connector_state(state, crtc_state);
+		if (exynos_conn_state) {
+			exynos_conn_state->blanked_mode = true;
+
+			if (exynos_conn_state->base.self_refresh_aware) {
+				struct exynos_drm_crtc_state *exynos_crtc_state =
+					to_exynos_crtc_state(crtc_state);
+
+				exynos_crtc_state->bypass = true;
+				crtc_state->self_refresh_active = true;
+			}
+		}
 	}
 
 	if (!tui_crtc_mask) {
 		pr_err("%s:unable to enter tui without any active crtcs\n", __func__);
 		ret = -EINVAL;
 		goto err;
-	}
-
-	for_each_new_connector_in_state(state, conn, conn_state, i) {
-		if (!conn_state->self_refresh_aware &&
-		    (conn->connector_type != DRM_MODE_CONNECTOR_WRITEBACK)) {
-			pr_warn("%s: %s doesn't support self refresh\n", __func__, conn->name);
-			goto err;
-		}
-		if (is_exynos_drm_connector(conn)) {
-			struct exynos_drm_connector_state *exynos_conn_state =
-				to_exynos_connector_state(conn_state);
-
-			/*
-			 * TODO: revert on completion of b/241837873
-			 * avoid blanked mode for panels with video operation
-			 * mode
-			 */
-			if (conn_state->crtc) {
-				decon = crtc_to_decon(conn_state->crtc);
-				if (decon->config.mode.op_mode == DECON_VIDEO_MODE)
-					continue;
-			}
-
-			exynos_conn_state->blanked_mode = true;
-		}
 	}
 
 	for_each_new_plane_in_state(state, plane, plane_state, i) {
@@ -793,6 +774,10 @@ err_dup:
 	drm_for_each_crtc(crtc, dev) {
 		decon = crtc_to_decon(crtc);
 		hibernation_unblock_enter(decon->hibernation);
+
+		/* remove pm refs on failure */
+		if (ret && (tui_crtc_mask & drm_crtc_mask(crtc)))
+			pm_runtime_put_sync(decon->dev);
 	}
 
 	return ret;
@@ -807,6 +792,9 @@ int exynos_atomic_exit_tui(void)
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_modeset_acquire_ctx ctx;
 	struct exynos_drm_private *private = drm_to_exynos_dev(dev);
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *crtc_state;
+	int i;
 
 	pr_debug("%s +\n", __func__);
 
@@ -832,6 +820,14 @@ int exynos_atomic_exit_tui(void)
 		pr_err("%s: failed to atomic commit suspend_state(0x%x)\n", __func__, ret);
 	else
 		mode_config->suspend_state = NULL;
+
+	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
+		if (crtc_state->active) {
+			decon = crtc_to_decon(crtc);
+			/* drop the ref taken during enter tui */
+			pm_runtime_put_sync(decon->dev);
+		}
+	}
 
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
 	if (!ret)

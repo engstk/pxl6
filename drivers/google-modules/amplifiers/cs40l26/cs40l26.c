@@ -3258,8 +3258,14 @@ static int cs40l26_gpio_config(struct cs40l26_private *cs40l26)
 			CS40L26_IRQ1_GPIO1_RISE));
 
 	if (mask_gpio)
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+		/* Extend the GPIO trigger mask to ignore GPIO1 falling edge */
+		val = (u32) GENMASK(CS40L26_IRQ1_GPIO4_FALL,
+				CS40L26_IRQ1_GPIO1_FALL);
+#else
 		val = (u32) GENMASK(CS40L26_IRQ1_GPIO4_FALL,
 				CS40L26_IRQ1_GPIO2_RISE);
+#endif
 	else
 		val = 0;
 

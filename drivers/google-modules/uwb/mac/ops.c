@@ -24,9 +24,12 @@
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <net/rtnetlink.h>
+#include <linux/jiffies.h>
 
 #include "mcps802154_i.h"
 #include "llhw-ops.h"
+
+#define DW3000_MAX_STOP_WAIT 10000
 
 static int mcps802154_start(struct ieee802154_hw *hw)
 {
@@ -55,6 +58,7 @@ static int mcps802154_start(struct ieee802154_hw *hw)
 static void mcps802154_stop(struct ieee802154_hw *hw)
 {
 	struct mcps802154_local *local = hw->priv;
+	int rc;
 
 	ASSERT_RTNL();
 	WARN_ON(!local->started);
@@ -63,7 +67,9 @@ static void mcps802154_stop(struct ieee802154_hw *hw)
 	mcps802154_ca_stop(local);
 	mutex_unlock(&local->fsm_lock);
 
-	wait_event(local->wq, !local->started);
+	rc = wait_event_timeout(local->wq, !local->started, msecs_to_jiffies(DW3000_MAX_STOP_WAIT));
+	if (!rc)
+		pr_err("%s timeout elapsed, event !local->started = false\n", __func__);
 }
 
 static int mcps802154_xmit_async(struct ieee802154_hw *hw, struct sk_buff *skb)

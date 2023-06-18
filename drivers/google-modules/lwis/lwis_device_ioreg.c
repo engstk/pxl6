@@ -173,54 +173,12 @@ error_probe:
 static int lwis_ioreg_device_suspend(struct device *dev)
 {
 	struct lwis_device *lwis_dev = dev_get_drvdata(dev);
-	struct lwis_client *lwis_client, *n;
-	int ret = 0;
 
-	if (lwis_dev->enabled == 0) {
-		return ret;
+	if (lwis_dev->enabled != 0) {
+		dev_warn(lwis_dev->dev, "Can't suspend because %s is in use!\n", lwis_dev->name);
+		return -EBUSY;
 	}
 
-	/* Send an error event to userspace to handle the system suspend */
-	lwis_device_error_event_emit(lwis_dev, LWIS_ERROR_EVENT_ID_SYSTEM_SUSPEND,
-				     /*payload=*/NULL, /*payload_size=*/0);
-
-	list_for_each_entry_safe (lwis_client, n, &lwis_dev->clients, node) {
-		if (!lwis_client->is_enabled) {
-			continue;
-		}
-
-		/* Clear event states for this client */
-		lwis_client_event_states_clear(lwis_client);
-
-		/* Flush all periodic io to complete */
-		ret = lwis_periodic_io_client_flush(lwis_client);
-		if (ret) {
-			dev_err(lwis_dev->dev,
-				"Failed to wait for in-process periodic io to complete\n");
-		}
-
-		/* Flush all pending transactions */
-		ret = lwis_transaction_client_flush(lwis_client);
-		if (ret) {
-			dev_err(lwis_dev->dev, "Failed to flush pending transactions\n");
-		}
-
-		/* Run cleanup transactions. */
-		lwis_transaction_client_cleanup(lwis_client);
-
-		lwis_client->is_enabled = false;
-	}
-
-	mutex_lock(&lwis_dev->client_lock);
-	ret = lwis_dev_power_down_locked(lwis_dev);
-	if (ret < 0) {
-		dev_err(lwis_dev->dev, "Failed to power down device\n");
-	}
-
-	lwis_device_event_states_clear_locked(lwis_dev);
-	lwis_dev->enabled = 0;
-	dev_warn(lwis_dev->dev, "Device disabled when system suspend\n");
-	mutex_unlock(&lwis_dev->client_lock);
 	return 0;
 }
 

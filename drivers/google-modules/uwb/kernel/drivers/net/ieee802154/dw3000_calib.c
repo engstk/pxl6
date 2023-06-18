@@ -312,13 +312,17 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 
 	ant_rf1 = config->ant[0];
 	ant_rf2 = config->ant[1];
-	/* At least, RF1 port must have a valid antenna */
-	if (ant_rf1 < 0)
+	if (ant_rf1 < 0 && ant_rf2 < 0) {
 		/* Not configured yet, does nothing. */
 		return 0;
-	if (ant_rf1 >= ANTMAX)
+	}
+	/* Since both calibs can be used at this time, both needs to be safe.  */
+	if (ant_rf1 >= ANTMAX || ant_rf2 >= ANTMAX)
 		return -1;
-	ant_calib = &dw->calib_data.ant[ant_rf1];
+	if (ant_rf1 >= 0)
+		ant_calib = &dw->calib_data.ant[ant_rf1];
+	else
+		ant_calib = &dw->calib_data.ant[ant_rf2];
 
 	/* Convert config into index of array. */
 	chanidx = config->chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :
@@ -345,16 +349,16 @@ int dw3000_calib_update_config(struct dw3000 *dw)
 	/* Early exit if RF2 isn't configured yet. */
 	if (ant_rf2 < 0)
 		return 0;
-	if (ant_rf2 >= ANTMAX)
-		return -EINVAL;
-	/* RF2 port has a valid antenna, so antpair can be used */
-	antpair = ant_rf2 > ant_rf1 ? ANTPAIR_IDX(ant_rf1, ant_rf2) :
-				      ANTPAIR_IDX(ant_rf2, ant_rf1);
-	antpair_calib = &dw->calib_data.antpair[antpair];
-	/* Update PDOA offset */
-	config->pdoaOffset = antpair_calib->ch[chanidx].pdoa_offset;
-	config->pdoaLut = &antpair_calib->ch[chanidx].pdoa_lut;
+	if (ant_rf1 >= 0 && ant_rf2 >= 0) {
+		/* RF2 and RF1 port has a valid antenna, so antpair can be used */
+		antpair = ant_rf2 > ant_rf1 ? ANTPAIR_IDX(ant_rf1, ant_rf2) :
+					      ANTPAIR_IDX(ant_rf2, ant_rf1);
 
+		antpair_calib = &dw->calib_data.antpair[antpair];
+		/* Update PDOA offset */
+		config->pdoaOffset = antpair_calib->ch[chanidx].pdoa_offset;
+		config->pdoaLut = &antpair_calib->ch[chanidx].pdoa_lut;
+	}
 	/* Smart TX power */
 	/* When deactivated, reset register to default value (if change occurs
 	   while already started) */

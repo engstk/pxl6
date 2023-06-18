@@ -86,11 +86,11 @@ tx_rmarker_offset(struct dw3000 *dw,
 		return 0;
 	}
 
+	ant_calib = &dw->calib_data.ant[ant_idx1];
 	/* Current configured ant_id. */
-	if (ant_idx1 == config->ant[0])
+	if (ant_idx1 == config->ant[ant_calib->port])
 		return config->rmarkerOffset;
 
-	ant_calib = &dw->calib_data.ant[ant_idx1];
 
 	chanidx = chan == 9 ? DW3000_CALIBRATION_CHANNEL_9 :
 			      DW3000_CALIBRATION_CHANNEL_5;

@@ -90,10 +90,6 @@ static struct cal_regs_desc regs_desc[REGS_DSIM_TYPE_MAX][MAX_DSI_CNT];
 #define PLL_LOCK_CNT_MARGIN		(PLL_LOCK_CNT_MUL *	\
 					PLL_LOCK_CNT_MARGIN_RATIO / 100)
 
-#if !defined(CONFIG_BOARD_EMULATOR)
-static DEFINE_MUTEX(dphy_lock);
-#endif
-
 static const u32 DSIM_PHY_BIAS_CON_VAL[] = {
 	0x00000010,
 	0x00000110,
@@ -757,6 +753,13 @@ static void dsim_reg_set_pll(u32 id, u32 en)
 	dsim_phy_write_mask(id, DSIM_PHY_PLL_CON0, val, DSIM_PHY_PLL_EN_MASK);
 }
 
+static bool dsim_reg_get_pll_en(u32 id)
+{
+	u32 val = dsim_phy_read(id, DSIM_PHY_PLL_CON0);
+
+	return !!(val & DSIM_PHY_PLL_EN_MASK);
+}
+
 bool dsim_reg_is_pll_stable(u32 id)
 {
 	u32 val, pll_lock;
@@ -776,7 +779,11 @@ static int dsim_reg_enable_pll(u32 id, u32 en)
 		dsim_reg_clear_int(id, DSIM_INTSRC_PLL_STABLE);
 
 	dsim_reg_set_pll(id, en);
-
+	if (en ^ dsim_reg_get_pll_en(id)) {
+		WARN(1, "dsim%u: PLL_EN is not %s\n",
+				id, en ? "enable" : "disable");
+		return -EINVAL;
+	}
 	ret = readl_poll_timeout_atomic(
 			dphy_regs_desc(id)->regs + DSIM_PHY_PLL_STAT0,
 			val, en == DSIM_PHY_PLL_LOCK_GET(val), 10, 2000);
@@ -2088,13 +2095,14 @@ void dsim_reg_init(u32 id, struct dsim_reg_config *config,
 	dsim_reg_enable_word_clock(id, 1);
 
 #if !defined(CONFIG_BOARD_EMULATOR)
-	mutex_lock(&dphy_lock);
 	/* Enable DPHY reset : DPHY reset start */
 	dpu_sysreg_dphy_reset(id, 0);
+#endif
+
+#if !defined(CONFIG_BOARD_EMULATOR)
 	dsim_reg_set_clocks(id, config, clks, 1);
 	dsim_reg_set_lanes_dphy(id, lanes, true);
 	dpu_sysreg_dphy_reset(id, 1); /* Release DPHY reset */
-	mutex_unlock(&dphy_lock);
 #endif
 
 	dsim_reg_set_link_clock(id, 1);	/* Selection to word clock */

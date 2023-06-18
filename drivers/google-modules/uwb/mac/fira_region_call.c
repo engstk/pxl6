@@ -130,11 +130,27 @@ static const struct nla_policy fira_session_param_nla_policy[FIRA_SESSION_PARAM_
 	[FIRA_SESSION_PARAM_ATTR_STS_LENGTH] =
 		NLA_POLICY_MAX(NLA_U8, FIRA_STS_LENGTH_128),
 	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_CONFIG] =
-		NLA_POLICY_MAX(NLA_U8, FIRA_RANGE_DATA_NTF_PROXIMITY),
-	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR] =
+		NLA_POLICY_MAX(NLA_U8, FIRA_RANGE_DATA_NTF_PROXIMITY_AND_AOA_CROSSING),
+	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR_MM] =
 		{ .type = NLA_U32 },
-	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR] =
+	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR_MM] =
 		{ .type = NLA_U32 },
+	[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI] =
+                NLA_POLICY_RANGE(NLA_S16,
+                                 FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI_MIN,
+                                 FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI_MAX),
+        [FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI] =
+                NLA_POLICY_RANGE(NLA_S16,
+                                 FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI_MIN,
+                                 FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI_MAX),
+        [FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI] =
+                NLA_POLICY_RANGE(NLA_S16,
+                                 FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI_MIN,
+                                 FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI_MAX),
+        [FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI] =
+                NLA_POLICY_RANGE(NLA_S16,
+                                 FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI_MIN,
+                                 FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI_MAX),
 };
 
 /**
@@ -373,35 +389,6 @@ static int fira_session_params_set_measurement_sequence(
 }
 
 /**
- * check_parameter_proximity_range() - Check proximity range concistency.
- * @params: Current session parameters.
- * @set_attrs: Updated session parameters.
- *
- * Return: 0 or error.
- */
-static inline int
-check_parameter_proximity_range(const struct fira_session_params *params,
-				struct nlattr *const *set_attrs)
-{
-	uint32_t proximity_near = params->range_data_ntf_proximity_near_mm;
-	uint32_t proximity_far = params->range_data_ntf_proximity_far_mm;
-	const struct nlattr *near_attr =
-		set_attrs[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR];
-	const struct nlattr *far_attr =
-		set_attrs[FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR];
-	if (near_attr) {
-		proximity_near = nla_get_u32(near_attr);
-	}
-	if (far_attr) {
-		proximity_far = nla_get_u32(far_attr);
-	}
-	if (proximity_near > proximity_far) {
-		return -ERANGE;
-	}
-	return 0;
-}
-
-/**
  * fira_session_set_parameters() - Set FiRa session parameters.
  * @local: FiRa context.
  * @session_id: FiRa session id.
@@ -432,10 +419,6 @@ static int fira_session_set_parameters(struct fira_local *local, u32 session_id,
 	if (r)
 		return r;
 	/* Check attribute validity. */
-	r = check_parameter_proximity_range(&session->params, attrs);
-	if (r)
-		return r;
-
 	if (attrs[FIRA_SESSION_PARAM_ATTR_MEASUREMENT_SEQUENCE]) {
 		r = fira_session_params_set_measurement_sequence(
 			attrs[FIRA_SESSION_PARAM_ATTR_MEASUREMENT_SEQUENCE],
@@ -542,10 +525,18 @@ static int fira_session_set_parameters(struct fira_local *local, u32 session_id,
 	/* Misc */
 	P(STS_LENGTH, sts_length, u8, x);
 	P(RANGE_DATA_NTF_CONFIG, range_data_ntf_config, u8, x);
-	P(RANGE_DATA_NTF_PROXIMITY_NEAR, range_data_ntf_proximity_near_mm, u32,
-	  x);
-	P(RANGE_DATA_NTF_PROXIMITY_FAR, range_data_ntf_proximity_far_mm, u32,
-	  x);
+	P(RANGE_DATA_NTF_PROXIMITY_NEAR_MM, range_data_ntf_proximity_near_rctu,
+						u32, fira_mm_to_rctu(local, x));
+	P(RANGE_DATA_NTF_PROXIMITY_FAR_MM, range_data_ntf_proximity_far_rctu,
+						u32, fira_mm_to_rctu(local, x));
+	P(RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI,
+			range_data_ntf_lower_bound_aoa_azimuth_2pi, s16, x);
+	P(RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI,
+			range_data_ntf_upper_bound_aoa_azimuth_2pi, s16, x);
+	P(RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI,
+			range_data_ntf_lower_bound_aoa_elevation_2pi, s16, x);
+	P(RANGE_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI,
+			range_data_ntf_upper_bound_aoa_elevation_2pi, s16, x);
 #undef PMEMNCPY
 #undef PMEMCPY
 #undef P
@@ -779,10 +770,18 @@ static int fira_session_get_parameters(struct fira_local *local, u32 session_id)
 	/* Misc */
 	P(STS_LENGTH, sts_length, u8, x);
 	P(RANGE_DATA_NTF_CONFIG, range_data_ntf_config, u8, x);
-	P(RANGE_DATA_NTF_PROXIMITY_NEAR, range_data_ntf_proximity_near_mm, u32,
-	  x);
-	P(RANGE_DATA_NTF_PROXIMITY_FAR, range_data_ntf_proximity_far_mm, u32,
-	  x);
+	P(RANGE_DATA_NTF_PROXIMITY_NEAR_MM, range_data_ntf_proximity_near_rctu,
+	  u32, fira_rctu_to_mm((s64)local->llhw->dtu_freq_hz * local->llhw->dtu_rctu, x));
+	P(RANGE_DATA_NTF_PROXIMITY_FAR_MM, range_data_ntf_proximity_far_rctu,
+	  u32, fira_rctu_to_mm((s64)local->llhw->dtu_freq_hz * local->llhw->dtu_rctu, x));
+	P(RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI,
+	  range_data_ntf_lower_bound_aoa_azimuth_2pi, s16, x);
+	P(RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI,
+	  range_data_ntf_upper_bound_aoa_azimuth_2pi, s16, x);
+	P(RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI,
+	  range_data_ntf_lower_bound_aoa_elevation_2pi, s16, x);
+	P(RANGE_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI,
+	  range_data_ntf_upper_bound_aoa_elevation_2pi, s16, x);
 #undef P
 #undef PMEMCPY
 
@@ -878,6 +877,7 @@ static int fira_manage_controlees(struct fira_local *local,
 		} else {
 			controlee->sub_session = false;
 		}
+		controlee->range_data_ntf_status = FIRA_RANGE_DATA_NTF_NONE;
 		controlee->state = FIRA_CONTROLEE_STATE_RUNNING;
 		/* Check and reject a duplication of short_addr. */
 		list_for_each_entry (tmp_controlee, &controlees, entry) {

@@ -6584,11 +6584,15 @@ wl_handle_assoc_hints(struct bcm_cfg80211 *cfg, struct net_device *dev,
 		WL_DBG(("fw_ap_select:%d skip_hints:%d\n", fw_ap_select, skip_hints));
 #endif /* WL_SKIP_CONNECT_HINTS */
 
+		if (IS_P2P_GC(dev->ieee80211_ptr)) {
+			skip_hints = false;
+		}
+
 		/* Use bssid_hint if hints are allowed and if its unicast addr */
 		if (!skip_hints && sme->bssid_hint && !ETHER_ISBCAST(sme->bssid_hint)) {
 			WL_INFORM_MEM(("bssid_hint "MACDBG" \n", MAC2STRDBG(sme->bssid_hint)));
 			info->targeted_join = true;
-			if (cfg->join_iovar_ver) {
+			if (cfg->join_iovar_ver && IS_STA_IFACE(ndev_to_wdev(dev))) {
 				/* Firmware supports bssid_hint feature */
 				info->bssid_hint = true;
 			}

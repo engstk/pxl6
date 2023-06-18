@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2018-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -579,6 +579,13 @@
 #define CS_STATUS_WAIT_PROTM_PEND_SET(reg_val, value) \
 	(((reg_val) & ~CS_STATUS_WAIT_PROTM_PEND_MASK) |  \
 	 (((value) << CS_STATUS_WAIT_PROTM_PEND_SHIFT) & CS_STATUS_WAIT_PROTM_PEND_MASK))
+#define CS_STATUS_WAIT_SYNC_WAIT_SIZE_SHIFT 30
+#define CS_STATUS_WAIT_SYNC_WAIT_SIZE_MASK (0x1 << CS_STATUS_WAIT_SYNC_WAIT_SIZE_SHIFT)
+#define CS_STATUS_WAIT_SYNC_WAIT_SIZE_GET(reg_val)                                                 \
+	(((reg_val)&CS_STATUS_WAIT_SYNC_WAIT_SIZE_MASK) >> CS_STATUS_WAIT_SYNC_WAIT_SIZE_SHIFT)
+#define CS_STATUS_WAIT_SYNC_WAIT_SIZE_SET(reg_val, value)                                          \
+	(((reg_val) & ~CS_STATUS_WAIT_SYNC_WAIT_SIZE_MASK) |                                       \
+	 (((value) << CS_STATUS_WAIT_SYNC_WAIT_SIZE_SHIFT) & CS_STATUS_WAIT_SYNC_WAIT_SIZE_MASK))
 #define CS_STATUS_WAIT_SYNC_WAIT_SHIFT 31
 #define CS_STATUS_WAIT_SYNC_WAIT_MASK (0x1 << CS_STATUS_WAIT_SYNC_WAIT_SHIFT)
 #define CS_STATUS_WAIT_SYNC_WAIT_GET(reg_val) \

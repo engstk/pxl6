@@ -28,6 +28,52 @@
 #include "exynos_drm_decon.h"
 #include "exynos_drm_recovery.h"
 
+static struct drm_atomic_state *_duplicate_active_crtc_state(struct drm_crtc *crtc,
+							     struct drm_modeset_acquire_ctx *ctx)
+{
+	struct drm_device *dev = crtc->dev;
+	struct drm_atomic_state *state;
+	struct drm_crtc_state *crtc_state;
+	int err;
+
+	state = drm_atomic_state_alloc(dev);
+	if (!state)
+		return ERR_PTR(-ENOMEM);
+
+	state->acquire_ctx = ctx;
+
+	crtc_state = drm_atomic_get_crtc_state(state, crtc);
+	if (IS_ERR(crtc_state)) {
+		err = PTR_ERR(crtc_state);
+		goto free_state;
+	}
+
+	if (!crtc_state->active) {
+		pr_warn("crtc[%s]: skipping duplication of inactive crtc state\n", crtc->name);
+		err = -EINVAL;
+		goto free_state;
+	}
+
+	err = drm_atomic_add_affected_planes(state, crtc);
+	if (err)
+		goto free_state;
+
+	err = drm_atomic_add_affected_connectors(state, crtc);
+	if (err)
+		goto free_state;
+
+	/* clear the acquire context so that it isn't accidentally reused */
+	state->acquire_ctx = NULL;
+
+free_state:
+	if (err < 0) {
+		drm_atomic_state_put(state);
+		state = ERR_PTR(err);
+	}
+
+	return state;
+}
+
 static void exynos_recovery_handler(struct work_struct *work)
 {
 	struct exynos_recovery *recovery = container_of(work,
@@ -49,7 +95,7 @@ static void exynos_recovery_handler(struct work_struct *work)
 
 	drm_modeset_acquire_init(&ctx, 0);
 
-	rcv_state = drm_atomic_helper_duplicate_state(dev, &ctx);
+	rcv_state = _duplicate_active_crtc_state(crtc, &ctx);
 	if (IS_ERR(rcv_state)) {
 		ret = PTR_ERR(rcv_state);
 		goto out_drop_locks;
@@ -57,6 +103,7 @@ static void exynos_recovery_handler(struct work_struct *work)
 
 	state = drm_atomic_state_alloc(dev);
 	if (!state) {
+		drm_atomic_state_put(rcv_state);
 		ret = -ENOMEM;
 		goto out_drop_locks;
 	}
@@ -102,7 +149,6 @@ retry:
 	if (ret)
 		goto out;
 
-	drm_mode_config_reset(dev);
 	ret = drm_atomic_helper_commit_duplicated_state(rcv_state, &ctx);
 	if (ret)
 		goto out;

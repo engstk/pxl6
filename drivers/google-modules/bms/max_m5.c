@@ -591,9 +591,13 @@ static bool memtst(void *buf, char c, size_t count)
 	return same;
 }
 
-static int max_m5_check_state_data(struct model_state_save *state)
+/* TODO: make it adjustable, set 10% tolerance here */
+#define MAX_M5_CAP_MAX_RATIO	110
+static int max_m5_check_state_data(struct model_state_save *state,
+				   struct max_m5_custom_parameters *ini)
 {
 	bool bad_residual, empty;
+	int max_cap = ini->designcap * MAX_M5_CAP_MAX_RATIO / 100;
 
 	empty = memtst(state, 0xff, sizeof(*state));
 	if (empty)
@@ -612,6 +616,12 @@ static int max_m5_check_state_data(struct model_state_save *state)
 
 	if (bad_residual)
 		return -EINVAL;
+
+	if (state->fullcaprep > max_cap)
+		return -ERANGE;
+
+	if (state->fullcapnom > max_cap)
+		return -ERANGE;
 
 	return 0;
 }
@@ -661,7 +671,7 @@ int max_m5_load_state_data(struct max_m5_data *m5_data)
 		return ret;
 	}
 
-	ret = max_m5_check_state_data(&m5_data->model_save);
+	ret = max_m5_check_state_data(&m5_data->model_save, cp);
 	if (ret < 0)
 		return ret;
 

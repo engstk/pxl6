@@ -662,6 +662,11 @@ static const char *cs35l41_fast_switch_text[] = {
 	"fast_switch3.txt",
 	"fast_switch4.txt",
 	"fast_switch5.txt",
+	"fast_switch6.txt",
+	"fast_switch7.txt",
+	"fast_switch8.txt",
+	"fast_switch9.txt",
+	"fast_switch10.txt",
 };
 
 static int cs35l41_fast_switch_en_get(struct snd_kcontrol *kcontrol,

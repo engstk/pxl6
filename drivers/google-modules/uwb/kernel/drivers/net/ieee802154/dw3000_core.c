@@ -299,6 +299,8 @@ enum ciadiag_dbl_options {
 
 /* LDO VOUT value */
 #define DW3000_RF_LDO_VOUT 0x0D7FFFFFUL
+/* RF SWITCH RX RF2 */
+#define DW3000_RF_SWITCH_RX_RF2 0x2131
 
 /* PLL common value  */
 #define DW3000_RF_PLL_COMMON 0xE104
@@ -1385,14 +1387,45 @@ int dw3000_clear_spi_collision_status(struct dw3000 *dw, u8 clear_bits)
 	return rc;
 }
 
-
-int dw3000_change_tx_rf1_to_rf2(struct dw3000 *dw, bool tx)
+/**
+ * dw3000_change_tx_rf_port() - Enable TX on RF2 port.
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @use_rf2: variable to trigger the SWITCH to RF2
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+static int dw3000_change_tx_rf_port(struct dw3000 *dw, bool use_rf2)
 {
 	int rc;
-	if (tx)
-		rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, 0x1C000050);
-	else
-		rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, 0x1C000000);
+	u32 val = DW3000_TXRXSWITCH_AUTO |
+		  ((u32)use_rf2
+		   << DW3000_RF_SWITCH_CTRL_ANT_TXRX_TXPORT_BIT_OFFSET) |
+		  ((u32)use_rf2
+		   << DW3000_RF_SWITCH_CTRL_ANT_TXRX_MODE_OVR_BIT_OFFSET);
+	rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, val);
+	if (!rc)
+		dw->tx_rf2 = use_rf2;
+	return rc;
+}
+
+/**
+ * dw3000_change_rx_rf_port() - Enable RX on RF2 port.
+ * @dw: the DW device on which the SPI transfer will occurs
+ * @use_rf2: variable to trigger the SWITCH to RF2
+ *
+ * Return: 0 on success, else a negative error code.
+ */
+static int dw3000_change_rx_rf_port(struct dw3000 *dw, bool use_rf2)
+{
+	int rc = 0;
+	u32 val = DW3000_TXRXSWITCH_AUTO |
+		  ((u32)use_rf2
+		   << DW3000_RF_SWITCH_CTRL_ANT_TXRX_RXPORT_BIT_OFFSET) |
+		  ((u32)use_rf2
+		   << DW3000_RF_SWITCH_CTRL_ANT_TXRX_MODE_OVR_BIT_OFFSET);
+	rc = dw3000_reg_write32(dw, DW3000_RF_SWITCH_CTRL_ID, 0, val);
+	if (!rc)
+		dw->rx_rf2 = use_rf2;
 	return rc;
 }
 
@@ -2641,7 +2674,7 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 	if (unlikely(rc))
 		goto fail;
 	/* Ensure correct RX antennas are selected. */
-	rc = dw3000_set_rx_antennas(dw, config->ant_set_id, pdoa_enabled);
+	rc = dw3000_set_rx_antennas(dw, config->ant_set_id, pdoa_enabled, frame_idx);
 	if (unlikely(rc))
 		goto fail;
 	if (config->flags & MCPS802154_RX_FRAME_CONFIG_AACK) {
@@ -6438,23 +6471,22 @@ int dw3000_set_tx_antenna(struct dw3000 *dw, int ant_set_id)
 			 ant_set_id);
 		return -EINVAL;
 	}
-	/* Early return if no change */
-	if (ant_idx1 == config->ant[0])
-		return 0;
 	/* Retrieve antenna GPIO configuration from calibration data */
 	ant_calib = &dw->calib_data.ant[ant_idx1];
+	/* Early return if no change */
+	if (ant_idx1 == config->ant[ant_calib->port])
+		return 0;
+
 	/* switching to RF2 port for TX if necessary  */
-	if (ant_calib->port == 1) {
-		dw3000_change_tx_rf1_to_rf2(dw, true);
-		dw->tx_rf2 = 1;
-	}
+	if ((ant_calib->port == 1) || (dw->tx_rf2))
+		dw3000_change_tx_rf_port(dw, ant_calib->port == 1);
 
 	/* Set GPIO state according config to select this antenna */
 	rc = dw3000_set_antenna_gpio(dw, ant_calib);
 
 	if (rc)
 		return rc;
-	config->ant[0] = ant_idx1;
+	config->ant[ant_calib->port] = ant_idx1;
 	/* Switching antenna require changing some calibration parameters */
 	return dw3000_calib_update_config(dw);
 }
@@ -6464,10 +6496,11 @@ int dw3000_set_tx_antenna(struct dw3000 *dw, int ant_set_id)
  * @dw: The DW device.
  * @ant_set_id: The antennas set id to use
  * @pdoa_enabled: True if PDoA is enabled
+ * @frame_idx: the id of the frame to be rcvd
  *
  * Return: zero on success, else a negative error code.
  */
-int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id, bool pdoa_enabled)
+int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id, bool pdoa_enabled, int frame_idx)
 {
 	struct dw3000_config *config = &dw->config;
 	struct dw3000_antenna_calib *ant_calib;
@@ -6476,9 +6509,6 @@ int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id, bool pdoa_enabled)
 	/* Sanity checks first */
 	if (ant_set_id < 0 || ant_set_id >= ANTSET_ID_MAX)
 		return -EINVAL;
-	if (dw->tx_rf2) {
-		dw3000_change_tx_rf1_to_rf2(dw, false);
-	}
 	/* Retrieve RX antennas configuration from antenna set id */
 	dw3000_calib_ant_set_id_to_ant(ant_set_id, &ant_idx1, &ant_idx2);
 	if (pdoa_enabled && (ant_idx1 < 0 || ant_idx2 < 0)) {
@@ -6491,6 +6521,11 @@ int dw3000_set_rx_antennas(struct dw3000 *dw, int ant_set_id, bool pdoa_enabled)
 	if (ant_idx1 >= 0) {
 		ant_calib = &dw->calib_data.ant[ant_idx1];
 		port = ant_calib->port; /* Save port for later check */
+		if  (((ant_calib->port == 1) || dw->rx_rf2) && ant_idx2 < 0) {
+			dw3000_change_rx_rf_port(dw, true);
+		} else {
+			dw3000_change_rx_rf_port(dw, false);
+		}
 		if (ant_idx1 != config->ant[port]) {
 			/* Set GPIO state according config for this first antenna */
 			rc = dw3000_set_antenna_gpio(dw, ant_calib);

@@ -316,6 +316,8 @@
 #define P9222RE_COM_CHAN_SEND_SIZE_REG		0x601
 #define P9222RE_DATA_BUF_START			0x604
 #define P9222RE_DATA_BUF_SIZE			0x100
+#define P9222RE_PP_SEND_BUF_START		0x64
+#define P9222RE_PP_RECV_BUF_START		0x6C
 
 #define P9222RE_COM_CCACTIVATE			BIT(9)
 
@@ -662,6 +664,7 @@ struct p9221_charger_platform_data {
 	/* calibrate light load */
 	bool				light_load;
 	bool				disable_align;
+	bool				ll_vout_not_set;
 };
 
 struct p9221_charger_ints_bit {
@@ -714,6 +717,7 @@ struct p9221_charger_data {
 	struct notifier_block		nb;
 	struct mutex			io_lock;
 	struct mutex			cmd_lock;
+	struct mutex			fod_lock;
 	struct device			*dev;
 	struct delayed_work		notifier_work;
 	struct delayed_work		charge_stats_work;

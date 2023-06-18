@@ -38,8 +38,19 @@
  */
 #define FIRA_DATA_PAYLOAD_SIZE_MAX 84
 
-/* From UCI spec v1.1.0 (converted to mm) */
-#define FIRA_RANGE_DATA_NTF_PROXIMITY_FAR_DEFAULT 200000
+/* From UCI spec v1.1.0 (converted to mm).
+ * Need a 2mm margin to avoid errors when converting to and from RCTU */
+#define FIRA_RANGE_DATA_NTF_PROXIMITY_FAR_MM_DEFAULT 200002
+
+/*
+ * FIRA_SESSION_DATA_NTF_LOWER_/UPPER_BOUND_AOA default values :
+ * Azimuth in rad_2pi_q16 : -32768 / 32767 (equal to -180 / ~180 degrees)
+ * Elevation in rad_2pi_q16 : -16384 / 16384 (equal to -90 / 90 degrees)
+ */
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI_DEFAULT -32768
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI_DEFAULT 32767
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI_DEFAULT -16384
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI_DEFAULT 16384
 
 /**
  * enum fira_device_type - Type of a device.
@@ -371,13 +382,36 @@ enum fira_sts_length {
  * enum fira_range_data_ntf_config - Configure range data notification.
  * @FIRA_RANGE_DATA_NTF_DISABLED: Do not report range data.
  * @FIRA_RANGE_DATA_NTF_ALWAYS: Report range data.
- * @FIRA_RANGE_DATA_NTF_PROXIMITY: Report range data if it is within range
+ * @FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY: Report range data if it is within
+ * proximity range defined by proximity parameters.
  * defined by proximity parameters (RANGE_DATA_NTF_PROXIMITY_NEAR/FAR).
+ * @FIRA_RANGE_DATA_NTF_CONFIG_AOA: Report range data in AoA upper and lower bound.
+ * defined by AOA parameters (FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER/
+ * LOWER_BOUND_AOA_AZIMUTH/ELEVATION)
+ * @FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY_AND_AOA: Report range data in AoA upper
+ * and lower bound as well as in proximity range.
+ * @FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY_CROSSING: Same as
+ * FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY, but issues notification on crossing of
+ * boundaries. As for now, same notif is sent for "enter" and "exit" events.
+ * @FIRA_RANGE_DATA_NTF_CONFIG_AOA_CROSSING:  Same as
+ * FIRA_RANGE_DATA_NTF_CONFIG_AOA, but issues notification on crossing of boundaries.
+ * As for now, same notif is sent for "enter" and "exit" events.
+ * @FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY_AND_AOA_CROSSING:  Same as
+ * FIRA_RANGE_DATA_NTF_CONFIG_PROXIMITY_AND_AOA, but issues notification on crossing of
+ * As for now, same notif is sent for "enter" and "exit" events.
+ * @FIRA_RANGE_DATA_NTF_PROXIMITY_AND_AOA_CROSSING:  Same as
+ * FIRA_RANGE_DATA_NTF_PROXIMITY_AND_AOA, but issues notification on crossing of
+ * boundaries. As for now, same notif is sent for "enter" and "exit" events.
  */
 enum fira_range_data_ntf_config {
-	FIRA_RANGE_DATA_NTF_DISABLED = 0,
-	FIRA_RANGE_DATA_NTF_ALWAYS = 1,
-	FIRA_RANGE_DATA_NTF_PROXIMITY = 2
+	FIRA_RANGE_DATA_NTF_DISABLED = 0x00,
+	FIRA_RANGE_DATA_NTF_ALWAYS = 0x01,
+	FIRA_RANGE_DATA_NTF_PROXIMITY = 0x02,
+	FIRA_RANGE_DATA_NTF_AOA = 0x03,
+	FIRA_RANGE_DATA_NTF_PROXIMITY_AND_AOA = 0x04,
+	FIRA_RANGE_DATA_NTF_PROXIMITY_CROSSING = 0x05,
+	FIRA_RANGE_DATA_NTF_AOA_CROSSING = 0x06,
+	FIRA_RANGE_DATA_NTF_PROXIMITY_AND_AOA_CROSSING = 0x07,
 };
 
 #endif /* NET_FIRA_REGION_PARAMS_H */

@@ -317,6 +317,7 @@ enum gbms_stats_tier_idx_t {
 
 	GBMS_STATS_BD_TI_TRICKLE_CLEARED = 122,
 	GBMS_STATS_BD_TI_DOCK_CLEARED = 123,
+	GBMS_STATS_TEMP_FILTER = 124,
 };
 
 /* health state */
@@ -382,6 +383,7 @@ struct gbms_charging_event {
 	struct gbms_ce_tier_stats overheat_stats;
 	struct gbms_ce_tier_stats cc_lvl_stats;
 	struct gbms_ce_tier_stats trickle_stats;
+	struct gbms_ce_tier_stats temp_filter_stats;
 };
 
 #define GBMS_CCCM_LIMITS_SET(profile, ti, vi) \

@@ -568,11 +568,27 @@ static int validate_and_parse_dvfs_table(struct kbase_device *kbdev, int dvfs_ta
 	}
 	sprintf(table_name, "gpu_dvfs_table_v%d", dvfs_table_num);
 	if (of_property_read_u32_array(np, table_name, of_data_int_array, dvfs_table_size))
-	    goto err;
+		goto err;
 
 	of_property_read_u32(np, "gpu_dvfs_max_freq", &scaling_freq_max_devicetree);
 	of_property_read_u32(np, "gpu_dvfs_min_freq", &scaling_freq_min_devicetree);
 	of_property_read_u32(np, "gpu_dvfs_min_freq_compute", &scaling_freq_min_compute);
+
+	/* Check if there is a voltage mapping for each frequency in the ECT table */
+	for (i = 0; i < dvfs_table_row_num; i++) {
+		idx = i * dvfs_table_col_num;
+
+		/* Get and validate voltages from cal-if */
+		for (c = 0; c < GPU_DVFS_CLK_COUNT; c++) {
+			if (find_voltage_for_freq(kbdev, of_data_int_array[idx + c],
+				NULL, vf_map[c], level_count[c])) {
+				dev_dbg(kbdev->dev,
+					"Failed to find voltage for clock %u frequency %u in gpu_dvfs_table_v%d\n",
+					c, of_data_int_array[idx + c], dvfs_table_num);
+				goto err;
+			}
+		}
+	}
 
 	/* Process DVFS table data from device tree and store it in OPP table */
 	for (i = 0; i < dvfs_table_row_num; i++) {
@@ -582,16 +598,11 @@ static int validate_and_parse_dvfs_table(struct kbase_device *kbdev, int dvfs_ta
 		gpu_dvfs_table[i].clk[GPU_DVFS_CLK_TOP_LEVEL] = of_data_int_array[idx + 0];
 		gpu_dvfs_table[i].clk[GPU_DVFS_CLK_SHADERS]   = of_data_int_array[idx + 1];
 
-		/* Get and validate voltages from cal-if */
 		for (c = 0; c < GPU_DVFS_CLK_COUNT; c++) {
-			if (find_voltage_for_freq(kbdev, gpu_dvfs_table[i].clk[c],
-				&(gpu_dvfs_table[i].vol[c]), vf_map[c], level_count[c])) {
-				dev_err(kbdev->dev,
-					"Failed to find voltage for clock %u frequency %u in gpu_dvfs_table_v%d\n",
-					c, gpu_dvfs_table[i].clk[c], dvfs_table_num);
-				goto err;
-			}
+			find_voltage_for_freq(kbdev, gpu_dvfs_table[i].clk[c],
+				&(gpu_dvfs_table[i].vol[c]), vf_map[c], level_count[c]);
 		}
+
 		gpu_dvfs_table[i].util_min     = of_data_int_array[idx + 2];
 		gpu_dvfs_table[i].util_max     = of_data_int_array[idx + 3];
 		gpu_dvfs_table[i].hysteresis   = of_data_int_array[idx + 4];
@@ -655,14 +666,11 @@ static int gpu_dvfs_update_asv_table(struct kbase_device *kbdev)
 		if (dvfs_table_row_num > 0)
 			break;
 	}
-	if (dvfs_table_row_num <= 0)
-		goto err;
+	if (dvfs_table_row_num <= 0) {
+		dev_err(kbdev->dev, "failed to set GPU DVFS table");
+	}
 
 	return dvfs_table_row_num;
-
-err:
-	dev_err(kbdev->dev, "failed to set GPU ASV table\n");
-	return -EINVAL;
 }
 
 /**

@@ -1183,9 +1183,14 @@ static int gcpm_pps_timeout(struct gcpm_drv *gcpm)
 		? PPS_ACTIVE_WLC_TIMEOUT_S : PPS_ACTIVE_USB_TIMEOUT_S;
 }
 
+static int gcpm_update_mdis_charge_cntl_limit(struct mdis_thermal_device *tdev,
+					      unsigned long lvl);
+
+
 static int gcpm_pps_offline(struct gcpm_drv *gcpm)
 {
 	int ret;
+	struct mdis_thermal_device *tdev = &gcpm->thermal_device;
 
 	/* TODO: migh be a no-op when pps_index == 0 */
 
@@ -1202,6 +1207,9 @@ static int gcpm_pps_offline(struct gcpm_drv *gcpm)
 		if (ret < 0)
 			pr_err("PPS_DC: fail wlc offline (%d)\n", ret);
 	}
+
+	if (tdev)
+		gcpm_update_mdis_charge_cntl_limit(tdev, tdev->current_level);
 
 	gcpm->pps_index = 0;
 	return 0;
@@ -1725,6 +1733,7 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 	if (gcpm->dc_state == DC_ENABLE_PASSTHROUGH) {
 		int timeout_s = gcpm_pps_timeout(gcpm) + PPS_READY_DELTA_TIMEOUT_S;
 		int index;
+		struct mdis_thermal_device *tdev = &gcpm->thermal_device;
 
 		/* Also ping the source */
 		pps_ui = gcpm_pps_wait_for_ready(gcpm);
@@ -1754,6 +1763,9 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 			pps_ui = PPS_ERROR_RETRY_MS;
 			goto pps_dc_reschedule;
 		}
+
+		if (tdev)
+			gcpm_update_mdis_charge_cntl_limit(tdev, tdev->current_level);
 
 		/*
 		 * offine current adapter and start new. Charging is enabled
@@ -2125,6 +2137,14 @@ static int gcpm_psy_get_property(struct power_supply *psy,
 	case GBMS_PROP_CHARGE_CHARGER_STATE:
 		chg_state.v = gcpm_get_charger_state(gcpm, chg_psy);
 		gbms_propval_int64val(pval) = chg_state.v;
+		break;
+
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
+		pval->intval = gcpm->cc_max;
+		break;
+
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
+		pval->intval = gcpm->fv_uv;
 		break;
 
 	/* route to the active charger */
@@ -2571,12 +2591,27 @@ static int gcpm_mdis_update_limits(struct gcpm_drv *gcpm, int msc_fcc,
 	return 0;
 }
 
-
  /* max dissipation themal level: apply the limit  */
 static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 					   unsigned long lvl)
 {
 	struct mdis_thermal_device *tdev = tcd->devdata;
+	struct gcpm_drv *gcpm = tdev->gcpm;
+	int ret;
+
+	if (tdev->thermal_levels <= 0 || lvl < 0 || lvl > tdev->thermal_levels)
+		return -EINVAL;
+
+	mutex_lock(&gcpm->chg_psy_lock);
+	ret = gcpm_update_mdis_charge_cntl_limit(tdev, lvl);
+	mutex_unlock(&gcpm->chg_psy_lock);
+
+	return ret;
+}
+
+static int gcpm_update_mdis_charge_cntl_limit(struct mdis_thermal_device *tdev,
+					      unsigned long lvl)
+{
 	struct gcpm_drv *gcpm = tdev->gcpm;
 	int online = 0, in_idx = -1;
 	int msc_fcc, dc_icl, cp_fcc, ret;
@@ -2584,8 +2619,6 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 
 	if (tdev->thermal_levels <= 0 || lvl < 0 || lvl > tdev->thermal_levels)
 		return -EINVAL;
-
-	mutex_lock(&gcpm->chg_psy_lock);
 
 	dev_dbg(gcpm->device, "MSC_THERM_MDIS lvl=%d->%d\n", tdev->current_level, (int)lvl);
 
@@ -2704,8 +2737,6 @@ static int gcpm_set_mdis_charge_cntl_limit(struct thermal_cooling_device *tcd,
 			pr_err("%s: cannot update MDIS level (%d)", __func__, ret);
 
 	}
-
-	mutex_unlock(&gcpm->chg_psy_lock);
 
 	return 0;
 }

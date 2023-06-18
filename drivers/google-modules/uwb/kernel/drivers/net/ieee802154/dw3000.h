@@ -585,6 +585,7 @@ struct dw3000_rx_ctx {
  * @dw3000_pid: PID the dw3000 state machine thread
  * @restricted_channels: bit field of restricted channels
  * @tx_rf2: parameter to enable the tx on rf2 port
+ * @rx_rf2: parameter to enable the rx on rf2 port
  * @cir_data_changed: true if buffer data have been reallocated
  * @full_cia_read: CIA registers fully loaded into cir_data struct
  * @cir_data: allocated CIR exploitation data
@@ -703,6 +704,8 @@ struct dw3000 {
 	u16 restricted_channels;
 	/* enable tx on RF2 port  */
 	u8 tx_rf2;
+	/* enable rx on RF2 port  */
+	u8 rx_rf2;
 	/* Channel impulse response data */
 	bool cir_data_changed;
 	bool full_cia_read;

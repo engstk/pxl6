@@ -410,13 +410,36 @@ enum fira_call_attrs {
  *      Minimum for contention access period size
  * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_CONFIG:
  *      Configure range data notification
- * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR:
- *       Lower bound in cm above which the ranging notifications
- *       should be enabled when RANGE_DATA_NTF_CONFIG is set to "proximity"
- * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR:
- *       Upper bound in cm above which the ranging notifications
- *       should be disabled when RANGE_DATA_NTF_CONFIG is set to "proximity"
- *
+  * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR_MM:
+ *      Lower bound in mm above which the ranging notifications
+ *      should be enabled when RANGE_DATA_NTF_CONFIG is set to "proximity" or "aoa_proximity"
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR_MM:
+ *      Upper bound in mm above which the ranging notifications
+ *      should be disabled when RANGE_DATA_NTF_CONFIG is set to "proximity" or "aoa_proximity"
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI:
+ *      Lower bound in rad_2pi_q16 for AOA azimuth above which the ranging notifications
+ *      should automatically be enabled if RANGE_DATA_NTF_CONFIG is set to "aoa" or "aoa_proximity".
+ *      It is a signed value on 16 bits (rad_2pi_q16). Allowed values range from -180° to ~180°.
+ *      should be less than or equal to RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH value.
+ *      (default = -180)
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI:
+ *      Upper bound in rad_2pi_q16 for AOA azimuth above which the ranging notifications
+ *      should automatically be disabled if RANGE_DATA_NTF_CONFIG is set to "aoa" or "aoa_proximity".
+ *      It is a signed value on 16 bits (rad_2pi_q16). Allowed values range from -180° to ~180°.
+ *      Should be greater than or equal to RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH value.
+ *      (default = ~180)
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI:
+ *      Lower bound in rad_2pi_q16 for AOA elevation above which the ranging notifications
+ *      should automatically be enabled if RANGE_DATA_NTF_CONFIG is set to "aoa" or "aoa_proximity".
+ *      It is a signed value on 16 bits (rad_2pi_q16). Allowed values range from -90° to +90°.
+ *      Should be less than or equal to RANGE_DATA_NTF_PROXIMITY_UPPER_BOUND_A_ELEVATION value.
+ *      (default = -90)
+ * @FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI:
+ *      Upper bound in rad_2pi_q16 for AOA elevation above which the ranging notifications
+ *      should automatically be disabled if RANGE_DATA_NTF_CONFIG has bit is set to "aoa" or "aoa_proximity".
+ *      It is a signed value on 16 bits (rad_2pi_q16). Allowed values range from -90° to +90°.
+ *      Should be greater than or equal to RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION value.
+ *      (default = +90)
  * @FIRA_SESSION_PARAM_ATTR_UNSPEC: Invalid command.
  * @__FIRA_SESSION_PARAM_ATTR_AFTER_LAST: Internal use.
  * @FIRA_SESSION_PARAM_ATTR_MAX: Internal use.
@@ -487,8 +510,12 @@ enum fira_session_param_attrs {
 	FIRA_SESSION_PARAM_ATTR_CAP_SIZE_MIN,
 	/* Range data notification enable */
 	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_CONFIG,
-	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR,
-	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR,
+	FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_NEAR_MM,
+        FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_PROXIMITY_FAR_MM,
+        FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI,
+        FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI,
+        FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI,
+        FIRA_SESSION_PARAM_ATTR_RANGE_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI,
 	__FIRA_SESSION_PARAM_ATTR_AFTER_LAST,
 	FIRA_SESSION_PARAM_ATTR_MAX = __FIRA_SESSION_PARAM_ATTR_AFTER_LAST - 1
 };

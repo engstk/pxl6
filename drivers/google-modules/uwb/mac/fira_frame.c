@@ -285,7 +285,6 @@ void fira_frame_result_report_payload_put(const struct fira_local *local,
 			   ranging_info->local_aoa_elevation.aoa_fom) &&
 			  params->report_aoa_fom;
 	neg_tof_present = tof_present && (ranging_info->tof_rctu < 0);
-
 	p = fira_frame_common_payload_put(
 		skb,
 		FIRA_IE_PAYLOAD_RESULT_REPORT_LEN(
@@ -669,7 +668,6 @@ fira_frame_measurement_report_fill_ranging_info(struct fira_local *local,
 	}
 	ranging_info->tof_rctu = (!slot->controller_tx) ? -tof_rctu : tof_rctu;
 	ranging_info->tof_present = true;
-
 	session->controlee.hopping_mode = hopping_mode;
 	return true;
 }
@@ -782,7 +780,6 @@ fira_frame_result_report_fill_ranging_info(struct fira_local *local,
 		if (aoa_elevation_present)
 			ranging_info->remote_aoa_elevation_fom = *p++;
 	}
-
 	return true;
 }
 

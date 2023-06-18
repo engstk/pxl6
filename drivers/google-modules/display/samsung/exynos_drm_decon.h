@@ -141,7 +141,7 @@ struct dpu_bts {
 	u32 max_disp_freq;
 	u32 prev_max_disp_freq;
 	u32 dvfs_max_disp_freq;
-	u64 ppc;
+	u32 ppc;
 	u32 ppc_rotator;
 	u32 ppc_scaler;
 	u32 delay_comp;
@@ -155,6 +155,7 @@ struct dpu_bts {
 	u32 afbc_yuv_rt_util_pct;
 	u32 dfs_lv_cnt;
 	u32 dfs_lv_khz[BTS_DFS_MAX];
+	u32 max_dfs_lv_for_wb;
 	u32 vbp;
 	u32 vfp;
 	u32 vsa;
@@ -194,6 +195,7 @@ enum dpu_event_type {
 	DPU_EVT_DECON_FRAMESTART,
 	DPU_EVT_DECON_RSC_OCCUPANCY,
 	DPU_EVT_DECON_TRIG_MASK,
+	DPU_EVT_DECON_UPDATE_CONFIG,
 
 	DPU_EVT_DSIM_ENABLED,
 	DPU_EVT_DSIM_DISABLED,
@@ -269,6 +271,8 @@ enum dpu_event_type {
 	DPU_EVT_DIMMING_END,
 
 	DPU_EVT_CGC_FRAMEDONE,
+	DPU_EVT_ITMON_ERROR,
+	DPU_EVT_SYSMMU_FAULT,
 
 	DPU_EVT_MAX, /* End of EVENT */
 };
@@ -300,6 +304,7 @@ struct dpu_log_dpp {
 struct dpu_log_win {
 	u32 win_idx;
 	u32 plane_idx;
+	bool secure;
 };
 
 struct dpu_log_rsc_occupancy {
@@ -327,6 +332,7 @@ struct dpu_log_crtc_info {
 	bool mode_changed;
 	bool active_changed;
 	bool self_refresh;
+	bool connectors_changed;
 };
 
 struct dpu_log_freqs {
@@ -378,8 +384,16 @@ struct dpu_log_plane_info {
 	u32 format;
 };
 
+struct dpu_log_decon_cfg {
+	u32 fps;
+	u32 image_width;
+	u32 image_height;
+	enum decon_out_type out_type;
+	struct decon_mode mode;
+};
+
 struct dpu_log {
-	ktime_t time;
+	u64 ts_nsec;
 	enum dpu_event_type type;
 
 	union {
@@ -396,6 +410,7 @@ struct dpu_log {
 		struct dpu_log_bts_event bts_event;
 		struct dpu_log_partial partial;
 		struct dpu_log_plane_info plane_info;
+		struct dpu_log_decon_cfg decon_cfg;
 		unsigned int value;
 	} data;
 };
@@ -477,6 +492,15 @@ struct decon_device {
 	bool keep_unmask;
 	struct exynos_partial *partial;
 };
+
+static inline struct decon_device *to_decon_device(const struct device *dev)
+{
+	/* could skip with dev_get_drvdata directly, but using pdev because
+	that's how drvdata was set originally */
+	struct platform_device *pdev = to_platform_device(dev);
+
+	return (struct decon_device *)platform_get_drvdata(pdev);
+}
 
 extern struct dpu_bts_ops dpu_bts_control;
 extern struct decon_device *decon_drvdata[MAX_DECON_CNT];

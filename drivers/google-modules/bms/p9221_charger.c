@@ -349,6 +349,10 @@ static void p9221_write_fod(struct p9221_charger_data *charger)
 	int retries = 3;
 	static char *wlc_mode[] = { "BPP", "EPP", "EPP_COMP" , "HPP" , "HPP_HV" };
 
+	mutex_lock(&charger->fod_lock);
+
+	if (charger->fod_cnt)
+		goto done;
 
 	if (charger->no_fod)
 		goto no_fod;
@@ -407,7 +411,7 @@ static void p9221_write_fod(struct p9221_charger_data *charger)
 		if (ret) {
 			dev_err(&charger->client->dev,
 				"Could not write FOD: %d\n", ret);
-			return;
+			goto unlock;
 		}
 
 		/* Verify the FOD has been written properly */
@@ -415,7 +419,7 @@ static void p9221_write_fod(struct p9221_charger_data *charger)
 		if (ret) {
 			dev_err(&charger->client->dev,
 				"Could not read back FOD: %d\n", ret);
-			return;
+			goto unlock;
 		}
 
 		if (memcmp(fod, fod_read, fod_count) == 0)
@@ -437,6 +441,8 @@ done:
 	if (charger->pdata->fod_fsw)
 		mod_delayed_work(system_wq, &charger->chk_fod_work,
 				 msecs_to_jiffies(P9XXX_FOD_CHK_DELAY_MS));
+unlock:
+	mutex_unlock(&charger->fod_lock);
 }
 
 #define CC_DATA_LOCK_MS		250
@@ -1112,6 +1118,8 @@ static void force_set_fod(struct p9221_charger_data *charger)
 	u8 fod[P9221R5_NUM_FOD] = { 0 };
 	int ret;
 
+	mutex_lock(&charger->fod_lock);
+
 	if (p9221_is_hpp(charger)) {
 		dev_info(&charger->client->dev,
 			"power_mitigate: send EOP for revert to BPP\n");
@@ -1123,6 +1131,8 @@ static void force_set_fod(struct p9221_charger_data *charger)
 	if (ret)
 		dev_err(&charger->client->dev,
 			"power_mitigate: failed, ret=%d\n", ret);
+
+	mutex_unlock(&charger->fod_lock);
 }
 
 static void p9221_power_mitigation_work(struct work_struct *work)
@@ -1146,11 +1156,17 @@ static void p9221_power_mitigation_work(struct work_struct *work)
 	if (!p9221_is_epp(charger)) {
 		/* only for LL */
 		if (charger->trigger_power_mitigation && charger->ll_bpp_cep == 1) {
-			dev_info(&charger->client->dev,
-				 "power_mitigate: change Vout to %d mV and disable CMFET\n",
-				 P9XXX_VOUT_5480MV);
-			ret = charger->chip_set_vout_max(charger, P9XXX_VOUT_5480MV);
-			ret |= p9221_reg_write_8(charger, P9412_CMFET_L_REG, 0);
+			if (!charger->pdata->ll_vout_not_set) {
+				dev_info(&charger->client->dev,
+				      "power_mitigate: change Vout to %d mV and disable CMFET\n",
+				      P9XXX_VOUT_5480MV);
+				ret = charger->chip_set_vout_max(charger, P9XXX_VOUT_5480MV);
+				if (ret < 0)
+					dev_err(&charger->client->dev,
+						"Fail to configure Vout to %d mV\n",
+						P9XXX_VOUT_5480MV);
+			}
+			ret = p9221_reg_write_8(charger, P9412_CMFET_L_REG, 0);
 			if (ret < 0)
 				dev_err(&charger->client->dev, "Fail to configure LL\n");
 			p9221_ll_bpp_cep(charger, charger->last_capacity);
@@ -6461,6 +6477,8 @@ static int p9221_parse_dt(struct device *dev,
 	/* Calibrate light load */
 	pdata->light_load = of_property_read_bool(node, "google,light_load");
 
+	pdata->ll_vout_not_set = of_property_read_bool(node, "google,ll-bpp-vout-not-set");
+
 	return 0;
 }
 
@@ -6691,6 +6709,7 @@ static int p9221_charger_probe(struct i2c_client *client,
 	mutex_init(&charger->rtx_lock);
 	mutex_init(&charger->auth_lock);
 	mutex_init(&charger->renego_lock);
+	mutex_init(&charger->fod_lock);
 	timer_setup(&charger->vrect_timer, p9221_vrect_timer_handler, 0);
 	timer_setup(&charger->align_timer, p9221_align_timer_handler, 0);
 	INIT_DELAYED_WORK(&charger->dcin_work, p9221_dcin_work);

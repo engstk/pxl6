@@ -682,8 +682,12 @@ static void parse_bitwidths(struct lwis_device *lwis_dev)
 	lwis_dev->native_value_bitwidth = value_bitwidth;
 }
 
-static int parse_power_up_seqs(struct lwis_device *lwis_dev)
+static int parse_power_seqs(struct lwis_device *lwis_dev, const char *seq_name,
+			    struct lwis_device_power_sequence_list **list)
 {
+	char str_seq_name[LWIS_MAX_NAME_STRING_LEN];
+	char str_seq_type[LWIS_MAX_NAME_STRING_LEN];
+	char str_seq_delay[LWIS_MAX_NAME_STRING_LEN];
 	struct device *dev;
 	struct device_node *dev_node;
 	int power_seq_count;
@@ -697,88 +701,102 @@ static int parse_power_up_seqs(struct lwis_device *lwis_dev)
 	int type_gpio_count = 0;
 	int type_regulator_count = 0;
 
+	scnprintf(str_seq_name, LWIS_MAX_NAME_STRING_LEN, "%s-seqs", seq_name);
+	scnprintf(str_seq_type, LWIS_MAX_NAME_STRING_LEN, "%s-seq-types", seq_name);
+	scnprintf(str_seq_delay, LWIS_MAX_NAME_STRING_LEN, "%s-seq-delays-us", seq_name);
+
 	dev = &lwis_dev->plat_dev->dev;
 	dev_node = dev->of_node;
+	*list = NULL;
 
-	lwis_dev->power_up_seqs_present = false;
-	lwis_dev->power_up_sequence = NULL;
-	lwis_dev->gpios_list = NULL;
-
-	power_seq_count = of_property_count_strings(dev_node, "power-up-seqs");
-	power_seq_type_count = of_property_count_strings(dev_node, "power-up-seq-types");
+	power_seq_count = of_property_count_strings(dev_node, str_seq_name);
+	power_seq_type_count = of_property_count_strings(dev_node, str_seq_type);
 	power_seq_delay_count =
-		of_property_count_elems_of_size(dev_node, "power-up-seq-delays-us", sizeof(u32));
+		of_property_count_elems_of_size(dev_node, str_seq_delay, sizeof(u32));
 
-	/* No power-up-seqs found, just return */
+	/* No power-seqs found, just return */
 	if (power_seq_count <= 0) {
 		return 0;
 	}
 	if (power_seq_count != power_seq_type_count || power_seq_count != power_seq_delay_count) {
-		pr_err("Count of power-up-seqs-* are not match\n");
+		pr_err("Count of power sequence %s is not match\n", str_seq_name);
 		return -EINVAL;
 	}
 
-	lwis_dev->power_up_sequence = lwis_dev_power_seq_list_alloc(power_seq_count);
-	if (IS_ERR(lwis_dev->power_up_sequence)) {
+	*list = lwis_dev_power_seq_list_alloc(power_seq_count);
+	if (IS_ERR(*list)) {
 		pr_err("Failed to allocate power sequence list\n");
-		return PTR_ERR(lwis_dev->power_up_sequence);
+		return PTR_ERR(*list);
 	}
 
 	for (i = 0; i < power_seq_count; ++i) {
-		ret = of_property_read_string_index(dev_node, "power-up-seqs", i, &name);
+		ret = of_property_read_string_index(dev_node, str_seq_name, i, &name);
 		if (ret < 0) {
 			pr_err("Error adding power sequence[%d]\n", i);
-			goto error_parse_power_up_seqs;
+			goto error_parse_power_seqs;
 		}
-		strlcpy(lwis_dev->power_up_sequence->seq_info[i].name, name,
-			LWIS_MAX_NAME_STRING_LEN);
+		strscpy((*list)->seq_info[i].name, name, LWIS_MAX_NAME_STRING_LEN);
 
-		ret = of_property_read_string_index(dev_node, "power-up-seq-types", i, &type);
+		ret = of_property_read_string_index(dev_node, str_seq_type, i, &type);
 		if (ret < 0) {
 			pr_err("Error adding power sequence type[%d]\n", i);
-			goto error_parse_power_up_seqs;
+			goto error_parse_power_seqs;
 		}
-		strlcpy(lwis_dev->power_up_sequence->seq_info[i].type, type,
-			LWIS_MAX_NAME_STRING_LEN);
+		strscpy((*list)->seq_info[i].type, type, LWIS_MAX_NAME_STRING_LEN);
 		if (strcmp(type, "gpio") == 0) {
 			type_gpio_count++;
 		} else if (strcmp(type, "regulator") == 0) {
 			type_regulator_count++;
 		}
 
-		ret = of_property_read_u32_index(dev_node, "power-up-seq-delays-us", i, &delay_us);
+		ret = of_property_read_u32_index(dev_node, str_seq_delay, i, &delay_us);
 		if (ret < 0) {
 			pr_err("Error adding power sequence delay[%d]\n", i);
-			goto error_parse_power_up_seqs;
+			goto error_parse_power_seqs;
 		}
-		lwis_dev->power_up_sequence->seq_info[i].delay_us = delay_us;
+		(*list)->seq_info[i].delay_us = delay_us;
 	}
 
 #ifdef LWIS_DT_DEBUG
-	lwis_dev_power_seq_list_print(lwis_dev->power_up_sequence);
+	lwis_dev_power_seq_list_print(*list);
 #endif
 
-	lwis_dev->power_up_seqs_present = true;
-
-	if (type_gpio_count > 0) {
+	if (type_gpio_count > 0 && lwis_dev->gpios_list == NULL) {
 		lwis_dev->gpios_list = lwis_gpios_list_alloc(type_gpio_count);
 		if (IS_ERR(lwis_dev->gpios_list)) {
 			pr_err("Failed to allocate gpios list\n");
 			ret = PTR_ERR(lwis_dev->gpios_list);
-			goto error_parse_power_up_seqs;
+			goto error_parse_power_seqs;
 		}
 
 		type_gpio_count = 0;
 		for (i = 0; i < power_seq_count; ++i) {
 			struct lwis_gpios_info *gpios_info;
 			char *seq_item_name;
+			struct device *dev;
+			struct gpio_descs *descs;
 
-			if (strcmp(lwis_dev->power_up_sequence->seq_info[i].type, "gpio") != 0) {
+			if (strcmp((*list)->seq_info[i].type, "gpio") != 0) {
 				continue;
 			}
 
 			gpios_info = &lwis_dev->gpios_list->gpios_info[type_gpio_count];
-			seq_item_name = lwis_dev->power_up_sequence->seq_info[i].name;
+			seq_item_name = (*list)->seq_info[i].name;
+			dev = &lwis_dev->plat_dev->dev;
+			descs = lwis_gpio_list_get(dev, seq_item_name);
+			if (IS_ERR(descs)) {
+				pr_err("Error parsing GPIO list %s (%ld)\n", seq_item_name,
+				       PTR_ERR(descs));
+				ret = PTR_ERR(descs);
+				goto error_parse_power_seqs;
+			}
+			gpios_info->id = desc_to_gpio(descs->desc[0]);
+			gpios_info->hold_dev = dev;
+			/*
+			 * The GPIO pins are valid, release the list as we do not need to hold
+			 * on to the pins yet
+			 */
+			lwis_gpio_list_put(descs, dev);
 
 			gpios_info->gpios = NULL;
 			gpios_info->irq_list = NULL;
@@ -798,38 +816,37 @@ static int parse_power_up_seqs(struct lwis_device *lwis_dev)
 		}
 	}
 
-	if (type_regulator_count > 0) {
+	if (type_regulator_count > 0 && lwis_dev->regulators == NULL) {
 		lwis_dev->regulators = lwis_regulator_list_alloc(type_regulator_count);
 		if (IS_ERR(lwis_dev->regulators)) {
 			pr_err("Failed to allocate regulator list\n");
 			ret = PTR_ERR(lwis_dev->regulators);
-			goto error_parse_power_up_seqs;
+			goto error_parse_power_seqs;
 		}
 
 		for (i = 0; i < power_seq_count; ++i) {
 			struct device *dev;
 			char *seq_item_name;
 
-			if (strcmp(lwis_dev->power_up_sequence->seq_info[i].type,
-				   "regulator") != 0) {
+			if (strcmp((*list)->seq_info[i].type, "regulator") != 0) {
 				continue;
 			}
 
 			dev = &lwis_dev->plat_dev->dev;
-			seq_item_name = lwis_dev->power_up_sequence->seq_info[i].name;
+			seq_item_name = (*list)->seq_info[i].name;
 
 			ret = lwis_regulator_get(lwis_dev->regulators, seq_item_name,
 						 /*voltage=*/0, dev);
 			if (ret < 0) {
 				pr_err("Cannot find regulator: %s\n", seq_item_name);
-				goto error_parse_power_up_seqs;
+				goto error_parse_power_seqs;
 			}
 		}
 	}
 
 	return 0;
 
-error_parse_power_up_seqs:
+error_parse_power_seqs:
 	if (lwis_dev->regulators) {
 		lwis_regulator_put_all(lwis_dev->regulators);
 		lwis_regulator_list_free(lwis_dev->regulators);
@@ -837,86 +854,8 @@ error_parse_power_up_seqs:
 	}
 	lwis_gpios_list_free(lwis_dev->gpios_list);
 	lwis_dev->gpios_list = NULL;
-	lwis_dev_power_seq_list_free(lwis_dev->power_up_sequence);
-	lwis_dev->power_up_sequence = NULL;
-	return ret;
-}
-
-static int parse_power_down_seqs(struct lwis_device *lwis_dev)
-{
-	struct device *dev;
-	struct device_node *dev_node;
-	int power_seq_count;
-	int power_seq_type_count;
-	int power_seq_delay_count;
-	int i;
-	int ret;
-	const char *name;
-	const char *type;
-	int delay_us;
-
-	dev = &lwis_dev->plat_dev->dev;
-	dev_node = dev->of_node;
-
-	lwis_dev->power_down_seqs_present = false;
-	lwis_dev->power_down_sequence = NULL;
-
-	power_seq_count = of_property_count_strings(dev_node, "power-down-seqs");
-	power_seq_type_count = of_property_count_strings(dev_node, "power-down-seq-types");
-	power_seq_delay_count =
-		of_property_count_elems_of_size(dev_node, "power-down-seq-delays-us", sizeof(u32));
-
-	/* No power-down-seqs found, just return */
-	if (power_seq_count <= 0) {
-		return 0;
-	}
-	if (power_seq_count != power_seq_type_count || power_seq_count != power_seq_delay_count) {
-		pr_err("Count of power-down-seqs-* are not match\n");
-		return -EINVAL;
-	}
-
-	lwis_dev->power_down_sequence = lwis_dev_power_seq_list_alloc(power_seq_count);
-	if (IS_ERR(lwis_dev->power_down_sequence)) {
-		pr_err("Failed to allocate power sequence list\n");
-		return PTR_ERR(lwis_dev->power_down_sequence);
-	}
-
-	for (i = 0; i < power_seq_count; ++i) {
-		ret = of_property_read_string_index(dev_node, "power-down-seqs", i, &name);
-		if (ret < 0) {
-			pr_err("Error adding power sequence[%d]\n", i);
-			goto error_parse_power_down_seqs;
-		}
-		strlcpy(lwis_dev->power_down_sequence->seq_info[i].name, name,
-			LWIS_MAX_NAME_STRING_LEN);
-
-		ret = of_property_read_string_index(dev_node, "power-down-seq-types", i, &type);
-		if (ret < 0) {
-			pr_err("Error adding power sequence type[%d]\n", i);
-			goto error_parse_power_down_seqs;
-		}
-		strlcpy(lwis_dev->power_down_sequence->seq_info[i].type, type,
-			LWIS_MAX_NAME_STRING_LEN);
-
-		ret = of_property_read_u32_index(dev_node, "power-down-seq-delays-us", i,
-						 &delay_us);
-		if (ret < 0) {
-			pr_err("Error adding power sequence delay[%d]\n", i);
-			goto error_parse_power_down_seqs;
-		}
-		lwis_dev->power_down_sequence->seq_info[i].delay_us = delay_us;
-	}
-
-#ifdef LWIS_DT_DEBUG
-	lwis_dev_power_seq_list_print(lwis_dev->power_down_sequence);
-#endif
-
-	lwis_dev->power_down_seqs_present = true;
-	return 0;
-
-error_parse_power_down_seqs:
-	lwis_dev_power_seq_list_free(lwis_dev->power_down_sequence);
-	lwis_dev->power_down_sequence = NULL;
+	lwis_dev_power_seq_list_free(*list);
+	*list = NULL;
 	return ret;
 }
 
@@ -1033,13 +972,13 @@ int lwis_base_parse_dt(struct lwis_device *lwis_dev)
 		return ret;
 	}
 
-	ret = parse_power_up_seqs(lwis_dev);
+	ret = parse_power_seqs(lwis_dev, "power-up", &lwis_dev->power_up_sequence);
 	if (ret) {
 		pr_err("Error parsing power-up-seqs\n");
 		return ret;
 	}
 
-	ret = parse_power_down_seqs(lwis_dev);
+	ret = parse_power_seqs(lwis_dev, "power-down", &lwis_dev->power_down_sequence);
 	if (ret) {
 		pr_err("Error parsing power-down-seqs\n");
 		return ret;

@@ -20,6 +20,8 @@
  * This structure is to store the gpios information
  */
 struct lwis_gpios_info {
+	int id;
+	struct device *hold_dev;
 	char name[LWIS_MAX_NAME_STRING_LEN];
 	bool is_shared;
 	bool is_pulse;

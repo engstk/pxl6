@@ -338,7 +338,7 @@ static void decon_reg_clear_dsimif(u32 id, u32 dsimif)
 
 	val = SEL_DSIM_GET(dsimif_read(id, DSIMIF_SEL(dsimif)));
 	if ((id == 0 && val < 2) || (id == 1 && val == 2)) {
-		cal_log_info(id, "clearing dsimif%d sel\n", dsimif);
+		cal_log_info(id, "clearing dsimif%u sel, val: %u\n", dsimif, val);
 		dsimif_write(id, DSIMIF_SEL(dsimif), SEL_DSIM(3));
 	}
 }

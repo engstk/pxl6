@@ -26,6 +26,7 @@
 
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
+#include <linux/math64.h>
 #include <net/mcps802154_schedule.h>
 
 #include "net/fira_region_params.h"
@@ -46,6 +47,20 @@
 #define UWB_BLOCK_DURATION_MARGIN_PPM 100
 /* FiRa Tx should arrive between 0 and 10 us, always add 2 us. */
 #define FIRA_TX_MARGIN_US 2
+
+/*
+ * FIRA_SESSION_DATA_NTF_LOWER_/UPPER_BOUND_AOA min/max :
+ * Azimuth in rad_2pi_q16 : -32768 / 32767 (equal to -180 / ~180 degrees)
+ * Elevation in rad_2pi_q16 : -16384 / 16384 (equal to -90 / 90 degrees)
+ */
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI_MIN -32768
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_AZIMUTH_2PI_MAX 32767
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI_MIN -32768
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_AZIMUTH_2PI_MAX 32767
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI_MIN -16384
+#define FIRA_SESSION_DATA_NTF_LOWER_BOUND_AOA_ELEVATION_2PI_MAX 16384
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI_MIN -16384
+#define FIRA_SESSION_DATA_NTF_UPPER_BOUND_AOA_ELEVATION_2PI_MAX 16384
 
 /**
  * enum fira_message_id - Message identifiers, used in internal state and in
@@ -172,6 +187,31 @@ struct fira_local_aoa_info {
 };
 
 /**
+ * enum fira_range_data_ntf_status - Device (controller or controlee)
+ * status, used for range_data_ntf.
+ * @FIRA_RANGE_DATA_NTF_NONE: Undetermined, no ranging data for this
+ * device yet, or N/A (not applicable).
+ * @FIRA_RANGE_DATA_NTF_IN: Last ranging data for this device
+ * were inside given boudaries.
+ * @FIRA_RANGE_DATA_NTF_OUT: Last ranging data for this device
+ * were outside given boudaries.
+ * @FIRA_RANGE_DATA_NTF_ERROR: Last ranging round(s) for this device
+ * failed (timeout, error, ...). No info about a previous state or N/A.
+ * @FIRA_RANGE_DATA_NTF_IN_ERROR: Last ranging round(s) for this device
+ * failed (timeout, error, ...). Previous data were inside given boudaries.
+ * @FIRA_RANGE_DATA_NTF_OUT_ERROR: Last ranging round(s) for this device
+ * failed (timeout, error, ...). Previous data were inside given boudaries.
+*/
+enum fira_range_data_ntf_status {
+	FIRA_RANGE_DATA_NTF_NONE,
+	FIRA_RANGE_DATA_NTF_IN,
+	FIRA_RANGE_DATA_NTF_OUT,
+	FIRA_RANGE_DATA_NTF_ERROR,
+	FIRA_RANGE_DATA_NTF_IN_ERROR,
+	FIRA_RANGE_DATA_NTF_OUT_ERROR,
+};
+
+/**
  * struct fira_ranging_info - Ranging information.
  */
 struct fira_ranging_info {
@@ -267,6 +307,14 @@ struct fira_ranging_info {
 	 * @rx_ctx: Pointer to the current rx_ctx context controlee.
 	 */
 	void *rx_ctx;
+	/**
+	 * @range_data_ntf_status: range_data_ntf status of the remote device.
+	 */
+	enum fira_range_data_ntf_status range_data_ntf_status;
+	/**
+	 * @notify: if true, add this ranging to the notification report.
+	 */
+	bool notify;
 };
 
 /**
@@ -373,6 +421,21 @@ struct fira_local {
 	 */
 	int n_stopped_controlees;
 };
+
+static const s64 speed_of_light_mm_per_s = 299702547000ull;
+
+static inline s64 fira_rctu_to_mm(s64 rctu_freq_hz, s32 rctu)
+{
+	s64 temp = speed_of_light_mm_per_s * rctu + rctu_freq_hz / 2;
+	return div64_s64(temp, rctu_freq_hz);
+}
+
+static inline s64 fira_mm_to_rctu(struct fira_local *local, s32 mm)
+{
+	s64 temp = (s64)mm * local->llhw->dtu_freq_hz * local->llhw->dtu_rctu +
+		   speed_of_light_mm_per_s / 2;
+	return div64_s64(temp, speed_of_light_mm_per_s);
+}
 
 static inline struct fira_local *
 region_to_local(struct mcps802154_region *region)

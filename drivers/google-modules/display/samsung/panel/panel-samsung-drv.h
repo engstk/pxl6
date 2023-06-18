@@ -107,6 +107,7 @@ enum exynos_panel_state {
 	PANEL_STATE_LP,
 	PANEL_STATE_MODESET,
 	PANEL_STATE_BLANK,
+	PANEL_STATE_COUNT,
 };
 
 /**
@@ -491,6 +492,7 @@ struct exynos_panel_desc {
 	bool is_partial;
 	bool is_panel_idle_supported;
 	bool no_lhbm_rr_constraints;
+	bool mipi_sync_te_prediction;
 	const u32 lhbm_effective_delay_frames;
 	const unsigned int delay_dsc_reg_init_us;
 	const struct brightness_capability *brt_capability;
@@ -572,6 +574,8 @@ struct exynos_panel {
 	bool panel_need_handle_idle_exit;
 	/* indicates self refresh is active */
 	bool self_refresh_active;
+	/* indicates if panel brightness is set or not after reset */
+	bool is_brightness_initialized;
 	/**
 	 * refresh rate in panel idle mode
 	 * 0 means not in idle mode or not specified
@@ -632,6 +636,8 @@ struct exynos_panel {
 	 * mean rr switch so it differs from last_mode_set_ts
 	 */
 	ktime_t last_rr_switch_ts;
+	/* Record the last come out lp mode timestamp */
+	ktime_t last_lp_exit_ts;
 	u32 last_rr;
 
 	struct {
@@ -907,6 +913,10 @@ static inline bool is_local_hbm_disabled(struct exynos_panel *ctx)
 	i > 0;										\
 	i--, data++)									\
 
+#define EXYNOS_VREFRESH_TO_PERIOD_USEC(rate) DIV_ROUND_UP(USEC_PER_SEC, (rate) ? (rate) : 60)
+
+int exynos_panel_wait_for_vblank(struct exynos_panel *ctx);
+void exynos_panel_wait_for_vsync_done(struct exynos_panel *ctx, u32 te_us, u32 period_us);
 unsigned int panel_get_idle_time_delta(struct exynos_panel *ctx);
 int exynos_panel_configure_te2_edges(struct exynos_panel *ctx,
 				     u32 *timings, bool lp_mode);

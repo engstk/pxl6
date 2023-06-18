@@ -318,6 +318,7 @@ struct exynos_drm_crtc {
 		struct drm_property *partial;
 		struct drm_property *cgc_lut_fd;
 		struct drm_property *expected_present_time;
+		struct drm_property *rcd_plane_id;
 	} props;
 	u8 active_state;
 	u32 rcd_plane_mask;

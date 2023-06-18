@@ -1119,16 +1119,17 @@ dhd_dbg_msgtrace_log_parser(dhd_pub_t *dhdp, void *event_data,
 	 * event log buffer. Refer to event log buffer structure in
 	 * event_log.h
 	 */
-	DHD_MSGTRACE_LOG(("EVENT_LOG_HDR[0x%x]: Set: 0x%08x length = %d\n",
-		ltoh16(*((uint16 *)(data+2))), ltoh32(*((uint32 *)(data + 4))),
-		ltoh16(*((uint16 *)(data)))));
+	logset = (ltoh32(*((uint32 *)(data + 4))) & EVENT_LOG_SETID_MASK);
 
-	logset = ltoh32(*((uint32 *)(data + 4)));
+	DHD_MSGTRACE_LOG(("EVENT_LOG_HDR[0x%x]: Set: 0x%08x length = %d\n",
+		ltoh16(*((uint16 *)(data+2))), logset, ltoh16(*((uint16 *)(data)))));
+
 	block_hdr_len = ltoh16(*((uint16 *)(data)));
 
 	if (logset >= event_log_max_sets) {
 		DHD_ERROR(("%s logset: %d max: %d out of range queried: %d\n",
 			__FUNCTION__, logset, event_log_max_sets, event_log_max_sets_queried));
+#ifdef DHD_LOGSET_BEYOND_MEMDUMP
 #ifdef DHD_FW_COREDUMP
 		if (event_log_max_sets_queried && !dhd_memdump_is_scheduled(dhdp)) {
 			DHD_ERROR(("%s: collect socram for DUMP_TYPE_LOGSET_BEYOND_RANGE\n",
@@ -1137,6 +1138,9 @@ dhd_dbg_msgtrace_log_parser(dhd_pub_t *dhdp, void *event_data,
 			dhd_bus_mem_dump(dhdp);
 		}
 #endif /* DHD_FW_COREDUMP */
+#else
+		goto exit;
+#endif /* DHD_LOGSET_BEYOND_MEMDUMP */
 	}
 
 	block = ltoh16(*((uint16 *)(data + 2)));

@@ -45,11 +45,11 @@ static void exynos_drm_crtc_atomic_enable(struct drm_crtc *crtc,
 	if (active_state == exynos_crtc->active_state)
 		return;
 
-	if (exynos_crtc->active_state == CRTC_STATE_INACTIVE)
-		drm_crtc_vblank_on(crtc);
-
 	if (exynos_crtc->ops->enable)
 		exynos_crtc->ops->enable(exynos_crtc, old_state);
+
+	if (exynos_crtc->active_state == CRTC_STATE_INACTIVE)
+		drm_crtc_vblank_on(crtc);
 
 	exynos_crtc->active_state = active_state;
 }
@@ -624,6 +624,8 @@ static int exynos_drm_crtc_get_property(struct drm_crtc *crtc,
 			dma_buf_fd(exynos_crtc_state->cgc_gem->dma_buf, 0) : 0;
 	else if (property == exynos_crtc->props.expected_present_time)
 		*val = exynos_crtc_state->expected_present_time;
+	else if (property == exynos_crtc->props.rcd_plane_id)
+		*val = decon->rcd->plane.base.base.id;
 	else
 		return -EINVAL;
 
@@ -881,6 +883,23 @@ exynos_drm_crtc_create_partial_property(struct exynos_drm_crtc *exynos_crtc)
 	return 0;
 }
 
+static int exynos_drm_crtc_create_rcd_id_property(struct exynos_drm_crtc *exynos_crtc,
+						  u32 rcd_plane_id)
+{
+	struct drm_crtc *crtc = &exynos_crtc->base;
+	struct drm_property *prop;
+
+	prop = drm_property_create_range(crtc->dev, DRM_MODE_PROP_IMMUTABLE, "rcd_plane_id", 0,
+					 UINT_MAX);
+	if (!prop)
+		return -ENOMEM;
+
+	drm_object_attach_property(&crtc->base, prop, rcd_plane_id);
+	exynos_crtc->props.rcd_plane_id = prop;
+
+	return 0;
+}
+
 struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 					struct drm_plane *plane,
 					enum exynos_drm_output_type type,
@@ -968,6 +987,13 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 			ret = exynos_drm_crtc_create_blob(crtc, "cgc_lut",
 					&exynos_crtc->props.cgc_lut);
 		}
+		if (ret)
+			goto err_crtc;
+	}
+
+	if (decon->rcd) {
+		ret = exynos_drm_crtc_create_rcd_id_property(exynos_crtc,
+							     decon->rcd->plane.base.base.id);
 		if (ret)
 			goto err_crtc;
 	}

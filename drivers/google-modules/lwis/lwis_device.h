@@ -230,12 +230,8 @@ struct lwis_device {
 	/* BTS scenario index */
 	unsigned int bts_scenario;
 
-	/* Does power-up-seqs present */
-	bool power_up_seqs_present;
 	/* Power up sequence information */
 	struct lwis_device_power_sequence_list *power_up_sequence;
-	/* Does power-down-seqs present */
-	bool power_down_seqs_present;
 	/* Power down sequence information */
 	struct lwis_device_power_sequence_list *power_down_sequence;
 	/* GPIOs list */

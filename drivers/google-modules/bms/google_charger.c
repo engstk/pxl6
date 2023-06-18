@@ -313,6 +313,7 @@ struct chg_drv {
 
 	/* debug */
 	struct dentry *debug_entry;
+	bool debug_input_suspend;
 
 	/* dock_defend */
 	struct delayed_work bd_dd_work;
@@ -695,6 +696,7 @@ static int info_wlc_state(union gbms_ce_adapter_details *ad,
 		return -EINVAL;
 	}
 
+	ad->ad_type = CHG_EV_ADAPTER_TYPE_WLC;
 	if (voltage_max >= WLC_EPP_THRESHOLD_UV) {
 		ad->ad_type = CHG_EV_ADAPTER_TYPE_WLC_EPP;
 	} else if (voltage_max >= WLC_BPP_THRESHOLD_UV) {
@@ -1192,8 +1194,9 @@ static int chg_work_roundtrip(struct chg_drv *chg_drv,
 	 */
 	wlc_on = chg_work_check_wlc_state(wlc_psy);
 	usb_on = chg_work_check_usb_state(chg_drv);
-	if ((wlc_on | usb_on) && batt_chg_state.f.chg_status == POWER_SUPPLY_STATUS_DISCHARGING) {
-		batt_chg_state.f.chg_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+	if ((wlc_on || usb_on) && batt_chg_state.f.chg_status == POWER_SUPPLY_STATUS_DISCHARGING) {
+		if (!chg_drv->debug_input_suspend)
+			batt_chg_state.f.chg_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		batt_chg_state.f.flags = gbms_gen_chg_flags(chg_state->f.chg_status,
 							    chg_state->f.chg_type);
 	}
@@ -3404,6 +3407,8 @@ static int chg_set_input_suspend(void *data, u64 val)
 	if (rc < 0)
 		return rc;
 
+	chg_drv->debug_input_suspend = (val != 0);
+
 	if (chg_drv->chg_psy)
 		power_supply_changed(chg_drv->chg_psy);
 
@@ -3762,10 +3767,12 @@ charge_stats_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct chg_drv *chg_drv = dev_get_drvdata(dev);
 	struct gbms_ce_tier_stats *dd_stats = &chg_drv->dd_stats;
+	uint32_t time_sum;
 	ssize_t len = 0;
 
 	mutex_lock(&chg_drv->stats_lock);
-	if (dd_stats->soc_in != -1)
+	time_sum = dd_stats->time_fast + dd_stats->time_other + dd_stats->time_taper;
+	if (time_sum > 0)
 		len = gbms_tier_stats_cstr(&buf[len], PAGE_SIZE, dd_stats, false);
 	mutex_unlock(&chg_drv->stats_lock);
 

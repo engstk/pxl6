@@ -343,7 +343,7 @@ static u64 dpu_bts_calc_aclk_disp(struct decon_device *decon,
 				  const struct dpu_bts_win_config *config, u64 resol_clk,
 				  u32 max_clk)
 {
-	u64 aclk_disp, aclk_base, aclk_disp_khz;
+	u64 aclk_disp, aclk_base, aclk_panel_khz, aclk_disp_khz;
 	u32 ppc;
 	u32 src_w, src_h;
 	u32 diff_w, ratio_v;
@@ -362,12 +362,16 @@ static u64 dpu_bts_calc_aclk_disp(struct decon_device *decon,
 	if (src_w > config->dst_w || src_h > config->dst_h)
 		is_downscale = true;
 
-	/* case for using dsc encoder 1ea at decon0 or decon1 */
-	if ((decon->id != 2) && (decon->config.dsc.dsc_count == 1))
-		ppc = ((decon->bts.ppc / 2UL) >= 1UL) ?
-				(decon->bts.ppc / 2UL) : 1UL;
-	else
+	/* when calculating aclk for panel, if DSC is enabled, consider DSC encoder
+	 * count as its ppc.
+	 */
+	if (decon->config.dsc.enabled) {
+		ppc = min(decon->bts.ppc, decon->config.dsc.dsc_count);
+		is_dsc = true;
+	} else {
 		ppc = decon->bts.ppc;
+	}
+	aclk_panel_khz = resol_clk / ppc;
 
 	margin = 1100 + ((48000 + 20000) / decon->config.image_width);
 	diff_w = (src_w <= config->dst_w) ? 0 : src_w - config->dst_w;
@@ -389,10 +393,10 @@ static u64 dpu_bts_calc_aclk_disp(struct decon_device *decon,
 	}
 	aclk_disp = mult_frac(aclk_disp, decon->config.image_height * decon->bts.fps, 1000);
 	aclk_disp_khz = (aclk_disp * margin / 1000) / 1000;
+	aclk_disp_khz /= decon->bts.ppc;
 
-	if (aclk_disp_khz < resol_clk)
-		aclk_disp_khz = resol_clk;
-	aclk_disp_khz /= ppc;
+	if (aclk_disp_khz < aclk_panel_khz)
+		aclk_disp_khz = aclk_panel_khz;
 
 	if (!config->is_rot)
 		return aclk_disp_khz;
@@ -402,9 +406,6 @@ static u64 dpu_bts_calc_aclk_disp(struct decon_device *decon,
 		aclk_base = aclk_disp_khz;
 	else
 		aclk_base = max_clk;
-
-	if (decon->config.dsc.enabled)
-		is_dsc = true;
 
 	aclk_disp_khz = dpu_bts_calc_rotate_aclk(decon, (u32)aclk_base, ppc,
 			src_w, config->dst_w, config->is_comp, is_downscale, is_dsc);
@@ -880,6 +881,16 @@ static void dpu_bts_update_resources(struct decon_device *decon, bool shadow_upd
 	bw.write = decon->bts.write_bw;
 	DPU_DEBUG_BTS("  peak = %u, rt = %u, read = %u, write = %u\n",
 		bw.peak, bw.rt, bw.read, bw.write);
+
+	/* When concurrent writeback is enabled, writeback instant off may occur if the outfifo
+	 * for writeback is full meanwhile the outfifo for LCD is not full yet.
+	 * We can limit max_disp_freq to avoid it when concurrent writeback is enabled.
+	 * Currently, the issue only occurs when all layers are solid color layers (read = 0).
+	 */
+	if ((decon->bts.max_dfs_lv_for_wb > 0) && (bw.read == 0) && (bw.write > 0)) {
+		decon->bts.max_disp_freq =
+			min(decon->bts.max_disp_freq, decon->bts.max_dfs_lv_for_wb);
+	}
 
 	if (shadow_updated) {
 		/* after DECON h/w configs are updated to shadow SFR */
