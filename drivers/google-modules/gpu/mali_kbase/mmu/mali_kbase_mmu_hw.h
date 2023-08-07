@@ -133,6 +133,21 @@ int kbase_mmu_hw_do_unlock_no_addr(struct kbase_device *kbdev, struct kbase_as *
 int kbase_mmu_hw_do_unlock(struct kbase_device *kbdev, struct kbase_as *as,
 			   const struct kbase_mmu_hw_op_param *op_param);
 /**
+ * kbase_mmu_hw_do_lock - Issue a LOCK operation to the MMU.
+ *
+ * @kbdev:      Kbase device to issue the MMU operation on.
+ * @as:         Address space to issue the MMU operation on.
+ * @op_param:   Pointer to struct containing information about the MMU
+ *              operation to perform.
+ *
+ * Context: Acquires the hwaccess_lock, expects the caller to hold the mmu_hw_mutex
+ *
+ * Return: Zero if the operation was successful, non-zero otherwise.
+ */
+int kbase_mmu_hw_do_lock(struct kbase_device *kbdev, struct kbase_as *as,
+			  const struct kbase_mmu_hw_op_param *op_param);
+
+/**
  * kbase_mmu_hw_do_flush - Issue a flush operation to the MMU.
  *
  * @kbdev:      Kbase device to issue the MMU operation on.
