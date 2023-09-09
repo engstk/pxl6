@@ -19,7 +19,7 @@ MAKEFLAGS += --no-print-directory
 
 LIBFILE = $(OUTPUT)libsubcmd.a
 
-CFLAGS := -ggdb3 -Wall -Wextra -std=gnu99 -fPIC
+CFLAGS := $(KBUILD_HOSTCFLAGS) -ggdb3 -Wall -Wextra -std=gnu99 -fPIC
 
 ifeq ($(DEBUG),0)
   ifeq ($(feature-fortify-source), 1)
