@@ -249,54 +249,14 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
     EXTRA_CFLAGS += -DCONFIG_MALI_NO_MALI_DEFAULT_GPU='\"$(CONFIG_MALI_NO_MALI_DEFAULT_GPU)\"'
 endif
 
-#
-# KBUILD_EXTRA_SYMBOLS to prevent warnings about unknown functions
-#
-BASE_SYMBOLS = $(OUT_DIR)/../google-modules/gpu/mali_pixel/Module.symvers
-
-EXTRA_SYMBOLS += \
-    $(BASE_SYMBOLS)
-
-CFLAGS_MODULE += -Wall
-
-# The following were added to align with W=1 in scripts/Makefile.extrawarn
-# from the Linux source tree (v5.18.14)
-CFLAGS_MODULE += -Wextra -Wunused -Wno-unused-parameter
-CFLAGS_MODULE += -Wmissing-declarations
-CFLAGS_MODULE += -Wmissing-format-attribute
-CFLAGS_MODULE += -Wmissing-prototypes
-CFLAGS_MODULE += -Wold-style-definition
-# The -Wmissing-include-dirs cannot be enabled as the path to some of the
-# included directories change depending on whether it is an in-tree or
-# out-of-tree build.
-CFLAGS_MODULE += $(call cc-option, -Wunused-but-set-variable)
-CFLAGS_MODULE += $(call cc-option, -Wunused-const-variable)
-CFLAGS_MODULE += $(call cc-option, -Wpacked-not-aligned)
-CFLAGS_MODULE += $(call cc-option, -Wstringop-truncation)
 # The following turn off the warnings enabled by -Wextra
 CFLAGS_MODULE += -Wno-sign-compare
 CFLAGS_MODULE += -Wno-shift-negative-value
 # This flag is needed to avoid build errors on older kernels
 CFLAGS_MODULE += $(call cc-option, -Wno-cast-function-type)
 
-KBUILD_CPPFLAGS += -DKBUILD_EXTRA_WARN1
-
-# The following were added to align with W=2 in scripts/Makefile.extrawarn
-# from the Linux source tree (v5.18.14)
-CFLAGS_MODULE += -Wdisabled-optimization
-# The -Wshadow flag cannot be enabled unless upstream kernels are
-# patched to fix redefinitions of certain built-in functions and
-# global variables.
-CFLAGS_MODULE += $(call cc-option, -Wlogical-op)
-CFLAGS_MODULE += -Wmissing-field-initializers
 # -Wtype-limits must be disabled due to build failures on kernel 5.x
 CFLAGS_MODULE += -Wno-type-limits
-CFLAGS_MODULE += $(call cc-option, -Wmaybe-uninitialized)
-CFLAGS_MODULE += $(call cc-option, -Wunused-macros)
-# The following ensures the stack frame does not get larger than a page
-CFLAGS_MODULE += -Wframe-larger-than=4096
-
-KBUILD_CPPFLAGS += -DKBUILD_EXTRA_WARN2
 
 # This warning is disabled to avoid build failures in some kernel versions
 CFLAGS_MODULE += -Wno-ignored-qualifiers
@@ -314,10 +274,10 @@ ifeq ($(CONFIG_MALI_KCOV),y)
 endif
 
 all:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" modules
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" modules
 
 modules_install:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) modules_install
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) modules_install
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) clean
+	$(MAKE) -C $(KDIR) M=$(M) $(MAKE_ARGS) clean
