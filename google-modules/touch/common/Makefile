@@ -11,8 +11,8 @@ KBUILD_OPTIONS	+= CONFIG_TOUCHSCREEN_HEATMAP=m
 KBUILD_OPTIONS	+= CONFIG_TOUCHSCREEN_OFFLOAD=m
 KBUILD_OPTIONS	+= CONFIG_GOOG_TOUCH_INTERFACE=m
 EXTRA_CFLAGS	+= -DDYNAMIC_DEBUG_MODULE
-EXTRA_CFLAGS	+= -I$(KERNEL_SRC)/../google-modules/touch/common/include
-EXTRA_CFLAGS    += -I$(KERNEL_SRC)/../google-modules/display
+EXTRA_CFLAGS	+= -I$(srctree)/$(src)/include
+EXTRA_CFLAGS    += -I$(srctree)/$(src)/../../display
 
 modules clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) \

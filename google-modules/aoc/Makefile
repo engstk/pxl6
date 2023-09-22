@@ -13,9 +13,9 @@ M ?= $(shell pwd)
 
 KBUILD_OPTIONS += CONFIG_AOC_DRIVER=m CONFIG_WC_MBOX=m \
 		  CONFIG_AOC_CHAR_DRIVER=m CONFIG_AOC_CHAN_DRIVER=m \
-		  CONFIG_AOC_CONTROL_DRIVER=m CONFIG_AOC_UWB_DRIVER=m \
+		  CONFIG_AOC_CONTROL_DRIVER=m CONFIG_AOC_UWB_DRIVER=m
 
-ccflags-y := -I$(KERNEL_SRC)/../google-modules/aoc_ipc
+ccflags-y := -I$(srctree)/$(src)/../aoc_ipc
 headers-y := uapi/aoc.h
 
 modules modules_install clean:
