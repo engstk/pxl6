@@ -15,7 +15,7 @@
 
 #include "goog_touch_interface.h"
 #include "touch_bus_negotiator.h"
-#include "../../../gs-google/drivers/soc/google/vh/kernel/systrace.h"
+#include "../../../drivers/soc/google/vh/kernel/systrace.h"
 
 static struct class *gti_class;
 static u8 gti_dev_num;

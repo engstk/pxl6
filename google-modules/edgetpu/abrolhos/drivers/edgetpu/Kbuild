@@ -2,7 +2,7 @@ obj-m	+= abrolhos.o
 # Use the absolute path of this Makefile to get the source directory.
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ccflags-y	+= -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -I$(CURRENT_DIR)/include
-GIT_PATH=$(CURRENT_DIR)/../../
+GIT_PATH=$(CURRENT_DIR)/../../../../../
 GIT_BIN=/usr/bin/git
 GIT=$(GIT_BIN) -C $(GIT_PATH)
 ifeq ($(shell $(GIT) rev-parse --is-inside-work-tree),true)

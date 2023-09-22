@@ -19,5 +19,7 @@ KBUILD_OPTIONS += CONFIG_SND_SOC_CS35L41=m \
 		  CONFIG_SND_SOC_WM_ADSP=m \
 		  ccflags-y='$(CUSTOM_INCLUDE)'
 
+ccflags-y += -I$(srctree)/$(src)/include
+
 modules modules_install clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) W=1 $(@)

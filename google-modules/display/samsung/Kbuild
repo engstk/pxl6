@@ -4,6 +4,7 @@
 # Direct Rendering Infrastructure (DRI) in XFree86 4.1.0 and higher.
 
 ccflags-y := -I$(srctree)/$(src)/cal_common
+ccflags-y += -I$(srctree)/$(src)/../include
 
 ccflags-y += -I$(srctree)/$(src)/cal_9845
 exynos-drm-y += cal_9845/decon_reg.o

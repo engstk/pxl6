@@ -22,15 +22,10 @@
 
 # Path to the module source, KERNEL_SRC is defined for out-of-tree Kbuild
 # and BCMDHD_ROOT is passed as KBUILD_OPTIONS for out-of-tree Makefile
-ifeq ($(KERNEL_SRC),)
- ifeq ($(srctree),.)
-  BCMDHD_ROOT=$(src)
- else
-  BCMDHD_ROOT=$(srctree)/$(src)
- endif
- $(warning : ** Regular in-tree build BCMDHD_ROOT=$(BCMDHD_ROOT)**)
+ifeq ($(srctree),.)
+ BCMDHD_ROOT=$(src)
 else
- $(warning : ** out-of-tree Kbuild BCMDHD_ROOT=$(BCMDHD_ROOT)**)
+ BCMDHD_ROOT=$(srctree)/$(src)
 endif
 
 #####################
