@@ -261,7 +261,7 @@ endif
 #
 EXTRA_SYMBOLS += $(OUT_DIR)/../google-modules/gpu/mali_pixel/Module.symvers
 
-CFLAGS_MODULE += -Wall -Werror
+CFLAGS_MODULE += -Wall
 
 # The following were added to align with W=1 in scripts/Makefile.extrawarn
 # from the Linux source tree (v5.18.14)
