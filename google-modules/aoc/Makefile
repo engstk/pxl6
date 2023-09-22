@@ -19,4 +19,4 @@ ccflags-y := -I$(srctree)/$(src)/../aoc_ipc
 headers-y := uapi/aoc.h
 
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) W=1 $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)

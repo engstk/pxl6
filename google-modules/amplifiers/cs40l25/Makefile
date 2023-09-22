@@ -19,7 +19,7 @@ KBUILD_OPTIONS += CONFIG_HAPTICS_CS40L2X=m \
 ccflags-y += -I$(srctree)/$(src)/include
 
 modules modules_install clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) W=1 $(@)
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) $(KBUILD_OPTIONS) $(@)
 
 
 

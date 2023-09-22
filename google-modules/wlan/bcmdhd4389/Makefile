@@ -27,10 +27,6 @@ ifneq ($(KERNEL_SRC),)
  KBUILD_OPTIONS += BCMDHD_ROOT=$(shell cd $(KERNEL_SRC); readlink -e $(M))
 endif
 
-ifneq ($(CONFIG_WLAN_TRACKER),)
-KBUILD_EXTRA_SYMBOLS=$(OUT_DIR)/../google-modules/wlan/wlan_ptracker/Module.symvers
-endif
-
 all:
 	@echo "$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)"
 	@$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)
