@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+rel_path := ../google-modules
+
+ext_modules :=
+ext_modules += amplifiers/audiometrics
+ext_modules += amplifiers/cs35l41
+ext_modules += amplifiers/cs40l25
+ext_modules += amplifiers/drv2624
+ext_modules += aoc
+ext_modules += aoc/alsa
+ext_modules += aoc/usb
+ext_modules += bluetooth/broadcom
+ext_modules += bms
+ext_modules += display/samsung
+ext_modules += edgetpu/abrolhos/drivers/edgetpu
+ext_modules += gpu/mali_kbase
+ext_modules += gpu/mali_pixel
+ext_modules += lwis
+ext_modules += nfc
+ext_modules += power/reset
+ext_modules += touch/common
+ext_modules += touch/fts/ftm5
+ext_modules += touch/sec
+ext_modules += wlan/bcmdhd4389
+ext_modules += video/gchips
+
+# Add any modules which have their own UAPI headers to this list.  This will
+# cause the build to run the module makefile with headers_install target.
+has_uapi_headers :=
+has_uapi_headers += touch/common
+has_uapi_headers += video/gchips
+
+install_uapi_headers_targets := $(has_uapi_headers:=_headers_install)
+
+ifneq ($(wildcard $(KERNEL_SRC)/$(rel_path)/uwb/kernel),)
+ext_modules += uwb/kernel
+endif
+
+.PHONY: $(ext_modules) $(install_uapi_headers_targets) depmod allmodules
+
+allmodules: $(ext_modules) $(install_uapi_headers_targets) depmod
+
+aoc/alsa: | aoc
+
+aoc/usb: | aoc/alsa aoc
+
+power/reset: | bms
+
+touch/fts/ftm5: | touch/common
+
+touch/sec: | touch/common
+
+touch/fts/ftm5: | touch/common
+
+include $(KERNEL_SRC)/Makefile.ext_modules.include
