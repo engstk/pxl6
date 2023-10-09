@@ -1,0 +1,32 @@
+obj-m	+= abrolhos.o
+# Use the absolute path of this Makefile to get the source directory.
+CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+ccflags-y	+= -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -I$(CURRENT_DIR)/include
+GIT_PATH=$(CURRENT_DIR)/../../
+GIT_BIN=/usr/bin/git
+GIT=$(GIT_BIN) -C $(GIT_PATH)
+ifeq ($(shell $(GIT) rev-parse --is-inside-work-tree),true)
+	GIT_REPO_STATE=$(shell ($(GIT) status --porcelain | grep -q .) && echo -dirty)
+	ccflags-y	+= -DGIT_REPO_TAG=\"$(shell $(GIT) rev-parse --short HEAD)$(GIT_REPO_STATE)-kbuild\"
+endif
+
+edgetpu-objs	:= edgetpu-mailbox.o edgetpu-telemetry.o edgetpu-mapping.o edgetpu-dmabuf.o edgetpu-async.o edgetpu-iremap-pool.o edgetpu-sw-watchdog.o edgetpu-firmware.o edgetpu-firmware-util.o edgetpu-domain-pool.o
+
+mobile-objs	:= edgetpu-kci.o
+
+abrolhos-y	:= abrolhos-device.o abrolhos-device-group.o abrolhos-fs.o abrolhos-core.o abrolhos-platform.o abrolhos-firmware.o abrolhos-thermal.o abrolhos-pm.o abrolhos-iommu.o abrolhos-debug-dump.o abrolhos-usage-stats.o abrolhos-wakelock.o $(mobile-objs) $(edgetpu-objs)
+
+
+
+CFLAGS_abrolhos-fs.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-core.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-device.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-device-group.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-firmware.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-iommu.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-platform.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-pm.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-thermal.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-debug-dump.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-usage-stats.o := -DCONFIG_ABROLHOS=1
+CFLAGS_abrolhos-wakelock.o := -DCONFIG_ABROLHOS=1
