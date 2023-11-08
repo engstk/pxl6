@@ -80,7 +80,14 @@ static int kbase_kcpu_map_import_prepare(
 		 * on the physical pages tracking object. When the last
 		 * reference to the tracking object is dropped the pages
 		 * would be unpinned if they weren't unpinned before.
+		 *
+		 * Region should be CPU cached: abort if it isn't.
 		 */
+		if (WARN_ON(!(reg->flags & KBASE_REG_CPU_CACHED))) {
+			ret = -EINVAL;
+			goto out;
+		}
+
 		ret = kbase_jd_user_buf_pin_pages(kctx, reg);
 		if (ret)
 			goto out;
@@ -183,8 +190,7 @@ static void kbase_jit_add_to_pending_alloc_list(
 	struct kbase_kcpu_command_queue *blocked_queue;
 
 	lockdep_assert_held(&queue->lock);
-
-	spin_lock(&kctx->csf.kcpu_queues.jit_lock);
+	lockdep_assert_held(&kctx->csf.kcpu_queues.jit_lock);
 
 	list_for_each_entry(blocked_queue,
 			&kctx->csf.kcpu_queues.jit_blocked_queues,
@@ -200,8 +206,6 @@ static void kbase_jit_add_to_pending_alloc_list(
 	}
 
 	list_add_tail(&queue->jit_blocked, target_list_head);
-
-	spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 }
 
 /**
@@ -233,23 +237,24 @@ static int kbase_kcpu_jit_allocate_process(
 
 	lockdep_assert_held(&queue->lock);
 
-	if (alloc_info->blocked) {
-		spin_lock(&kctx->csf.kcpu_queues.jit_lock);
-		list_del(&queue->jit_blocked);
-		spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
-		alloc_info->blocked = false;
-	}
-
 	if (WARN_ON(!info))
 		return -EINVAL;
+
+	mutex_lock(&kctx->csf.kcpu_queues.jit_lock);
 
 	/* Check if all JIT IDs are not in use */
 	for (i = 0; i < count; i++, info++) {
 		/* The JIT ID is still in use so fail the allocation */
 		if (kctx->jit_alloc[info->id]) {
 			dev_dbg(kctx->kbdev->dev, "JIT ID still in use");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto fail;
 		}
+	}
+
+	if (alloc_info->blocked) {
+		list_del(&queue->jit_blocked);
+		alloc_info->blocked = false;
 	}
 
 	/* Now start the allocation loop */
@@ -260,7 +265,6 @@ static int kbase_kcpu_jit_allocate_process(
 			bool can_block = false;
 			struct kbase_kcpu_command const *jit_cmd;
 
-			spin_lock(&kctx->csf.kcpu_queues.jit_lock);
 			list_for_each_entry(jit_cmd, &kctx->csf.kcpu_queues.jit_cmds_head, info.jit_alloc.node) {
 				if (jit_cmd == cmd)
 					break;
@@ -279,7 +283,6 @@ static int kbase_kcpu_jit_allocate_process(
 					}
 				}
 			}
-			spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 
 			if (!can_block) {
 				/*
@@ -288,7 +291,7 @@ static int kbase_kcpu_jit_allocate_process(
 				 */
 				dev_warn_ratelimited(kctx->kbdev->dev, "JIT alloc command failed: %pK\n", cmd);
 				ret = -ENOMEM;
-				goto fail;
+				goto fail_rollback;
 			}
 
 			/* There are pending frees for an active allocation
@@ -306,7 +309,8 @@ static int kbase_kcpu_jit_allocate_process(
 				kctx->jit_alloc[info->id] = NULL;
 			}
 
-			return -EAGAIN;
+			ret = -EAGAIN;
+			goto fail;
 		}
 
 		/* Bind it to the user provided ID. */
@@ -322,7 +326,7 @@ static int kbase_kcpu_jit_allocate_process(
 				KBASE_REG_CPU_WR, &mapping);
 		if (!ptr) {
 			ret = -ENOMEM;
-			goto fail;
+			goto fail_rollback;
 		}
 
 		reg = kctx->jit_alloc[info->id];
@@ -331,9 +335,11 @@ static int kbase_kcpu_jit_allocate_process(
 		kbase_vunmap(kctx, &mapping);
 	}
 
+	mutex_unlock(&kctx->csf.kcpu_queues.jit_lock);
+
 	return 0;
 
-fail:
+fail_rollback:
 	/* Roll back completely */
 	for (i = 0, info = alloc_info->info; i < count; i++, info++) {
 		/* Free the allocations that were successful.
@@ -346,6 +352,8 @@ fail:
 
 		kctx->jit_alloc[info->id] = KBASE_RESERVED_REG_JIT_ALLOC;
 	}
+fail:
+	mutex_unlock(&kctx->csf.kcpu_queues.jit_lock);
 
 	return ret;
 }
@@ -408,13 +416,13 @@ static int kbase_kcpu_jit_allocate_prepare(
 	}
 
 	current_command->type = BASE_KCPU_COMMAND_TYPE_JIT_ALLOC;
-	spin_lock(&kctx->csf.kcpu_queues.jit_lock);
-	list_add_tail(&current_command->info.jit_alloc.node,
-			&kctx->csf.kcpu_queues.jit_cmds_head);
-	spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 	current_command->info.jit_alloc.info = info;
 	current_command->info.jit_alloc.count = count;
 	current_command->info.jit_alloc.blocked = false;
+	mutex_lock(&kctx->csf.kcpu_queues.jit_lock);
+	list_add_tail(&current_command->info.jit_alloc.node,
+			&kctx->csf.kcpu_queues.jit_cmds_head);
+	mutex_unlock(&kctx->csf.kcpu_queues.jit_lock);
 
 	return 0;
 out_free:
@@ -435,7 +443,7 @@ static void kbase_kcpu_jit_allocate_finish(
 {
 	lockdep_assert_held(&queue->lock);
 
-	spin_lock(&queue->kctx->csf.kcpu_queues.jit_lock);
+	mutex_lock(&queue->kctx->csf.kcpu_queues.jit_lock);
 
 	/* Remove this command from the jit_cmds_head list */
 	list_del(&cmd->info.jit_alloc.node);
@@ -449,7 +457,7 @@ static void kbase_kcpu_jit_allocate_finish(
 		cmd->info.jit_alloc.blocked = false;
 	}
 
-	spin_unlock(&queue->kctx->csf.kcpu_queues.jit_lock);
+	mutex_unlock(&queue->kctx->csf.kcpu_queues.jit_lock);
 
 	kfree(cmd->info.jit_alloc.info);
 }
@@ -463,17 +471,17 @@ static void kbase_kcpu_jit_retry_pending_allocs(struct kbase_context *kctx)
 {
 	struct kbase_kcpu_command_queue *blocked_queue;
 
+	lockdep_assert_held(&kctx->csf.kcpu_queues.jit_lock);
+
 	/*
 	 * Reschedule all queues blocked by JIT_ALLOC commands.
 	 * NOTE: This code traverses the list of blocked queues directly. It
 	 * only works as long as the queued works are not executed at the same
 	 * time. This precondition is true since we're holding the
-	 * kbase_csf_kcpu_queue_context.lock .
+	 * kbase_csf_kcpu_queue_context.jit_lock .
 	 */
-	spin_lock(&kctx->csf.kcpu_queues.jit_lock);
 	list_for_each_entry(blocked_queue, &kctx->csf.kcpu_queues.jit_blocked_queues, jit_blocked)
 		kthread_queue_work(&blocked_queue->csf_kcpu_worker, &blocked_queue->work);
-	spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 }
 
 static int kbase_kcpu_jit_free_process(struct kbase_kcpu_command_queue *queue,
@@ -491,6 +499,7 @@ static int kbase_kcpu_jit_free_process(struct kbase_kcpu_command_queue *queue,
 		return -EINVAL;
 
 	lockdep_assert_held(&queue->lock);
+	mutex_lock(&kctx->csf.kcpu_queues.jit_lock);
 
 	KBASE_TLSTREAM_TL_KBASE_ARRAY_BEGIN_KCPUQUEUE_EXECUTE_JIT_FREE_END(queue->kctx->kbdev,
 									   queue);
@@ -526,10 +535,10 @@ static int kbase_kcpu_jit_free_process(struct kbase_kcpu_command_queue *queue,
 	 * Remove this command from the jit_cmds_head list and retry pending
 	 * allocations.
 	 */
-	spin_lock(&kctx->csf.kcpu_queues.jit_lock);
 	list_del(&cmd->info.jit_free.node);
-	spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 	kbase_kcpu_jit_retry_pending_allocs(kctx);
+
+	mutex_unlock(&kctx->csf.kcpu_queues.jit_lock);
 
 	/* Free the list of ids */
 	kfree(ids);
@@ -595,12 +604,12 @@ static int kbase_kcpu_jit_free_prepare(
 	}
 
 	current_command->type = BASE_KCPU_COMMAND_TYPE_JIT_FREE;
-	spin_lock(&kctx->csf.kcpu_queues.jit_lock);
-	list_add_tail(&current_command->info.jit_free.node,
-			&kctx->csf.kcpu_queues.jit_cmds_head);
-	spin_unlock(&kctx->csf.kcpu_queues.jit_lock);
 	current_command->info.jit_free.ids = ids;
 	current_command->info.jit_free.count = count;
+	mutex_lock(&kctx->csf.kcpu_queues.jit_lock);
+	list_add_tail(&current_command->info.jit_free.node,
+			&kctx->csf.kcpu_queues.jit_cmds_head);
+	mutex_unlock(&kctx->csf.kcpu_queues.jit_lock);
 
 	return 0;
 out_free:

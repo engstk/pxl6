@@ -174,7 +174,7 @@ static int write_cmd(struct kbase_device *kbdev, int as_nr, u32 cmd)
 #if MALI_USE_CSF && !IS_ENABLED(CONFIG_MALI_NO_MALI)
 static int wait_cores_power_trans_complete(struct kbase_device *kbdev)
 {
-#define WAIT_TIMEOUT 1000 /* 1ms timeout */
+#define WAIT_TIMEOUT 50000 /* 50ms timeout */
 #define DELAY_TIME_IN_US 1
 	const int max_iterations = WAIT_TIMEOUT;
 	int loop;
@@ -194,7 +194,9 @@ static int wait_cores_power_trans_complete(struct kbase_device *kbdev)
 	}
 
 	if (loop == max_iterations) {
-		dev_warn(kbdev->dev, "SHADER_PWRTRANS set for too long");
+		dev_warn(kbdev->dev, "SHADER_PWRTRANS %08x%08x set for too long",
+			kbase_reg_read(kbdev, GPU_CONTROL_REG(SHADER_PWRTRANS_HI)),
+			kbase_reg_read(kbdev, GPU_CONTROL_REG(SHADER_PWRTRANS_LO)));
 		return -ETIMEDOUT;
 	}
 
@@ -230,9 +232,8 @@ static int apply_hw_issue_GPU2019_3901_wa(struct kbase_device *kbdev,
 	 * the workaround can be safely skipped.
 	 */
 	if (kbdev->pm.backend.l2_state != KBASE_L2_OFF) {
-		if (*mmu_cmd != AS_COMMAND_FLUSH_MEM) {
-			dev_warn(kbdev->dev,
-				 "Unexpected mmu command received");
+		if (unlikely(*mmu_cmd != AS_COMMAND_FLUSH_MEM)) {
+			dev_warn(kbdev->dev, "Unexpected MMU command(%u) received", *mmu_cmd);
 			ret = -EINVAL;
 			goto unlock;
 		}
@@ -502,8 +503,14 @@ static int mmu_hw_do_flush(struct kbase_device *kbdev, struct kbase_as *as,
 	if (mmu_cmd == AS_COMMAND_FLUSH_MEM) {
 		ret = apply_hw_issue_GPU2019_3901_wa(kbdev, &mmu_cmd,
 						as->number, hwaccess_locked);
-		if (ret)
-			return ret;
+		if (ret) {
+			dev_warn(kbdev->dev,
+				 "Failed to apply WA for HW issue when doing MMU flush op on VA range %llx-%llx for AS %u",
+				 op_param->vpfn << PAGE_SHIFT,
+				 ((op_param->vpfn + op_param->nr) << PAGE_SHIFT) - 1,
+				 as->number);
+			/* Continue with the MMU flush operation */
+		}
 	}
 #endif
 

@@ -551,7 +551,7 @@ struct kbase_queue_group {
  * @num_cmds:           The number of commands that have been enqueued across
  *                      all the KCPU command queues. This could be used as a
  *                      timestamp to determine the command's enqueueing time.
- * @jit_lock:           Lock protecting jit_cmds_head and jit_blocked_queues.
+ * @jit_lock:           Lock to serialise JIT operations.
  * @jit_cmds_head:      A list of the just-in-time memory commands, both
  *                      allocate & free, in submission order, protected
  *                      by kbase_csf_kcpu_queue_context.lock.
@@ -565,7 +565,7 @@ struct kbase_csf_kcpu_queue_context {
 	struct kbase_kcpu_command_queue *array[KBASEP_MAX_KCPU_QUEUES];
 	DECLARE_BITMAP(in_use, KBASEP_MAX_KCPU_QUEUES);
 	atomic64_t num_cmds;
-	spinlock_t jit_lock;
+	struct mutex jit_lock;
 	struct list_head jit_cmds_head;
 	struct list_head jit_blocked_queues;
 };
