@@ -46,4 +46,10 @@ int gpu_dvfs_kctx_init(struct kbase_context *kctx);
 void gpu_dvfs_kctx_term(struct kbase_context *kctx);
 #endif
 
+/* ITMON notifier */
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+int gpu_itmon_init(struct kbase_device *kbdev);
+void gpu_itmon_term(struct kbase_device *kbdev);
+#endif
+
 #endif /* _PIXEL_GPU_CONTROL_H_ */

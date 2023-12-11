@@ -4446,6 +4446,9 @@ wl_cfgvendor_nan_parse_datapath_args(struct wiphy *wiphy,
 				return ret;
 			}
 			break;
+		case NAN_ATTRIBUTE_INST_ID:
+			/* Skip */
+			break;
 		default:
 			WL_ERR(("Unknown type, %d\n", attr_type));
 			ret = -EINVAL;
@@ -5125,6 +5128,8 @@ wl_cfgvendor_nan_parse_discover_args(struct wiphy *wiphy,
 			}
 			cmd_data->service_responder_policy = nla_get_u8(iter);
 			break;
+		case NAN_ATTRIBUTE_SVC_CFG_SUSPENDABLE:
+			break;
 		default:
 			WL_ERR(("Unknown type, %d\n", attr_type));
 			ret = -EINVAL;
@@ -5157,6 +5162,10 @@ wl_cfgvendor_nan_parse_args(struct wiphy *wiphy, const void *buf,
 
 		switch (attr_type) {
 		/* NAN Enable request attributes */
+		case NAN_ATTRIBUTE_INST_ID: {
+			/* Skip */
+			break;
+		}
 		case NAN_ATTRIBUTE_2G_SUPPORT:{
 			if (nla_len(iter) != sizeof(uint8)) {
 				ret = -EINVAL;
@@ -12305,6 +12314,7 @@ const struct nla_policy nan_attr_policy[NAN_ATTRIBUTE_MAX] = {
 	[NAN_ATTRIBUTE_INSTANT_MODE_ENABLE] = { .type = NLA_U32, .len = sizeof(uint32) },
 	[NAN_ATTRIBUTE_INSTANT_COMM_CHAN] = { .type = NLA_U32, .len = sizeof(uint32) },
 	[NAN_ATTRIBUTE_CHRE_REQUEST] = { .type = NLA_U8, .len = sizeof(uint8) },
+	[NAN_ATTRIBUTE_SVC_CFG_SUSPENDABLE] = { .type = NLA_U8, .len = sizeof(uint8) },
 };
 #endif /* WL_NAN */
 

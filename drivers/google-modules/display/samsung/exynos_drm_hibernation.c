@@ -68,9 +68,29 @@ static bool exynos_hibernation_check(struct exynos_hibernation *hiber)
 		!is_dqe_dimming_in_progress(hiber->decon));
 }
 
+int hibernation_block(struct exynos_hibernation *hiber)
+{
+	int block_cnt;
+
+	if (!hiber || !hiber->decon)
+		return 0;
+
+	block_cnt = atomic_inc_return(&hiber->block_cnt);
+	DPU_ATRACE_INT_PID("hiber_blk_cnt", block_cnt, hiber->decon->thread->pid);
+	kthread_mod_delayed_work(&hiber->decon->worker, &hiber->dwork,
+			msecs_to_jiffies(HIBERNATION_ENTRY_MIN_TIME_MS));
+
+	return block_cnt;
+}
+
 static inline void hibernation_unblock(struct exynos_hibernation *hiber)
 {
+	if (!hiber || !hiber->decon)
+		return;
+
 	WARN_ON(!atomic_add_unless(&hiber->block_cnt, -1, 0));
+	DPU_ATRACE_INT_PID("hiber_blk_cnt",
+			atomic_read(&hiber->block_cnt), hiber->decon->thread->pid);
 }
 
 static int exynos_crtc_self_refresh_update(struct drm_crtc *crtc, bool enable, bool nonblock)
@@ -103,6 +123,7 @@ retry:
 
 	if (!crtc_state->enable) {
 		pr_debug("%s: skipping due to crtc disabled\n", __func__);
+		ret = -ENOTCONN;
 		goto out;
 	}
 
@@ -199,6 +220,7 @@ static bool exynos_hibernation_cancel(struct exynos_hibernation *hiber)
 {
 	struct decon_device *decon = hiber->decon;
 
+	DPU_ATRACE_BEGIN(__func__);
 	hibernation_block(hiber);
 
 	/*
@@ -208,6 +230,7 @@ static bool exynos_hibernation_cancel(struct exynos_hibernation *hiber)
 	kthread_cancel_delayed_work_sync(&hiber->dwork);
 
 	hibernation_unblock(hiber);
+	DPU_ATRACE_END(__func__);
 
 	pr_debug("%s: DPU power %s\n", __func__,
 			pm_runtime_active(decon->dev) ? "on" : "off");
@@ -225,15 +248,16 @@ static bool hibernation_block_sync(struct exynos_hibernation *hiber)
 {
 	const struct exynos_hibernation_funcs *funcs;
 	int block_cnt;
-	bool ret;
+	bool ret = false;
 
 	if (!hiber)
 		return false;
 
+	DPU_ATRACE_BEGIN(__func__);
 	block_cnt = hibernation_block(hiber);
 
 	if (!is_hibernation_enabled(hiber))
-		return false;
+		goto ret;
 
 	funcs = hiber->funcs;
 
@@ -241,6 +265,8 @@ static bool hibernation_block_sync(struct exynos_hibernation *hiber)
 
 	pr_debug("%s: block_cnt(%d)\n", __func__, block_cnt);
 
+ret:
+	DPU_ATRACE_END(__func__);
 	return ret;
 }
 
@@ -269,12 +295,13 @@ void hibernation_unblock_enter(struct exynos_hibernation *hiber)
 	if (!hiber)
 		return;
 
+	DPU_ATRACE_BEGIN(__func__);
 	hibernation_unblock(hiber);
 
 	if (!is_hibernaton_blocked(hiber))
 		kthread_mod_delayed_work(&hiber->decon->worker, &hiber->dwork,
 			msecs_to_jiffies(HIBERNATION_ENTRY_MIN_TIME_MS));
-
+	DPU_ATRACE_END(__func__);
 	pr_debug("%s: block_cnt(%d)\n", __func__, atomic_read(&hiber->block_cnt));
 }
 
@@ -300,6 +327,7 @@ static int _exynos_hibernation_run(struct exynos_hibernation *hibernation, bool 
 	struct decon_device *decon = hibernation->decon;
 	int rc = 0;
 
+	DPU_ATRACE_BEGIN(__func__);
 	mutex_lock(&hibernation->lock);
 	pr_debug("%s: decon state: %d +\n", __func__, decon->state);
 
@@ -320,6 +348,7 @@ static int _exynos_hibernation_run(struct exynos_hibernation *hibernation, bool 
 	hibernation_unblock(hibernation);
 ret:
 	mutex_unlock(&hibernation->lock);
+	DPU_ATRACE_END(__func__);
 
 	pr_debug("%s: -\n", __func__);
 
@@ -334,10 +363,12 @@ static void exynos_hibernation_handler(struct kthread_work *work)
 
 	pr_debug("Display hibernation handler is called\n");
 
+	DPU_ATRACE_BEGIN(__func__);
 	rc = _exynos_hibernation_run(hibernation, true);
 	if (rc == -EAGAIN)
 		kthread_mod_delayed_work(&hibernation->decon->worker, &hibernation->dwork,
 			msecs_to_jiffies(HIBERNATION_ENTRY_MIN_TIME_MS));
+	DPU_ATRACE_END(__func__);
 }
 
 int exynos_hibernation_suspend(struct exynos_hibernation *hiber)
@@ -347,6 +378,7 @@ int exynos_hibernation_suspend(struct exynos_hibernation *hiber)
 	if (!hiber)
 		return 0;
 
+	DPU_ATRACE_BEGIN(__func__);
 	/* cancel any scheduled delayed work, do it synchronously instead */
 	kthread_cancel_delayed_work_sync(&hiber->dwork);
 
@@ -355,8 +387,9 @@ int exynos_hibernation_suspend(struct exynos_hibernation *hiber)
 
 	if (atomic_read(&hiber->block_cnt) > 0)
 		ret = -EBUSY;
-	else if (hiber->decon->state == DECON_STATE_ON)
+	else
 		ret = _exynos_hibernation_run(hiber, false);
+	DPU_ATRACE_END(__func__);
 
 	return ret;
 }
@@ -405,6 +438,7 @@ exynos_hibernation_register(struct decon_device *decon)
 	mutex_init(&hibernation->lock);
 
 	atomic_set(&hibernation->block_cnt, 0);
+	DPU_ATRACE_INT_PID("hiber_blk_cnt", 0, decon->thread->pid);
 
 	kthread_init_delayed_work(&hibernation->dwork, exynos_hibernation_handler);
 
@@ -415,7 +449,7 @@ exynos_hibernation_register(struct decon_device *decon)
 
 void exynos_hibernation_destroy(struct exynos_hibernation *hiber)
 {
-	if (!is_hibernation_enabled(hiber))
+	if (!hiber)
 		return;
 
 	if (hiber->cam_op_reg)

@@ -8,7 +8,7 @@
  */
 
 #include <linux/atomic.h>
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 #include <linux/debugfs.h>
 #endif
 #include <linux/fs.h>
@@ -96,8 +96,10 @@ static inline vm_fault_t vmf_insert_pfn_prot(struct vm_area_struct *vma,
 struct mgm_group {
 	atomic_t size;
 	atomic_t lp_size;
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 	atomic_t insert_pfn;
 	atomic_t update_gpu_pte;
+#endif
 
 	ptid_t ptid;
 	ptpbha_t pbha;
@@ -147,7 +149,7 @@ struct mgm_groups {
 	struct device *dev;
 	struct pt_handle *pt_handle;
 	struct kobject kobj;
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 	struct dentry *mgm_debugfs_root;
 #endif
 };
@@ -156,7 +158,7 @@ struct mgm_groups {
  * DebugFS
  */
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 
 static int mgm_debugfs_state_get(void *data, u64 *val)
 {
@@ -287,7 +289,7 @@ static int mgm_debugfs_init(struct mgm_groups *mgm_data)
 	return 0;
 }
 
-#endif /* CONFIG_DEBUG_FS */
+#endif /* CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS */
 
 /*
  * Pixel Stats sysfs
@@ -408,39 +410,53 @@ static int group_active_pt_id(struct mgm_groups *data, enum pixel_mgm_group_id g
 
 static atomic64_t total_gpu_pages = ATOMIC64_INIT(0);
 
-static void update_size(struct memory_group_manager_device *mgm_dev, int
-		group_id, int order, bool alloc)
+static atomic_t* get_size_counter(struct memory_group_manager_device* mgm_dev, int group_id, int order)
 {
-	static DEFINE_RATELIMIT_STATE(gpu_alloc_rs, 10*HZ, 1);
+	static atomic_t err_atomic;
 	struct mgm_groups *data = mgm_dev->data;
 
 	switch (order) {
 	case ORDER_SMALL_PAGE:
-		if (alloc) {
-			atomic_inc(&data->groups[group_id].size);
-			atomic64_inc(&total_gpu_pages);
-		} else {
-			WARN_ON(atomic_read(&data->groups[group_id].size) == 0);
-			atomic_dec(&data->groups[group_id].size);
-			atomic64_dec(&total_gpu_pages);
-		}
-	break;
-
+		return &data->groups[group_id].size;
 	case ORDER_LARGE_PAGE:
-		if (alloc) {
-			atomic_inc(&data->groups[group_id].lp_size);
-			atomic64_add(1 << ORDER_LARGE_PAGE, &total_gpu_pages);
-		} else {
-			WARN_ON(atomic_read(
-				&data->groups[group_id].lp_size) == 0);
-			atomic_dec(&data->groups[group_id].lp_size);
-			atomic64_sub(1 << ORDER_LARGE_PAGE, &total_gpu_pages);
-		}
-	break;
-
+		return &data->groups[group_id].lp_size;
 	default:
 		dev_err(data->dev, "Unknown order(%d)\n", order);
-	break;
+		return &err_atomic;
+	}
+}
+
+static void update_size(struct memory_group_manager_device *mgm_dev, int
+		group_id, int order, bool alloc)
+{
+	static DEFINE_RATELIMIT_STATE(gpu_alloc_rs, 10*HZ, 1);
+	atomic_t* size = get_size_counter(mgm_dev, group_id, order);
+
+	if (alloc) {
+		atomic_inc(size);
+		atomic64_add(1 << order, &total_gpu_pages);
+	} else {
+		if (atomic_dec_return(size) < 0) {
+			/* b/289501175
+			 * Pages are often 'migrated' to the SLC group, which needs special
+			 * accounting.
+			 *
+			 * TODO: Remove after SLC MGM decoupling b/290354607
+			 */
+			if (!WARN_ON(group_id != MGM_SLC_GROUP_ID)) {
+				/* Undo the dec, and instead decrement the reserved group counter.
+				 * This is still making the assumption that the migration came from
+				 * the reserved group. Currently this is always true, however it
+				 * might not be in future. It would be invasive and costly to track
+				 * where every page came from, so instead this will be fixed as part
+				 * of the b/290354607 effort.
+				 */
+				atomic_inc(size);
+				update_size(mgm_dev, MGM_RESERVED_GROUP_ID, order, alloc);
+				return;
+			}
+		}
+		atomic64_sub(1 << order, &total_gpu_pages);
 	}
 
 	if (atomic64_read(&total_gpu_pages) >= (4 << (30 - PAGE_SHIFT)) &&
@@ -771,7 +787,9 @@ static u64 mgm_update_gpu_pte(
 		}
 	}
 
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 	atomic_inc(&data->groups[group_id].update_gpu_pte);
+#endif
 
 	return pte;
 }
@@ -821,10 +839,12 @@ static vm_fault_t mgm_vmf_insert_pfn_prot(
 
 	fault = vmf_insert_pfn_prot(vma, addr, pfn, prot);
 
-	if (fault == VM_FAULT_NOPAGE)
-		atomic_inc(&data->groups[group_id].insert_pfn);
-	else
+	if (fault != VM_FAULT_NOPAGE)
 		dev_err(data->dev, "vmf_insert_pfn_prot failed\n");
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
+	else
+		atomic_inc(&data->groups[group_id].insert_pfn);
+#endif
 
 	return fault;
 }
@@ -876,8 +896,10 @@ static int mgm_initialize_data(struct mgm_groups *mgm_data)
 	for (i = 0; i < MEMORY_GROUP_MANAGER_NR_GROUPS; i++) {
 		atomic_set(&mgm_data->groups[i].size, 0);
 		atomic_set(&mgm_data->groups[i].lp_size, 0);
+#ifdef CONFIG_MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
 		atomic_set(&mgm_data->groups[i].insert_pfn, 0);
 		atomic_set(&mgm_data->groups[i].update_gpu_pte, 0);
+#endif
 
 		mgm_data->groups[i].pbha = MGM_PBHA_DEFAULT;
 		mgm_data->groups[i].base_pt = 0;

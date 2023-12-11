@@ -10,6 +10,8 @@
  */
 #define pr_fmt(fmt) "aoc-fw: " fmt
 
+#define AOC_AUTH_HEADER_MAGIC_VALUE 0x00434F41
+
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -22,17 +24,30 @@
 struct aoc_auth_header {
 	u8 signature[512];
 	u8 key[512];
-	struct {
-		u32 magic;
-		u32 generation;
-		u32 rollback_info;
-		u32 length;
-		u8 flags [16];
-		u8 hash [32];
-		u8 chip_id [32];
-		u8 auth_config [256];
-		u8 image_config [256];
-	} header;
+	union {
+		struct {
+			u32 magic;
+			u32 generation;
+			u32 rollback_info;
+			u32 length;
+			u8 flags [16];
+			u8 hash [32];
+			u8 chip_id [32];
+			u8 auth_config [256];
+			u8 image_config [256];
+		} header_v1;
+		struct {
+			u32 magic;
+			u32 generation;
+			u32 rollback_info;
+			u32 length;
+			u8 flags [16];
+			u8 hash [64];
+			u8 chip_id [32];
+			u8 auth_config [256];
+			u8 image_config [256];
+		} header_v2;
+	};
 } __packed;
 
 struct aoc_superbin_header {
@@ -61,6 +76,24 @@ struct aoc_superbin_header {
 	u32 hifi3z_data_size;
 	u32 crc32;
 } __packed;
+
+struct aoc_image_config {
+	union {
+		struct {
+			uint32_t version;
+			struct {
+				uint32_t fw_start;
+				uint32_t fw_size;
+				uint32_t privilege_level;
+				uint16_t bl_offset;
+				uint16_t bl_size;
+				uint16_t sysmmu_offset;
+				uint16_t sysmmu_size;
+			};
+		};
+		uint8_t raw_bytes[256];
+	};
+};
 
 static u32 aoc_img_header_size(const struct firmware *fw)
 {
@@ -127,14 +160,70 @@ bool _aoc_fw_is_release(const struct firmware *fw)
 	return (le32_to_cpu(header->release_type) == 1);
 }
 
-bool _aoc_fw_is_signed(const struct firmware *fw)
+u32 _aoc_fw_get_header_version(const struct firmware *fw)
 {
 	const struct aoc_auth_header *header = (const struct aoc_auth_header *)(fw->data);
-	if (le32_to_cpu(header->header.magic) != 0x00434F41) {
-		return false;
+	if ((le32_to_cpu(header->header_v1.generation) == 1) &&
+			le32_to_cpu(header->header_v1.magic) == AOC_AUTH_HEADER_MAGIC_VALUE) {
+		return 1;
 	}
 
-	return true;
+	if ((le32_to_cpu(header->header_v2.generation) == 2) &&
+		le32_to_cpu(header->header_v2.magic) == AOC_AUTH_HEADER_MAGIC_VALUE) {
+		return 2;
+	}
+
+	return 0;
+}
+
+bool _aoc_fw_is_signed(const struct firmware *fw)
+{
+	return _aoc_fw_get_header_version(fw) != 0;
+}
+
+struct aoc_image_config *_aoc_fw_image_config(const struct firmware *fw)
+{
+	const struct aoc_auth_header *header = (const struct aoc_auth_header *)(fw->data);
+	u32 header_version = _aoc_fw_get_header_version(fw);
+
+	switch (header_version) {
+	case 1:
+		return (struct aoc_image_config *)&header->header_v1.image_config;
+	case 2:
+		return (struct aoc_image_config *)&header->header_v2.image_config;
+	default:
+		return (struct aoc_image_config *)&header->header_v1.image_config;
+	}
+}
+
+uint16_t _aoc_fw_sysmmu_offset(const struct firmware *fw)
+{
+	struct aoc_image_config *cfg = _aoc_fw_image_config(fw);
+
+	return cfg->sysmmu_offset;
+}
+
+uint16_t _aoc_fw_sysmmu_size(const struct firmware *fw)
+{
+	struct aoc_image_config *cfg = _aoc_fw_image_config(fw);
+
+	return cfg->sysmmu_size;
+}
+
+bool _aoc_fw_is_valid_sysmmu_size(const struct firmware *fw)
+{
+	struct aoc_image_config *cfg = _aoc_fw_image_config(fw);
+
+	return cfg->sysmmu_offset < sizeof(*cfg) &&
+		(cfg->sysmmu_offset + cfg->sysmmu_size) <= sizeof(*cfg) &&
+		(cfg->sysmmu_size % sizeof(struct sysmmu_entry) == 0);
+}
+
+struct sysmmu_entry *_aoc_fw_sysmmu_entry(const struct firmware *fw)
+{
+	struct aoc_image_config *cfg = _aoc_fw_image_config(fw);
+
+	return (struct sysmmu_entry *)((uint8_t *)cfg + cfg->sysmmu_offset);
 }
 
 bool _aoc_fw_is_compatible(const struct firmware *fw)

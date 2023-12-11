@@ -880,6 +880,8 @@ free_list:
 	return BCME_NOMEM;
 }
 
+#define MAX_20MHZ_CHANNELS   16u
+
 /* This function is used verifying channel items
  * created by wl_cellavoid_alloc_avail_chan_list are valid
  * by comparing the channel item to chan_info_list from FW
@@ -895,10 +897,13 @@ wl_cellavoid_verify_avail_chan_list(struct bcm_cfg80211 *cfg, wl_cellavoid_info_
 	void *dngl_chan_list;
 	bool legacy_chan_info = FALSE;
 	bool found;
-	int i, err;
+	int i, j, k, err;
 	chanspec_t chanspec = 0;
 	char chanspec_str[CHANSPEC_STR_LEN];
 	uint32 restrict_chan, chaninfo;
+	u32 arr_idx = 0, band;
+	u8 chan_array[MAX_20MHZ_CHANNELS] = {0};
+	wl_chanspec_attr_v1_t overlap[MAX_20MHZ_CHANNELS];
 
 	/* Get chan_info_list or chanspec from FW */
 #define LOCAL_BUF_LEN 4096
@@ -937,6 +942,10 @@ wl_cellavoid_verify_avail_chan_list(struct bcm_cfg80211 *cfg, wl_cellavoid_info_
 	GCC_DIAGNOSTIC_PUSH_SUPPRESS_CAST();
 	list_for_each_entry_safe(chan_info, next, &cellavoid_info->avail_chan_info_list, list) {
 		GCC_DIAGNOSTIC_POP();
+		wf_get_all_ext(chan_info->chanspec, chan_array);
+		bzero(overlap, sizeof(overlap));
+		band = CHSPEC_BAND(chan_info->chanspec);
+		arr_idx = 0;
 		found = FALSE;
 		for (i = 0; i < dtoh32(list_count); i++) {
 			if (legacy_chan_info) {
@@ -949,9 +958,40 @@ wl_cellavoid_verify_avail_chan_list(struct bcm_cfg80211 *cfg, wl_cellavoid_info_
 
 				chaninfo = dtoh32
 				(((wl_chanspec_list_v1_t *)dngl_chan_list)->chspecs[i].chaninfo);
+
+				/* Store chanspec attribute of subbands channel. */
+				if ((CHSPEC_BAND(chanspec) == band) &&
+					(CHSPEC_BW(chanspec) == WL_CHANSPEC_BW_20)) {
+					for (j = 0; j < MAX_20MHZ_CHANNELS; j++) {
+						if (!chan_array[j]) {
+							/* if entry is empty, break */
+							break;
+						}
+						if (chan_array[j] == CHSPEC_CHANNEL(chanspec)) {
+							overlap[arr_idx].chanspec = chanspec;
+							overlap[arr_idx].chaninfo = chaninfo;
+							WL_DBG(("sel_chspec:%x overlap_chspec:%x\n",
+									chan_info->chanspec,
+									overlap[arr_idx].chanspec));
+							arr_idx++;
+							break;
+						}
+					}
+				}
+
 				restrict_chan = ((chaninfo & WL_CHAN_RADAR) ||
 					(chaninfo & WL_CHAN_PASSIVE) ||
 					(chaninfo & WL_CHAN_CLM_RESTRICTED));
+
+				if (chan_info->chanspec == chanspec) {
+					for (k = 0; k < arr_idx; k++) {
+						restrict_chan |=
+							((overlap[k].chaninfo & WL_CHAN_RADAR) ||
+							(overlap[k].chaninfo & WL_CHAN_PASSIVE) ||
+							(overlap[k].chaninfo &
+								WL_CHAN_CLM_RESTRICTED));
+					}
+				}
 			}
 
 			if ((!restrict_chan) && (chan_info->chanspec == chanspec)) {
@@ -1638,8 +1678,6 @@ wl_cellavoid_validate_param(struct bcm_cfg80211 *cfg, wl_cellavoid_param_t *para
 			WL_ERR(("Not supported band %d, channel %d, pwrcap %d\n",
 				param->chan_param[i].band, param->chan_param[i].center_channel,
 				param->chan_param[i].pwr_cap));
-			ret = -EINVAL;
-			goto exit;
 		}
 
 		param->chan_param[i].chspec_bw = bw;

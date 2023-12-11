@@ -35,10 +35,8 @@
 #define ENTRY_IS_INVAL		2ULL
 #define ENTRY_IS_PTE		3ULL
 
-#define ENTRY_ATTR_BITS (7ULL << 2)	/* bits 4:2 */
 #define ENTRY_ACCESS_RW (1ULL << 6)     /* bits 6:7 */
 #define ENTRY_ACCESS_RO (3ULL << 6)
-#define ENTRY_SHARE_BITS (3ULL << 8)	/* bits 9:8 */
 #define ENTRY_ACCESS_BIT (1ULL << 10)
 #define ENTRY_NX_BIT (1ULL << 54)
 

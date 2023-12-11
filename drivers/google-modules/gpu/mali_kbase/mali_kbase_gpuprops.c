@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -49,7 +49,7 @@ static void kbase_gpuprops_construct_coherent_groups(
 	props->coherency_info.coherency = props->raw_props.mem_features;
 	props->coherency_info.num_core_groups = hweight64(props->raw_props.l2_present);
 
-	if (props->coherency_info.coherency & GROUPS_L2_COHERENT) {
+	if (props->coherency_info.coherency & MEM_FEATURES_COHERENT_CORE_GROUP_MASK) {
 		/* Group is l2 coherent */
 		group_present = props->raw_props.l2_present;
 	} else {
@@ -311,9 +311,6 @@ static void kbase_gpuprops_calculate_props(
 	struct base_gpu_props * const gpu_props, struct kbase_device *kbdev)
 {
 	int i;
-#if !MALI_USE_CSF
-	u32 gpu_id;
-#endif
 
 	/* Populate the base_gpu_props structure */
 	kbase_gpuprops_update_core_props_gpu_id(gpu_props);
@@ -365,45 +362,21 @@ static void kbase_gpuprops_calculate_props(
 
 #if MALI_USE_CSF
 	gpu_props->thread_props.max_registers =
-		KBASE_UBFX32(gpu_props->raw_props.thread_features,
-			     0U, 22);
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 0U, 22);
 	gpu_props->thread_props.impl_tech =
-		KBASE_UBFX32(gpu_props->raw_props.thread_features,
-			     22U, 2);
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 22U, 2);
 	gpu_props->thread_props.max_task_queue =
-		KBASE_UBFX32(gpu_props->raw_props.thread_features,
-			     24U, 8);
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 24U, 8);
 	gpu_props->thread_props.max_thread_group_split = 0;
 #else
-	/* MIDHARC-2364 was intended for tULx.
-	 * Workaround for the incorrectly applied THREAD_FEATURES to tDUx.
-	 */
-	gpu_id = kbdev->gpu_props.props.raw_props.gpu_id;
-	if ((gpu_id & GPU_ID2_PRODUCT_MODEL) == GPU_ID2_PRODUCT_TDUX) {
-		gpu_props->thread_props.max_registers =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     0U, 22);
-		gpu_props->thread_props.impl_tech =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     22U, 2);
-		gpu_props->thread_props.max_task_queue =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     24U, 8);
-		gpu_props->thread_props.max_thread_group_split = 0;
-	} else {
-		gpu_props->thread_props.max_registers =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     0U, 16);
-		gpu_props->thread_props.max_task_queue =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     16U, 8);
-		gpu_props->thread_props.max_thread_group_split =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     24U, 6);
-		gpu_props->thread_props.impl_tech =
-			KBASE_UBFX32(gpu_props->raw_props.thread_features,
-				     30U, 2);
-	}
+	gpu_props->thread_props.max_registers =
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 0U, 16);
+	gpu_props->thread_props.max_task_queue =
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 16U, 8);
+	gpu_props->thread_props.max_thread_group_split =
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 24U, 6);
+	gpu_props->thread_props.impl_tech =
+		KBASE_UBFX32(gpu_props->raw_props.thread_features, 30U, 2);
 #endif
 
 	/* If values are not specified, then use defaults */
@@ -539,7 +512,7 @@ MODULE_PARM_DESC(override_l2_hash, "Override L2 hash config for testing");
 static u32 l2_hash_values[ASN_HASH_COUNT] = {
 	0,
 };
-static int num_override_l2_hash_values;
+static unsigned int num_override_l2_hash_values;
 module_param_array(l2_hash_values, uint, &num_override_l2_hash_values, 0000);
 MODULE_PARM_DESC(l2_hash_values, "Override L2 hash values config for testing");
 
@@ -593,7 +566,7 @@ kbase_read_l2_config_from_dt(struct kbase_device *const kbdev)
 
 	kbdev->l2_hash_values_override = false;
 	if (num_override_l2_hash_values) {
-		int i;
+		unsigned int i;
 
 		kbdev->l2_hash_values_override = true;
 		for (i = 0; i < num_override_l2_hash_values; i++)
@@ -677,9 +650,11 @@ int kbase_gpuprops_update_l2_features(struct kbase_device *kbdev)
 			int idx;
 			const bool asn_he = regdump.l2_config &
 					    L2_CONFIG_ASN_HASH_ENABLE_MASK;
+#if !IS_ENABLED(CONFIG_MALI_NO_MALI)
 			if (!asn_he && kbdev->l2_hash_values_override)
 				dev_err(kbdev->dev,
 					"Failed to use requested ASN_HASH, fallback to default");
+#endif
 			for (idx = 0; idx < ASN_HASH_COUNT; idx++)
 				dev_info(kbdev->dev,
 					 "%s ASN_HASH[%d] is [0x%08x]\n",
@@ -705,10 +680,6 @@ static struct {
 #define PROP(name, member) \
 	{KBASE_GPUPROP_ ## name, offsetof(struct base_gpu_props, member), \
 		sizeof(((struct base_gpu_props *)0)->member)}
-#define BACKWARDS_COMPAT_PROP(name, type)                                                          \
-	{                                                                                          \
-		KBASE_GPUPROP_##name, SIZE_MAX, sizeof(type)                                       \
-	}
 	PROP(PRODUCT_ID, core_props.product_id),
 	PROP(VERSION_STATUS, core_props.version_status),
 	PROP(MINOR_REVISION, core_props.minor_revision),
@@ -722,6 +693,10 @@ static struct {
 	PROP(GPU_AVAILABLE_MEMORY_SIZE, core_props.gpu_available_memory_size),
 
 #if MALI_USE_CSF
+#define BACKWARDS_COMPAT_PROP(name, type)                                                          \
+	{                                                                                          \
+		KBASE_GPUPROP_##name, SIZE_MAX, sizeof(type)                                       \
+	}
 	BACKWARDS_COMPAT_PROP(NUM_EXEC_ENGINES, u8),
 #else
 	PROP(NUM_EXEC_ENGINES, core_props.num_exec_engines),
@@ -820,7 +795,7 @@ int kbase_gpuprops_populate_user_buffer(struct kbase_device *kbdev)
 	}
 
 	kprops->prop_buffer_size = size;
-	kprops->prop_buffer = kmalloc(size, GFP_KERNEL);
+	kprops->prop_buffer = kzalloc(size, GFP_KERNEL);
 
 	if (!kprops->prop_buffer) {
 		kprops->prop_buffer_size = 0;

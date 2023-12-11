@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -20,11 +20,11 @@
  */
 
 #include "mali_kbase_vinstr.h"
-#include "mali_kbase_hwcnt_virtualizer.h"
-#include "mali_kbase_hwcnt_types.h"
+#include "hwcnt/mali_kbase_hwcnt_virtualizer.h"
+#include "hwcnt/mali_kbase_hwcnt_types.h"
 #include <uapi/gpu/arm/midgard/mali_kbase_hwcnt_reader.h>
-#include "mali_kbase_hwcnt_gpu.h"
-#include "mali_kbase_hwcnt_gpu_narrow.h"
+#include "hwcnt/mali_kbase_hwcnt_gpu.h"
+#include "hwcnt/mali_kbase_hwcnt_gpu_narrow.h"
 #include <uapi/gpu/arm/midgard/mali_kbase_ioctl.h>
 #include "mali_malisw.h"
 #include "mali_kbase_debug.h"
@@ -40,6 +40,11 @@
 #include <linux/slab.h>
 #include <linux/version_compat_defs.h>
 #include <linux/workqueue.h>
+
+/* Explicitly include epoll header for old kernels. Not required from 4.16. */
+#if KERNEL_VERSION(4, 16, 0) > LINUX_VERSION_CODE
+#include <uapi/linux/eventpoll.h>
+#endif
 
 /* Hwcnt reader API version */
 #define HWCNT_READER_API 1
@@ -452,7 +457,7 @@ static int kbasep_vinstr_client_create(
 
 	errcode = -ENOMEM;
 	vcli->dump_bufs_meta = kmalloc_array(
-		setup->buffer_count, sizeof(*vcli->dump_bufs_meta), GFP_KERNEL);
+		setup->buffer_count, sizeof(*vcli->dump_bufs_meta), GFP_KERNEL | __GFP_ZERO);
 	if (!vcli->dump_bufs_meta)
 		goto error;
 
@@ -536,8 +541,10 @@ void kbase_vinstr_term(struct kbase_vinstr_context *vctx)
 
 void kbase_vinstr_suspend(struct kbase_vinstr_context *vctx)
 {
-	if (WARN_ON(!vctx))
+	if (!vctx) {
+		pr_warn("%s: vctx is NULL\n", __func__);
 		return;
+	}
 
 	mutex_lock(&vctx->lock);
 
@@ -566,8 +573,10 @@ void kbase_vinstr_suspend(struct kbase_vinstr_context *vctx)
 
 void kbase_vinstr_resume(struct kbase_vinstr_context *vctx)
 {
-	if (WARN_ON(!vctx))
+	if (!vctx) {
+		pr_warn("%s:vctx is NULL\n", __func__);
 		return;
+	}
 
 	mutex_lock(&vctx->lock);
 
@@ -1034,24 +1043,25 @@ static long kbasep_vinstr_hwcnt_reader_ioctl(
  * @filp: Non-NULL pointer to file structure.
  * @wait: Non-NULL pointer to poll table.
  *
- * Return: POLLIN if data can be read without blocking, 0 if data can not be
- *         read without blocking, else error code.
+ * Return: EPOLLIN | EPOLLRDNORM if data can be read without blocking, 0 if
+ *         data can not be read without blocking, else EPOLLHUP | EPOLLERR.
  */
 static __poll_t kbasep_vinstr_hwcnt_reader_poll(struct file *filp, poll_table *wait)
 {
 	struct kbase_vinstr_client *cli;
 
 	if (!filp || !wait)
-		return (__poll_t)-EINVAL;
+		return EPOLLHUP | EPOLLERR;
 
 	cli = filp->private_data;
 	if (!cli)
-		return (__poll_t)-EINVAL;
+		return EPOLLHUP | EPOLLERR;
 
 	poll_wait(filp, &cli->waitq, wait);
 	if (kbasep_vinstr_hwcnt_reader_buffer_ready(cli))
-		return POLLIN;
-	return 0;
+		return EPOLLIN | EPOLLRDNORM;
+
+	return (__poll_t)0;
 }
 
 /**

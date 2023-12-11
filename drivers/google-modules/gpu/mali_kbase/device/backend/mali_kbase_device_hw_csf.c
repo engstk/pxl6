@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2020-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -24,6 +24,7 @@
 #include <backend/gpu/mali_kbase_instr_internal.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
 #include <device/mali_kbase_device.h>
+#include <device/mali_kbase_device_internal.h>
 #include <mali_kbase_reset_gpu.h>
 #include <mmu/mali_kbase_mmu.h>
 #include <mali_kbase_ctx_sched.h>
@@ -57,7 +58,7 @@ static void kbase_gpu_fault_interrupt(struct kbase_device *kbdev)
 {
 	const u32 status = kbase_reg_read(kbdev,
 			GPU_CONTROL_REG(GPU_FAULTSTATUS));
-	const bool as_valid = status & GPU_FAULTSTATUS_JASID_VALID_FLAG;
+	const bool as_valid = status & GPU_FAULTSTATUS_JASID_VALID_MASK;
 	const u32 as_nr = (status & GPU_FAULTSTATUS_JASID_MASK) >>
 			GPU_FAULTSTATUS_JASID_SHIFT;
 	bool bus_fault = (status & GPU_FAULTSTATUS_EXCEPTION_TYPE_MASK) ==
@@ -146,6 +147,9 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 									GPU_EXCEPTION_TYPE_SW_FAULT_0,
 							} } };
 
+			kbase_debug_csf_fault_notify(kbdev, scheduler->active_protm_grp->kctx,
+						     DF_GPU_PROTECTED_FAULT);
+
 			scheduler->active_protm_grp->faulted = true;
 			kbase_csf_add_group_fatal_error(
 				scheduler->active_protm_grp, &err_payload);
@@ -177,9 +181,6 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 
 		dev_dbg(kbdev->dev, "Doorbell mirror interrupt received");
 		spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
-#ifdef CONFIG_MALI_DEBUG
-		WARN_ON(!kbase_csf_scheduler_get_nr_active_csgs(kbdev));
-#endif
 		kbase_pm_disable_db_mirror_interrupt(kbdev);
 		kbdev->pm.backend.exit_gpu_sleep_mode = true;
 		kbase_csf_scheduler_invoke_tick(kbdev);
@@ -227,7 +228,7 @@ void kbase_gpu_interrupt(struct kbase_device *kbdev, u32 val)
 }
 
 #if !IS_ENABLED(CONFIG_MALI_NO_MALI)
-static bool kbase_is_register_accessible(u32 offset)
+bool kbase_is_register_accessible(u32 offset)
 {
 #ifdef CONFIG_MALI_DEBUG
 	if (((offset >= MCU_SUBSYSTEM_BASE) && (offset < IPA_CONTROL_BASE)) ||
@@ -239,11 +240,16 @@ static bool kbase_is_register_accessible(u32 offset)
 
 	return true;
 }
+#endif /* !IS_ENABLED(CONFIG_MALI_NO_MALI) */
 
+#if IS_ENABLED(CONFIG_MALI_REAL_HW)
 void kbase_reg_write(struct kbase_device *kbdev, u32 offset, u32 value)
 {
-	KBASE_DEBUG_ASSERT(kbdev->pm.backend.gpu_powered);
-	KBASE_DEBUG_ASSERT(kbdev->dev != NULL);
+	if (WARN_ON(!kbdev->pm.backend.gpu_powered))
+		return;
+
+	if (WARN_ON(kbdev->dev == NULL))
+		return;
 
 	if (!kbase_is_register_accessible(offset))
 		return;
@@ -263,8 +269,11 @@ u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset)
 {
 	u32 val;
 
-	KBASE_DEBUG_ASSERT(kbdev->pm.backend.gpu_powered);
-	KBASE_DEBUG_ASSERT(kbdev->dev != NULL);
+	if (WARN_ON(!kbdev->pm.backend.gpu_powered))
+		return 0;
+
+	if (WARN_ON(kbdev->dev == NULL))
+		return 0;
 
 	if (!kbase_is_register_accessible(offset))
 		return 0;
@@ -281,4 +290,4 @@ u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset)
 	return val;
 }
 KBASE_EXPORT_TEST_API(kbase_reg_read);
-#endif /* !IS_ENABLED(CONFIG_MALI_NO_MALI) */
+#endif /* IS_ENABLED(CONFIG_MALI_REAL_HW) */

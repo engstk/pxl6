@@ -1,30 +1,61 @@
-# NOTE: THIS FILE IS EXPERIMENTAL FOR THE BAZEL MIGRATION AND NOT USED FOR
-# YOUR BUILDS CURRENTLY.
+# This program is free software and is provided to you under the terms of the
+# GNU General Public License version 2 as published by the Free Software
+# Foundation, and any use by you of this program is subject to the terms
+# of such GNU license.
 #
-# It is not yet the source of truth for your build. If you're looking to modify
-# the build file, modify the Android.bp file instead. Do *not* modify this file
-# unless you have coordinated with the team managing the Soong to Bazel
-# migration.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, you can access it online at
+# http://www.gnu.org/licenses/gpl-2.0.html.
+#
+#
 
-load("//build/kleaf:kernel.bzl", "kernel_module")
+load(
+    "//build/kernel/kleaf:kernel.bzl",
+    "kernel_module",
+)
+
+_midgard_modules = [
+    "mali_kbase.ko",
+    "tests/kutf/mali_kutf.ko",
+    "tests/mali_kutf_clk_rate_trace/kernel/mali_kutf_clk_rate_trace_test_portal.ko",
+]
 
 kernel_module(
     name = "mali_kbase.cloudripper",
     srcs = glob([
         "**/*.c",
         "**/*.h",
-        "**/Kbuild",
+        "**/*Kbuild",
+        "**/*Makefile",
     ]) + [
+        "//common:kernel_headers",
+        "//common-modules/mali:headers",
+        "//common-modules/mali/drivers/gpu/arm/arbitration",
+        "//common-modules/mali/drivers/xen/arm:xen",
         "//private/google-modules/gpu/common:headers",
     ],
-    outs = [
-        "mali_kbase.ko",
-    ],
+    outs = _midgard_modules,
     kernel_build = "//private/gs-google:cloudripper",
     visibility = [
         "//private/gs-google:__pkg__",
     ],
     deps = [
         "//private/google-modules/gpu/mali_pixel",
+    ],
+)
+
+filegroup(
+    name = "midgard_kconfig.cloudripper",
+    srcs = glob([
+        "**/*Kconfig",
+    ]),
+    visibility = [
+        "//common:__pkg__",
+        "//common-modules/mali:__subpackages__",
     ],
 )

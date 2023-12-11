@@ -639,7 +639,7 @@ static int info_usb_state(union gbms_ce_adapter_details *ad,
 {
 	const char *usb_type_str = psy_usb_type_str[0];
 	int usb_type, voltage_max = -1, amperage_max = -1;
-	int usbc_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
+	int ad_type, usbc_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
 
 	if (usb_psy) {
 		int voltage_now, current_now;
@@ -665,26 +665,30 @@ static int info_usb_state(union gbms_ce_adapter_details *ad,
 		pr_info("usbchg=%s typec=%s usbv=%d usbc=%d usbMv=%d usbMc=%d\n",
 			usb_type_str,
 			tcpm_psy ? psy_usbc_type_str[usbc_type] : "null",
-			voltage_now / 1000,
+			voltage_now < 0 ? voltage_now : voltage_now / 1000,
 			current_now / 1000,
-			voltage_max / 1000,
-			amperage_max / 1000);
+			voltage_max < 0 ? voltage_max : voltage_max / 1000,
+			amperage_max < 0 ? amperage_max : amperage_max / 1000);
 	}
 
 	if (!ad)
 		return 0;
 
-	ad->ad_voltage = (voltage_max < 0) ? voltage_max
-					   : voltage_max / 100000;
-	ad->ad_amperage = (amperage_max < 0) ? amperage_max
-					     : amperage_max / 100000;
-
+	/* if data is not allowed, keep previous value */
 	if (voltage_max < 0 || amperage_max < 0) {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_UNKNOWN;
+		if (ad->ad_type == CHG_EV_ADAPTER_TYPE_UNKNOWN)
+			ad->ad_type = CHG_EV_ADAPTER_TYPE_USB_UNKNOWN;
 		return -EINVAL;
 	}
 
-	ad->ad_type = info_usb_ad_type(usb_type, usbc_type);
+	ad_type = info_usb_ad_type(usb_type, usbc_type);
+	/* detect unknown when disconnect, ingnore this case */
+	if (ad->ad_type > ad_type && ad->ad_type != CHG_EV_ADAPTER_TYPE_USB)
+		return 0;
+
+	ad->ad_type = ad_type;
+	ad->ad_voltage = voltage_max / 100000;
+	ad->ad_amperage = amperage_max / 100000;
 
 	return 0;
 }
@@ -700,8 +704,8 @@ static int info_wlc_state(union gbms_ce_adapter_details *ad,
 	pr_info("wlcv=%d wlcc=%d wlcMv=%d wlcMc=%d wlct=%d vrect=%d opfreq=%d, vcpout=%d\n",
 		GPSY_GET_PROP(wlc_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW) / 1000,
 		GPSY_GET_PROP(wlc_psy, POWER_SUPPLY_PROP_CURRENT_NOW) / 1000,
-		voltage_max / 1000,
-		amperage_max / 1000,
+		voltage_max < 0 ? voltage_max : voltage_max / 1000,
+		amperage_max < 0 ? amperage_max : amperage_max / 1000,
 		GPSY_GET_PROP(wlc_psy, POWER_SUPPLY_PROP_TEMP),
 		GPSY_GET_PROP(wlc_psy, GBMS_PROP_WLC_VRECT) / 1000,
 		GPSY_GET_PROP(wlc_psy, GBMS_PROP_WLC_OP_FREQ) / 1000,
@@ -710,12 +714,16 @@ static int info_wlc_state(union gbms_ce_adapter_details *ad,
 	if (!ad)
 		return 0;
 
+	/* if data is not allowed, keep previous value */
 	if (voltage_max < 0 || amperage_max < 0) {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_UNKNOWN;
-		ad->ad_voltage = voltage_max;
-		ad->ad_amperage = amperage_max;
+		if (ad->ad_type == CHG_EV_ADAPTER_TYPE_UNKNOWN)
+			ad->ad_type = CHG_EV_ADAPTER_TYPE_WLC_UNKNOWN;
 		return -EINVAL;
 	}
+
+	/* keep original (dream defend might change its type) */
+	if (ad->ad_voltage > voltage_max / 100000)
+		return 0;
 
 	ad->ad_type = CHG_EV_ADAPTER_TYPE_WLC;
 	if (voltage_max >= WLC_EPP_THRESHOLD_UV) {
@@ -741,23 +749,25 @@ static int info_ext_state(union gbms_ce_adapter_details *ad,
 	pr_info("extv=%d extcc=%d extMv=%d extMc=%d\n",
 		GPSY_GET_PROP(ext_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW) / 1000,
 		GPSY_GET_PROP(ext_psy, POWER_SUPPLY_PROP_CURRENT_NOW) / 1000,
-		voltage_max / 1000, amperage_max / 1000);
+		voltage_max < 0 ? voltage_max : voltage_max / 1000,
+		amperage_max < 0 ? amperage_max : amperage_max / 1000);
 
 	if (!ad)
 		return 0;
 
+	/* if data is not allowed, keep previous value */
 	if (voltage_max < 0 || amperage_max < 0) {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT_UNKNOWN;
-		ad->ad_voltage = voltage_max;
-		ad->ad_amperage = amperage_max;
+		if (ad->ad_type == CHG_EV_ADAPTER_TYPE_UNKNOWN)
+			ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT_UNKNOWN;
 		return -EINVAL;
-	} else if (voltage_max > EXT1_DETECT_THRESHOLD_UV) {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT1;
-	} else if (voltage_max > EXT2_DETECT_THRESHOLD_UV) {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT2;
-	} else {
-		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT;
 	}
+
+	if (voltage_max > EXT1_DETECT_THRESHOLD_UV)
+		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT1;
+	else if (voltage_max > EXT2_DETECT_THRESHOLD_UV)
+		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT2;
+	else
+		ad->ad_type = CHG_EV_ADAPTER_TYPE_EXT;
 
 	ad->ad_voltage = voltage_max / 100000;
 	ad->ad_amperage = amperage_max / 100000;
@@ -1530,7 +1540,8 @@ static void thermal_stats_update(struct chg_drv *chg_drv) {
 	int i;
 	int thermal_level = -1;
 
-	if (chg_drv->thermal_levels_count <= 0)
+	if (chg_drv->thermal_levels_count <= 0 &&
+	    chg_drv->thermal_devices[CHG_TERMAL_DEVICE_FCC].thermal_levels <= 0)
 		return; /* Don't log any stats if there is nothing in the DT */
 
 	if (!chg_drv->chg_mdis)
@@ -1542,6 +1553,7 @@ static void thermal_stats_update(struct chg_drv *chg_drv) {
 
 	/* The value from the votable may be uninitialized (negative). */
 	if (thermal_level <= 0) {
+		gvotable_cast_int_vote(chg_drv->thermal_level_votable, "THERMAL_UPDATE", 0, false);
 		/* Do not log any stats in level 0, so store updated time. */
 		mutex_lock(&chg_drv->stats_lock);
 		chg_drv->thermal_stats_last_update = get_boot_sec();
@@ -1549,10 +1561,15 @@ static void thermal_stats_update(struct chg_drv *chg_drv) {
 		return;
 	}
 
-	/* Translate the thermal tier to a stats tier */
-	for (i = 0; i < chg_drv->thermal_levels_count; i++)
-		if (thermal_level <= chg_drv->thermal_stats_mdis_levels[i])
-			break;
+	if (chg_drv->thermal_levels_count) {
+		/* Translate the thermal tier to a stats tier */
+		for (i = 0; i < chg_drv->thermal_levels_count; i++)
+			if (thermal_level <= chg_drv->thermal_stats_mdis_levels[i])
+				break;
+	} else {
+		/* Traditinal thermal setting */
+		i = thermal_level;
+	}
 
 	/* Note; we do not report level 0 (eg. mdis_level == 0) */
 	if (i >= STATS_THERMAL_LEVELS_MAX)
@@ -1596,6 +1613,7 @@ static int bd_update_stats(struct chg_drv *chg_drv)
 	const ktime_t now = get_boot_sec();
 	int ret, vbatt, temp;
 	long long temp_avg;
+	unsigned long long elap;
 
 	if (!bd_state->enabled)
 		return 0;
@@ -1617,9 +1635,19 @@ static int bd_update_stats(struct chg_drv *chg_drv)
 	if (bd_state->last_update == 0)
 		bd_state->last_update = now;
 
+	/*
+	 * b/294978951 time_sum is abnormally large and triggered the TEMP-DEFEND
+	 * add log here if elapse exceed 2 times of schedule time
+	 */
+	elap = now - bd_state->last_update;
 	if (temp >= bd_state->bd_trigger_temp) {
-		bd_state->time_sum += now - bd_state->last_update;
-		bd_state->temp_sum += temp * (now - bd_state->last_update);
+		if (elap > (CHG_WORK_BD_TRIGGERED_MS / 1000 * 2))
+			gbms_logbuffer_prlog(bd_state->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+				"MSC_BD: longer elap %llu (%llu - %llu), temp=%d, time_sum=%llu, temp_sum=%llu",
+				elap, now, bd_state->last_update, temp, bd_state->time_sum,
+				bd_state->temp_sum);
+		bd_state->time_sum += elap;
+		bd_state->temp_sum += temp * elap;
 	}
 
 	bd_state->last_voltage = vbatt;
@@ -2303,7 +2331,7 @@ static void chg_work(struct work_struct *work)
 	struct power_supply *ext_psy = chg_drv->ext_psy;
 	struct power_supply *usb_psy = chg_drv->tcpm_psy ? chg_drv->tcpm_psy :
 				       chg_drv->usb_psy;
-	union gbms_ce_adapter_details ad = { .v = 0 };
+	union gbms_ce_adapter_details ad = chg_drv->adapter_details;
 	int wlc_online = 0, wlc_present = 0;
 	int ext_online = 0, ext_present = 0;
 	int usb_online, usb_present = 0;
@@ -2407,6 +2435,7 @@ static void chg_work(struct work_struct *work)
 		if (stop_charging) {
 			int ret;
 
+			ad.v = 0;
 			pr_info("MSC_CHG no power source, disabling charging\n");
 
 			ret = GPSY_SET_PROP(chg_drv->chg_psy, GBMS_PROP_CHARGING_ENABLED, 0);
@@ -2420,7 +2449,9 @@ static void chg_work(struct work_struct *work)
 						MSC_CHG_VOTER, true);
 
 			if (!chg_drv->bd_state.triggered) {
+				mutex_lock(&chg_drv->bd_lock);
 				bd_reset(&chg_drv->bd_state);
+				mutex_unlock(&chg_drv->bd_lock);
 				bd_fan_vote(chg_drv, false, FAN_LVL_NOT_CARE);
 			}
 
@@ -2434,9 +2465,6 @@ static void chg_work(struct work_struct *work)
 
 		if (chg_is_custom_enabled(upperbd, lowerbd) && chg_drv->disable_pwrsrc)
 			chg_run_defender(chg_drv);
-
-		/* clear the status */
-		chg_update_csi(chg_drv);
 
 		/* allow sleep (if disconnected) while draining */
 		if (chg_drv->disable_pwrsrc)
@@ -2809,9 +2837,13 @@ static ssize_t set_bd_temp_enable(struct device *dev,
 	if (chg_drv->bd_state.bd_temp_enable == val)
 		return count;
 
+	mutex_lock(&chg_drv->bd_lock);
+
 	chg_drv->bd_state.bd_temp_enable = val;
 
 	bd_reset(&chg_drv->bd_state);
+
+	mutex_unlock(&chg_drv->bd_lock);
 
 	if (chg_drv->bat_psy)
 		power_supply_changed(chg_drv->bat_psy);
@@ -3158,8 +3190,11 @@ static ssize_t set_bd_temp_dry_run(struct device *dev, struct device_attribute *
 		if (ret < 0)
 			dev_err(chg_drv->device, "Couldn't disable "
 				"bd_temp_dry_run ret=%d\n", ret);
-		if (chg_drv->bd_state.triggered)
+		if (chg_drv->bd_state.triggered) {
+			mutex_lock(&chg_drv->bd_lock);
 			bd_reset(&chg_drv->bd_state);
+			mutex_unlock(&chg_drv->bd_lock);
+		}
 	}
 
 	return count;

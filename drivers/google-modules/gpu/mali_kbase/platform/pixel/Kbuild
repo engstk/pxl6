@@ -22,7 +22,8 @@
 mali_kbase-y += \
 	platform/$(MALI_PLATFORM_DIR)/pixel_gpu.o \
 	platform/$(MALI_PLATFORM_DIR)/pixel_gpu_power.o \
-	platform/$(MALI_PLATFORM_DIR)/pixel_gpu_uevent.o
+	platform/$(MALI_PLATFORM_DIR)/pixel_gpu_uevent.o \
+	platform/$(MALI_PLATFORM_DIR)/pixel_gpu_itmon.o
 
 mali_kbase-$(CONFIG_MALI_MIDGARD_DVFS) += \
 	platform/$(MALI_PLATFORM_DIR)/pixel_gpu_dvfs.o \

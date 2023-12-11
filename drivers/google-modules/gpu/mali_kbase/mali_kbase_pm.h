@@ -292,13 +292,14 @@ void kbase_pm_apc_term(struct kbase_device *kbdev);
  */
 void kbase_pm_apc_request(struct kbase_device *kbdev, u32 dur_usec);
 
-/*
- * Print debug message indicating power state of GPU.
+/**
+ * Print debug message indicating power state of GPU
  * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @timeout_msg: A message to print.
  *
  * Prerequisite: GPU is powered.
- * Takes and releases kbdev->hwaccess_lock
+ * Takes and releases kbdev->hwaccess_lock on CSF GPUs.
  */
-void kbase_gpu_timeout_debug_message(struct kbase_device *kbdev);
+void kbase_gpu_timeout_debug_message(struct kbase_device *kbdev, const char *timeout_msg);
 
 #endif /* _KBASE_PM_H_ */

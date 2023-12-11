@@ -196,7 +196,8 @@ enum aec_ref_source {
 	BT_PLAYBACK,
 	NUM_AEC_REF_SOURCE
 };
-enum { INCALL_CAPTURE_OFF = 0, INCALL_CAPTURE_UL, INCALL_CAPTURE_DL, INCALL_CAPTURE_UL_DL };
+enum { INCALL_CAPTURE_OFF = 0, INCALL_CAPTURE_UL, INCALL_CAPTURE_DL, INCALL_CAPTURE_UL_DL,
+	INCALL_CAPTURE_3MIC };
 enum { NONBLOCKING = 0, BLOCKING = 1 };
 enum { STOP = 0, START };
 enum { PLAYBACK_MODE, VOICE_TX_MODE, VOICE_RX_MODE, HAPTICS_MODE, OFFLOAD_MODE };
@@ -300,11 +301,15 @@ struct aoc_alsa_stream {
 	int params_rate; /* Sampling rate */
 	int pcm_format_width; /* Number of bits */
 	bool pcm_float_fmt; /* Floating point */
+	bool reused_for_voip;
 
 	struct vm_area_struct *vma; /* for MMAP */
 	unsigned int period_size;
 	unsigned int buffer_size;
 	unsigned int pos;
+	unsigned int prev_pos;
+	unsigned int pos_delta;
+	unsigned long prev_buffer_cnt;
 	unsigned long hw_ptr_base; /* read/write pointers in ring buffer */
 	unsigned long prev_consumed;
 	int n_overflow;
@@ -314,6 +319,9 @@ struct aoc_alsa_stream {
 	int wq_busy_count;
 
 	struct work_struct free_aoc_service_work;
+	struct workqueue_struct *pcm_period_wq;
+	struct workqueue_struct *incall_period_wq;
+	struct workqueue_struct *voip_period_wq;
 	struct work_struct pcm_period_work;
 };
 
@@ -323,6 +331,7 @@ void aoc_timer_restart(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop(struct aoc_alsa_stream *alsa_stream);
 void aoc_timer_stop_sync(struct aoc_alsa_stream *alsa_stream);
 void aoc_pcm_period_work_handler(struct work_struct *work);
+bool aoc_pcm_update_pos(struct aoc_alsa_stream *alsa_stream, unsigned long consumed);
 
 int snd_aoc_new_ctl(struct aoc_chip *chip);
 int snd_aoc_new_pcm(struct aoc_chip *chip);

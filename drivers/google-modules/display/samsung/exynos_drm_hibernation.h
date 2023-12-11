@@ -52,13 +52,7 @@ struct exynos_hibernation {
  *
  * Return: current hibernation block ref count
  */
-static inline int hibernation_block(struct exynos_hibernation *hiber)
-{
-	if (!hiber)
-		return 0;
-
-	return atomic_inc_return(&hiber->block_cnt);
-}
+int hibernation_block(struct exynos_hibernation *hiber);
 
 /**
  * hibernation_block_exit - block hibernation, and exit hibernation if currently on

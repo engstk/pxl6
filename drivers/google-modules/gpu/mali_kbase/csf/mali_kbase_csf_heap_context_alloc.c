@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -76,6 +76,41 @@ static u64 sub_alloc(struct kbase_csf_heap_context_allocator *const ctx_alloc)
 }
 
 /**
+ * evict_heap_context - Evict the data of heap context from GPU's L2 cache.
+ *
+ * @ctx_alloc:   Pointer to the heap context allocator.
+ * @heap_gpu_va: The GPU virtual address of a heap context structure to free.
+ *
+ * This function is called when memory for the heap context is freed. It uses the
+ * FLUSH_PA_RANGE command to evict the data of heap context, so on older CSF GPUs
+ * there is nothing done. The whole GPU cache is anyways expected to be flushed
+ * on older GPUs when initial chunks of the heap are freed just before the memory
+ * for heap context is freed.
+ */
+static void evict_heap_context(struct kbase_csf_heap_context_allocator *const ctx_alloc,
+			      u64 const heap_gpu_va)
+{
+	struct kbase_context *const kctx = ctx_alloc->kctx;
+	u32 offset_in_bytes = (u32)(heap_gpu_va - ctx_alloc->gpu_va);
+	u32 offset_within_page = offset_in_bytes & ~PAGE_MASK;
+	u32 page_index = offset_in_bytes >> PAGE_SHIFT;
+	struct tagged_addr page =
+		kbase_get_gpu_phy_pages(ctx_alloc->region)[page_index];
+	phys_addr_t heap_context_pa = as_phys_addr_t(page) + offset_within_page;
+
+	lockdep_assert_held(&ctx_alloc->lock);
+
+	/* There is no need to take vm_lock here as the ctx_alloc region is protected
+	 * via a nonzero no_user_free_count. The region and the backing page can't
+	 * disappear whilst this function is executing. Flush type is passed as FLUSH_PT
+	 * to CLN+INV L2 only.
+	 */
+	kbase_mmu_flush_pa_range(kctx->kbdev, kctx,
+				heap_context_pa, ctx_alloc->heap_context_size_aligned,
+				KBASE_MMU_OP_FLUSH_PT);
+}
+
+/**
  * sub_free - Free a heap context sub-allocated from a GPU memory region
  *
  * @ctx_alloc:   Pointer to the heap context allocator.
@@ -101,6 +136,8 @@ static void sub_free(struct kbase_csf_heap_context_allocator *const ctx_alloc,
 	if (WARN_ON(ctx_offset >= (ctx_alloc->region->nr_pages << PAGE_SHIFT)) ||
 		WARN_ON(ctx_offset % ctx_alloc->heap_context_size_aligned))
 		return;
+
+	evict_heap_context(ctx_alloc, heap_gpu_va);
 
 	heap_nr = ctx_offset / ctx_alloc->heap_context_size_aligned;
 	dev_dbg(kctx->kbdev->dev,
@@ -144,14 +181,9 @@ void kbase_csf_heap_context_allocator_term(
 
 	if (ctx_alloc->region) {
 		kbase_gpu_vm_lock(kctx);
-		/*
-		 * We can't enforce (nor check) the no_user_free refcount
-		 * to be 0 here as other code regions can take such a reference.
-		 * Anyway, this isn't an issue as the region will eventually
-		 * be freed by the region tracker if its refcount didn't drop
-		 * to 0.
-		 */
-		kbase_va_region_no_user_free_put(kctx, ctx_alloc->region);
+		WARN_ON(!kbase_va_region_is_no_user_free(ctx_alloc->region));
+
+		kbase_va_region_no_user_free_dec(ctx_alloc->region);
 		kbase_mem_free_region(kctx, ctx_alloc->region);
 		kbase_gpu_vm_unlock(kctx);
 	}

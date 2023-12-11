@@ -2270,6 +2270,11 @@ wl_cfg80211_p2p_if_add(struct bcm_cfg80211 *cfg,
 
 			return new_ndev->ieee80211_ptr;
 	}
+	else {
+		WL_ERR(("Virtual interface create fail. "
+			"Checking value timeout [%ld], p2p_status [%x], event_info valid [%x]\n",
+			timeout, wl_get_p2p_status(cfg, IF_ADDING), cfg->if_event_info.valid));
+	}
 
 fail:
 	return NULL;
@@ -6928,6 +6933,11 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		WL_ERR(("Blocking connect request as another STA interface"
 			" with same MAC address already connected\n"));
 		err = -EINVAL;
+		goto fail;
+	}
+	if (wl_get_drv_status_all(cfg, AP_CREATING)) {
+		WL_ERR(("AP creates in progress, so skip this connection for creating AP.\n"));
+		err = -EBUSY;
 		goto fail;
 	}
 #endif /* WL_DUAL_STA */
@@ -15865,6 +15875,7 @@ static void wl_init_event_handler(struct bcm_cfg80211 *cfg)
 	cfg->evt_handler[WLC_E_NAN_CRITICAL] = wl_cfgnan_notify_nan_status;
 	cfg->evt_handler[WLC_E_NAN_NON_CRITICAL] = wl_cfgnan_notify_nan_status;
 #endif /* WL_NAN */
+	cfg->evt_handler[WLC_E_CSA_START_IND] = wl_cfgvif_csa_start_ind;
 	cfg->evt_handler[WLC_E_CSA_COMPLETE_IND] = wl_csa_complete_ind;
 	cfg->evt_handler[WLC_E_AP_STARTED] = wl_ap_start_ind;
 #ifdef CUSTOM_EVENT_PM_WAKE
@@ -18839,6 +18850,7 @@ static s32 __wl_cfg80211_down(struct bcm_cfg80211 *cfg)
 		wl_clr_drv_status(cfg, AP_CREATING, iter->ndev);
 		wl_clr_drv_status(cfg, NESTED_CONNECT, iter->ndev);
 		wl_clr_drv_status(cfg, CFG80211_CONNECT, iter->ndev);
+		wl_clr_drv_status(cfg, CSA_ACTIVE, iter->ndev);
 	}
 #ifdef WL_CFG80211_MONITOR
 	if (ndev->ieee80211_ptr->iftype != NL80211_IFTYPE_MONITOR)

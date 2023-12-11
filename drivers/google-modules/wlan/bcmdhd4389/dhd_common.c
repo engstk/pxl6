@@ -5239,6 +5239,31 @@ dhd_parse_hck_common_sw_event(bcm_xtlv_t *wl_hc)
 
 }
 
+#ifdef SKIP_COREDUMP_PKTDROP_RXHC
+static bool
+dhd_skip_coredump_for_rxhc(bcm_xtlv_t *wl_hc)
+{
+	wl_rx_hc_info_v2_t *hck_rx_stall_v2;
+	uint16 id;
+	bool ignore_coredump = FALSE;
+
+	id = ltoh16(wl_hc->id);
+
+	if (id == WL_HC_DD_RX_STALL_V2) {
+		/*  map the hck_rx_stall_v2 structure to the value of the XTLV */
+		hck_rx_stall_v2 =
+			(wl_rx_hc_info_v2_t*)wl_hc;
+		if (hck_rx_stall_v2->rx_hc_dropped_all >=
+			hck_rx_stall_v2->rx_hc_alert_th) {
+			DHD_ERROR(("Skip the coredump for continous packet drop\n"));
+			ignore_coredump = TRUE;
+		}
+	}
+
+	return ignore_coredump;
+}
+#endif /* SKIP_COREDUMP_PKTDROP_RXHC */
+
 #endif /* PARSE_DONGLE_HOST_EVENT */
 #ifdef WL_CFGVENDOR_SEND_ALERT_EVENT
 static void
@@ -5399,6 +5424,11 @@ dngl_host_event_process(dhd_pub_t *dhdp, bcm_dngl_event_t *event,
 #ifdef PARSE_DONGLE_HOST_EVENT
 						dhd_parse_hck_common_sw_event(wl_hc);
 #endif /* PARSE_DONGLE_HOST_EVENT */
+#ifdef SKIP_COREDUMP_PKTDROP_RXHC
+						if (dhd_skip_coredump_for_rxhc(wl_hc) == TRUE) {
+							ignore_hc = TRUE;
+						}
+#endif /* SKIP_COREDUMP_PKTDROP_RXHC */
 #ifdef WL_CFGVENDOR_SEND_ALERT_EVENT
 						dhd_send_error_alert_event(dhdp, wl_hc);
 #endif /* WL_CFGVENDOR_SEND_ALERT_EVENT */

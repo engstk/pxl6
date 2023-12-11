@@ -100,6 +100,8 @@ struct gbms_chg_profile {
 	S(EXT1),	\
 	S(EXT2),	\
 	S(EXT_UNKNOWN), \
+	S(USB_UNKNOWN), \
+	S(WLC_UNKNOWN), \
 
 #define CHG_EV_ADAPTER_STRING(s)	#s
 #define _CHG_EV_ADAPTER_PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__

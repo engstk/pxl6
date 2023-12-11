@@ -118,19 +118,25 @@ int kbase_csf_tiler_heap_alloc_new_chunk(struct kbase_context *kctx,
 	u64 gpu_heap_va, u32 nr_in_flight, u32 pending_frag_count, u64 *new_chunk_ptr);
 
 /**
- * kbase_csf_tiler_heap_register_shrinker - Register shrinker for tiler heap.
+ * kbase_csf_tiler_heap_scan_kctx_unused_pages - Performs the tiler heap shrinker calim's scan
+ *                                               functionality.
  *
- * @kbdev: Pointer to the device.
+ * @kctx:               Pointer to the kbase context for which the tiler heap recalim is to be
+ *                      operated with.
+ * @to_free:            Number of pages suggested for the reclaim scan (free) method to reach.
  *
+ * Return: the actual number of pages the scan method has freed from the call.
  */
-void kbase_csf_tiler_heap_register_shrinker(struct kbase_device *kbdev);
+u32 kbase_csf_tiler_heap_scan_kctx_unused_pages(struct kbase_context *kctx, u32 to_free);
 
 /**
- * kbase_csf_tiler_heap_unregister_shrinker - Unregister shrinker for tiler heap on device
- *                                            shut down.
+ * kbase_csf_tiler_heap_count_kctx_unused_pages - Performs the tiler heap shrinker calim's count
+ *                                                functionality.
  *
- * @kbdev: Pointer to the device.
+ * @kctx:               Pointer to the kbase context for which the tiler heap recalim is to be
+ *                      operated with.
  *
+ * Return: a number of pages that could likely be freed on the subsequent scan method call.
  */
-void kbase_csf_tiler_heap_unregister_shrinker(struct kbase_device *kbdev);
+u32 kbase_csf_tiler_heap_count_kctx_unused_pages(struct kbase_context *kctx);
 #endif

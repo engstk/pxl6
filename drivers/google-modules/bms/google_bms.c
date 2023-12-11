@@ -431,7 +431,7 @@ EXPORT_SYMBOL_GPL(gbms_dump_raw_profile);
 int gbms_msc_round_fv_uv(const struct gbms_chg_profile *profile,
 			   int vtier, int fv_uv, int cc_ua)
 {
-	int result;
+	int result, fv_uv_orig = fv_uv;
 	const unsigned int fv_uv_max = (vtier / 1000) * profile->fv_uv_margin_dpct;
 	const unsigned int dc_fv_uv_max = vtier + (cc_ua / 1000) * profile->fv_dc_ratio;
 	const unsigned int last_fv = profile->volt_limits[profile->volt_nb_limits - 1];
@@ -447,11 +447,12 @@ int gbms_msc_round_fv_uv(const struct gbms_chg_profile *profile,
 	if (fv_max != 0 && fv_uv > fv_max)
 		fv_uv = fv_max;
 
+	fv_uv += profile->fv_uv_resolution / 2;
 	result = fv_uv - (fv_uv % profile->fv_uv_resolution);
 
 	if (fv_max != 0)
 		gbms_info(profile, "MSC_ROUND: fv_uv=%d vtier=%d fv_uv_max=%d -> %d\n",
-			  fv_uv, vtier, fv_max, result);
+			  fv_uv_orig, vtier, fv_max, result);
 
 	return result;
 }

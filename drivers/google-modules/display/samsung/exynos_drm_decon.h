@@ -454,6 +454,7 @@ struct decon_device {
 	struct device			*dev;
 	struct drm_device		*drm_dev;
 	struct exynos_drm_crtc		*crtc;
+	struct drm_atomic_state		*suspend_state;
 	/* dpp information saved in dpp channel number order */
 	struct dpp_device		*dpp[MAX_WIN_PER_DECON];
 	struct dpp_device		*rcd;
