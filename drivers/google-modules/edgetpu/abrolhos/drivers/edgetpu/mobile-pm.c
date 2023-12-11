@@ -764,7 +764,6 @@ static void mobile_pm_deactivate_bts_scenario(struct edgetpu_dev *etdev)
 		return;
 	mutex_lock(&platform_pwr->scenario_lock);
 	if (!platform_pwr->scenario_count) {
-		etdev_warn(etdev, "Unbalanced bts deactivate\n");
 		mutex_unlock(&platform_pwr->scenario_lock);
 		return;
 	}

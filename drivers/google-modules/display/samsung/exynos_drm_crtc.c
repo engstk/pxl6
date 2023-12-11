@@ -15,6 +15,8 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_atomic_uapi.h>
+#include <drm/drm_bridge.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_color_mgmt.h>
 #include <drm/drm_crtc_helper.h>
@@ -445,6 +447,140 @@ exynos_drm_crtc_duplicate_state(struct drm_crtc *crtc)
 	copy->hibernation_exit = false;
 
 	return &copy->base;
+}
+
+struct drm_atomic_state
+*exynos_duplicate_active_crtc_state(struct drm_crtc *crtc,
+				struct drm_modeset_acquire_ctx *ctx)
+{
+	struct drm_device *dev = crtc->dev;
+	struct drm_atomic_state *state;
+	struct drm_crtc_state *crtc_state;
+	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
+	struct decon_device *decon = exynos_crtc->ctx;
+	int err;
+
+	state = drm_atomic_state_alloc(dev);
+	if (!state)
+		return ERR_PTR(-ENOMEM);
+
+	state->acquire_ctx = ctx;
+
+	crtc_state = drm_atomic_get_crtc_state(state, crtc);
+	if (IS_ERR(crtc_state)) {
+		err = PTR_ERR(crtc_state);
+		goto free_state;
+	}
+
+	if (!crtc_state->active) {
+		if (!atomic_read(&decon->recovery.recovering)) {
+			drm_atomic_state_put(state);
+			return NULL;
+		}
+		pr_warn("crtc[%s]: skipping duplication of inactive crtc state\n", crtc->name);
+		err = -EPERM;
+		goto free_state;
+	}
+
+	err = drm_atomic_add_affected_planes(state, crtc);
+	if (err)
+		goto free_state;
+
+	err = drm_atomic_add_affected_connectors(state, crtc);
+	if (err)
+		goto free_state;
+
+	/* clear the acquire context so that it isn't accidentally reused */
+	state->acquire_ctx = NULL;
+
+free_state:
+	if (err < 0) {
+		drm_atomic_state_put(state);
+		state = ERR_PTR(err);
+	}
+
+	return state;
+}
+
+struct drm_atomic_state
+*exynos_crtc_suspend(struct drm_crtc *crtc,
+			struct drm_modeset_acquire_ctx *ctx)
+{
+	struct drm_crtc_state *crtc_state;
+	struct drm_connector *conn;
+	struct drm_connector_state *conn_state;
+	struct drm_plane *plane;
+	struct drm_plane_state *plane_state;
+	struct drm_atomic_state *state, *suspend_state;
+	int ret, i;
+
+	suspend_state = exynos_duplicate_active_crtc_state(crtc, ctx);
+	if (IS_ERR_OR_NULL(suspend_state))
+		return suspend_state;
+
+	state = drm_atomic_state_alloc(crtc->dev);
+	if (!state) {
+		drm_atomic_state_put(suspend_state);
+		return ERR_PTR(-ENOMEM);
+	}
+	state->acquire_ctx = ctx;
+retry:
+	crtc_state = drm_atomic_get_crtc_state(state, crtc);
+	if (IS_ERR(crtc_state)) {
+		ret = PTR_ERR(crtc_state);
+		goto out;
+	}
+
+	crtc_state->active = false;
+
+	ret = drm_atomic_set_mode_prop_for_crtc(crtc_state, NULL);
+	if (ret)
+		goto out;
+
+	ret = drm_atomic_add_affected_planes(state, crtc);
+	if (ret)
+		goto out;
+
+	ret = drm_atomic_add_affected_connectors(state, crtc);
+	if (ret)
+		goto out;
+
+	for_each_new_connector_in_state(state, conn, conn_state, i) {
+		ret = drm_atomic_set_crtc_for_connector(conn_state, NULL);
+		if (ret)
+			goto out;
+	}
+
+	for_each_new_plane_in_state(state, plane, plane_state, i) {
+		ret = drm_atomic_set_crtc_for_plane(plane_state, NULL);
+		if (ret)
+			goto out;
+
+		drm_atomic_set_fb_for_plane(plane_state, NULL);
+	}
+
+	ret = drm_atomic_commit(state);
+out:
+	if (ret == -EDEADLK) {
+		drm_atomic_state_clear(state);
+		drm_atomic_state_clear(suspend_state);
+		ret = drm_modeset_backoff(ctx);
+		if (!ret)
+			goto retry;
+	} else if (ret) {
+		drm_atomic_state_put(suspend_state);
+		suspend_state = ERR_PTR(ret);
+	}
+
+	drm_atomic_state_put(state);
+
+	return suspend_state;
+}
+
+int exynos_crtc_resume(struct drm_atomic_state *state,
+				struct drm_modeset_acquire_ctx *ctx)
+{
+	return drm_atomic_helper_commit_duplicated_state(state, ctx);
 }
 
 static int
@@ -1048,5 +1184,87 @@ void exynos_crtc_wait_for_flip_done(struct drm_atomic_state *old_state)
 		if (exynos_crtc->ops->wait_for_flip_done)
 			exynos_crtc->ops->wait_for_flip_done(exynos_crtc,
 							old_crtc_state, new_crtc_state);
+	}
+}
+
+bool exynos_crtc_needs_disable(struct drm_crtc_state *old_state,
+			struct drm_crtc_state *new_state)
+{
+	/*
+	 * No new_state means the CRTC is off, so the only criteria is whether
+	 * it's currently active or in self refresh mode.
+	 */
+	if (!new_state)
+		return drm_atomic_crtc_effectively_active(old_state);
+
+	/*
+	 * We need to run through the crtc_funcs->disable() function if the CRTC
+	 * is currently on, if it's transitioning to self refresh mode, or if
+	 * it's in self refresh mode and needs to be fully disabled.
+	 */
+	return old_state->active ||
+			(old_state->self_refresh_active && !new_state->enable) ||
+			new_state->self_refresh_active;
+}
+
+void exynos_crtc_set_mode(struct drm_device *dev,
+			struct drm_atomic_state *old_state)
+{
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *new_crtc_state;
+	struct drm_connector *connector;
+	struct drm_connector_state *new_conn_state;
+	int i;
+
+	for_each_new_crtc_in_state(old_state, crtc, new_crtc_state, i) {
+		const struct drm_crtc_helper_funcs *funcs;
+
+		if (!new_crtc_state->mode_changed)
+			continue;
+
+		funcs = crtc->helper_private;
+
+		if (new_crtc_state->enable && funcs->mode_set_nofb) {
+			DRM_DEBUG_ATOMIC("modeset on [CRTC:%u:%s]\n",
+					crtc->base.id, crtc->name);
+
+			funcs->mode_set_nofb(crtc);
+		}
+	}
+
+	for_each_new_connector_in_state(old_state, connector, new_conn_state, i) {
+		const struct drm_encoder_helper_funcs *funcs;
+		struct drm_encoder *encoder;
+		struct drm_display_mode *mode, *adjusted_mode;
+		struct drm_bridge *bridge;
+
+		if (!new_conn_state->best_encoder)
+			continue;
+
+		encoder = new_conn_state->best_encoder;
+		funcs = encoder->helper_private;
+		new_crtc_state = new_conn_state->crtc->state;
+		mode = &new_crtc_state->mode;
+		adjusted_mode = &new_crtc_state->adjusted_mode;
+
+		if (!new_crtc_state->mode_changed)
+			continue;
+
+		DRM_DEBUG_ATOMIC("modeset on [ENCODER:%u:%s]\n",
+				encoder->base.id, encoder->name);
+
+		/*
+		 * Each encoder has at most one connector (since we always steal
+		 * it away), so we won't call mode_set hooks twice.
+		 */
+		if (funcs && funcs->atomic_mode_set) {
+			funcs->atomic_mode_set(encoder, new_crtc_state,
+							new_conn_state);
+		} else if (funcs && funcs->mode_set) {
+			funcs->mode_set(encoder, mode, adjusted_mode);
+		}
+
+		bridge = drm_bridge_chain_get_first_bridge(encoder);
+		drm_bridge_chain_mode_set(bridge, mode, adjusted_mode);
 	}
 }

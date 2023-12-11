@@ -1128,17 +1128,6 @@ wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 			list->version = dtoh32(bi->version);
 			list->buflen += bi_length;
 			list->count++;
-
-			/*
-			 * !Broadcast && number of ssid = 1 && number of channels =1
-			 * means specific scan to association
-			 */
-			if (wl_cfgp2p_is_p2p_specific_scan(cfg->scan_request)) {
-				WL_ERR(("P2P assoc scan fast aborted.\n"));
-				wl_cfgscan_scan_abort(cfg);
-				wl_notify_escan_complete(cfg, cfg->escan_info.ndev, false);
-				goto exit;
-			}
 		}
 	}
 	else if (status == WLC_E_STATUS_SUCCESS) {
@@ -2324,6 +2313,14 @@ wl_cfgscan_handle_scanbusy(struct bcm_cfg80211 *cfg, struct net_device *ndev, s3
 		 * value to cfg80211 stack
 		 */
 		scanbusy_err = -EAGAIN;
+	}
+
+	if (wl_get_drv_status_all(cfg, CSA_ACTIVE)) {
+		/* override error to EGAIN to avoid forcing panic as CSA can
+		 * take upto 25secs. Don't limit on number of scans in this case.
+		 */
+		scanbusy_err = -EAGAIN;
+		WL_ERR(("scan busy due to csa in progress\n"));
 	}
 
 	/* if continuous busy state, clear assoc type in FW by disassoc cmd */

@@ -15,6 +15,8 @@
 #define BIGO_REG_PRODUCT 0x00
 #define BIGO_REG_CFG 0x04
 #define BIGO_REG_STAT 0x08
+#define BIGO_REG_LAST_RD_AXI_ADDR 0x1C
+#define BIGO_REG_LAST_WR_AXI_ADDR 0x20
 
 #define BIGO_CFG_H264 BIT(2)
 #define BIGO_CFG_VP9D BIT(3)
@@ -46,7 +48,7 @@
  *    BIGO_STAT_IRQ_TIMEOUT_BIT so HW hang should be caught there.
  * 3. This timeout is to catch any other issues with the system.
  */
-#define JOB_COMPLETE_TIMEOUT_MS 500
+#define JOB_COMPLETE_TIMEOUT_MS 1000
 
 int bigo_init_io(struct bigo_core *core, irq_handler_t handler);
 u32 bigo_core_readl(struct bigo_core *core, ptrdiff_t offset);

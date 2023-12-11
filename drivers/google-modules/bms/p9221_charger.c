@@ -87,6 +87,7 @@ static int p9221_set_bpp_vout(struct p9221_charger_data *charger);
 static int p9221_set_hpp_dc_icl(struct p9221_charger_data *charger, bool enable);
 static void p9221_ll_bpp_cep(struct p9221_charger_data *charger, int capacity);
 static int p9221_ll_check_id(struct p9221_charger_data *charger);
+static int p9221_dream_defend_check_id(struct p9221_charger_data *charger);
 
 static char *align_status_str[] = {
 	"...", "M2C", "OK", "-1"
@@ -2292,8 +2293,14 @@ int p9221_set_auth_dc_icl(struct p9221_charger_data *charger, bool enable)
 
 	icl_ua = enable ? P9221_AUTH_DC_ICL_UA_500 : 0;
 
-	if (!charger->dc_icl_votable)
-		goto exit;
+	if (!charger->dc_icl_votable) {
+		charger->dc_icl_votable = gvotable_election_get_handle("DC_ICL");
+		if (!charger->dc_icl_votable) {
+			dev_err(&charger->client->dev,
+				"Could not get votable: DC_ICL\n");
+			goto exit;
+		}
+	}
 
 	if (enable && !charger->auth_delay) {
 		dev_info(&charger->client->dev, "Enable Auth ICL (%d)\n", ret);
@@ -2409,6 +2416,7 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 		if (feat_enable) {
 			pr_debug("%s: Feature check OK\n", __func__);
 		} else if (charger->auth_delay) {
+			dev_info(&charger->client->dev, "Auth delay\n");
 			mutex_unlock(&charger->auth_lock);
 			return -EAGAIN;
 		} else {
@@ -2516,7 +2524,9 @@ static int p9221_set_psy_online(struct p9221_charger_data *charger, int online)
 /* trigger DD */
 static void p9221_dream_defend(struct p9221_charger_data *charger)
 {
+	struct gvotable_election *csi_type_votable = charger->csi_type_votable;
 	const ktime_t now = get_boot_sec();
+	bool is_ac = false;
 	u32 threshold;
 	int ret;
 
@@ -2527,15 +2537,22 @@ static void p9221_dream_defend(struct p9221_charger_data *charger)
 		return;
 	}
 
-	if (!charger->csi_type_votable)
+	if (!csi_type_votable)
 		charger->csi_type_votable = gvotable_election_get_handle(VOTABLE_CSI_TYPE);
+	if (csi_type_votable)
+		is_ac = gvotable_get_current_int_vote(csi_type_votable) == CSI_TYPE_Adaptive;
+
+	/* extended trigger soc for TTF calculations to ensure enough time for AC */
+	if (!is_ac)
+		charger->pdata->power_mitigate_ac_threshold = 0;
+	else if (charger->pdata->power_mitigate_ac_threshold == 0)
+		charger->pdata->power_mitigate_ac_threshold = charger->last_capacity + 1;
 
 	if (charger->mitigate_threshold > 0)
 		threshold = charger->mitigate_threshold;
-	else if (charger->csi_type_votable &&
-		 charger->pdata->power_mitigate_threshold > 0 &&
-		 gvotable_get_current_int_vote(charger->csi_type_votable) == CSI_TYPE_Adaptive)
-		threshold = charger->last_capacity - 1; /* Run dream defend when AC trigger */
+	else if (charger->pdata->power_mitigate_threshold > 0 &&
+		 charger->pdata->power_mitigate_ac_threshold > 0)
+		threshold = charger->pdata->power_mitigate_ac_threshold;
 	else
 		threshold = charger->pdata->power_mitigate_threshold;
 
@@ -2550,7 +2567,7 @@ static void p9221_dream_defend(struct p9221_charger_data *charger)
 		 * Check Tx type here as tx_id may not be ready at start
 		 * and mfg code cannot be read after LL changing to BPP mode
 		 */
-		charger->ll_bpp_cep = p9221_ll_check_id(charger);
+		charger->ll_bpp_cep = p9221_dream_defend_check_id(charger);
 		/* trigger_power_mitigation is the same as dream defend */
 		charger->trigger_power_mitigation = true;
 		ret = delayed_work_pending(&charger->power_mitigation_work);
@@ -2606,6 +2623,40 @@ static void p9221_ll_bpp_cep(struct p9221_charger_data *charger, int capacity)
 		dev_dbg(&charger->client->dev,
 			"power_mitigate: DD vote ICL = %duA\n",
 			gvotable_get_int_vote(charger->dc_icl_votable, DD_VOTER));
+}
+static int p9221_dream_defend_check_id(struct p9221_charger_data *charger)
+{
+	uint16_t ptmc_id = charger->mfg;
+	int ret;
+	u8 val;
+
+	if (ptmc_id == 0) {
+		ret = p9xxx_chip_get_tx_mfg_code(charger, &ptmc_id);
+		if (ret < 0 || ptmc_id == 0) {
+			pr_debug("%s: cannot get mfg code ptmc_id=%x (%d)\n",
+				 __func__, ptmc_id, ret);
+			return -EAGAIN;
+		}
+	}
+
+	if (ptmc_id != WLC_MFG_GOOGLE) {
+		pr_debug("%s: ptmc_id=%x\n", __func__, ptmc_id);
+		return 0;
+	}
+
+	/* NOTE: will keep the alternate limit and keep checking on 3rd party */
+	if (p9221_get_tx_id_str(charger) == NULL) {
+		pr_debug("%s: retry %x\n", __func__, charger->tx_id);
+		return -EAGAIN;
+	}
+
+	pr_debug("%s: tx_id=%08x\n", __func__, charger->tx_id);
+
+	val = (charger->tx_id & TXID_TYPE_MASK) >> TXID_TYPE_SHIFT;
+	if (charger->pdata->bpp_cep_on_dl)
+		return (val == TXID_DD_TYPE || val == TXID_DD_TYPE2);
+
+	return val == TXID_DD_TYPE2;
 }
 
 /*
@@ -3199,7 +3250,7 @@ static void p9xxx_check_ll_bpp_cep(struct p9221_charger_data *charger)
 		is_ll_bpp = false;
 
 	ret = charger->chip_get_vout_max(charger, &vout_mv);
-	if (ret < 0 || vout_mv != P9XXX_VOUT_5480MV)
+	if (ret < 0 || (!charger->pdata->ll_vout_not_set && (vout_mv != P9XXX_VOUT_5480MV)))
 		is_ll_bpp = false;
 	ret = p9221_reg_read_8(charger, P9412_CMFET_L_REG, &val8);
 	if (ret < 0 || val8 != 0)
@@ -4149,6 +4200,7 @@ static ssize_t p9221_store_txlen(struct device *dev,
 	ret = p9221_send_data(charger);
 	if (ret) {
 		charger->tx_done = true;
+		set_renego_state(charger, P9XXX_AVAILABLE);
 		return ret;
 	}
 
@@ -6614,6 +6666,8 @@ static int p9221_parse_dt(struct device *dev,
 	pdata->ll_vout_not_set = of_property_read_bool(node, "google,ll-bpp-vout-not-set");
 
 	pdata->disable_repeat_eop = of_property_read_bool(node, "google,disable-repeat-eop");
+
+	pdata->bpp_cep_on_dl = of_property_read_bool(node, "google,bpp-cep-on-dl");
 
 	return 0;
 }

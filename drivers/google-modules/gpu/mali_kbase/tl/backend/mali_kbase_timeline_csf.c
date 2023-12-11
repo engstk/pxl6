@@ -84,7 +84,7 @@ void kbase_create_timeline_objects(struct kbase_device *kbdev)
 	 * stream tracepoints are emitted to ensure we don't change the
 	 * scheduler until after then
 	 */
-	mutex_lock(&kbdev->csf.scheduler.lock);
+	rt_mutex_lock(&kbdev->csf.scheduler.lock);
 
 	for (slot_i = 0; slot_i < kbdev->csf.global_iface.group_num; slot_i++) {
 
@@ -105,7 +105,7 @@ void kbase_create_timeline_objects(struct kbase_device *kbdev)
 	 */
 	kbase_timeline_streams_body_reset(timeline);
 
-	mutex_unlock(&kbdev->csf.scheduler.lock);
+	rt_mutex_unlock(&kbdev->csf.scheduler.lock);
 
 	/* For each context in the device... */
 	list_for_each_entry(kctx, &timeline->tl_kctx_list, tl_kctx_list_node) {
