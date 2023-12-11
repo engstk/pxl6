@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -26,7 +26,6 @@
 #include <context/mali_kbase_context_internal.h>
 #include <gpu/mali_kbase_gpu_regmap.h>
 #include <mali_kbase.h>
-#include <mali_kbase_dma_fence.h>
 #include <mali_kbase_mem_linux.h>
 #include <mali_kbase_mem_pool_group.h>
 #include <mmu/mali_kbase_mmu.h>
@@ -36,20 +35,24 @@
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 #include <csf/mali_kbase_csf_csg_debugfs.h>
 #include <csf/mali_kbase_csf_kcpu_debugfs.h>
+#include <csf/mali_kbase_csf_sync_debugfs.h>
 #include <csf/mali_kbase_csf_tiler_heap_debugfs.h>
 #include <csf/mali_kbase_csf_cpu_queue_debugfs.h>
 #include <mali_kbase_debug_mem_view.h>
 #include <mali_kbase_debug_mem_zones.h>
+#include <mali_kbase_debug_mem_allocs.h>
 #include <mali_kbase_mem_pool_debugfs.h>
 
 void kbase_context_debugfs_init(struct kbase_context *const kctx)
 {
 	kbase_debug_mem_view_init(kctx);
 	kbase_debug_mem_zones_init(kctx);
+	kbase_debug_mem_allocs_init(kctx);
 	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, kctx);
 	kbase_jit_debugfs_init(kctx);
 	kbase_csf_queue_group_debugfs_init(kctx);
 	kbase_csf_kcpu_debugfs_init(kctx);
+	kbase_csf_sync_debugfs_init(kctx);
 	kbase_csf_tiler_heap_debugfs_init(kctx);
 	kbase_csf_tiler_heap_total_debugfs_init(kctx);
 	kbase_csf_cpu_queue_debugfs_init(kctx);
@@ -121,7 +124,7 @@ struct kbase_context *kbase_create_context(struct kbase_device *kbdev,
 	bool is_compat,
 	base_context_create_flags const flags,
 	unsigned long const api_version,
-	struct file *const filp)
+	struct kbase_file *const kfile)
 {
 	struct kbase_context *kctx;
 	unsigned int i = 0;
@@ -140,8 +143,10 @@ struct kbase_context *kbase_create_context(struct kbase_device *kbdev,
 
 	kctx->kbdev = kbdev;
 	kctx->api_version = api_version;
-	kctx->filp = filp;
+	kctx->kfile = kfile;
 	kctx->create_flags = flags;
+
+	memcpy(kctx->comm, current->comm, sizeof(current->comm));
 
 	if (is_compat)
 		kbase_ctx_flag_set(kctx, KCTX_COMPAT);
@@ -209,6 +214,16 @@ void kbase_destroy_context(struct kbase_context *kctx)
 		dev_err(kbdev->dev, "Wait for L2 power up failed on term of ctx %d_%d",
 			kctx->tgid, kctx->id);
 	}
+
+	/* Have synchronized against the System suspend and incremented the
+	 * pm.active_count. So any subsequent invocation of System suspend
+	 * callback would get blocked.
+	 * If System suspend callback was already in progress then the above loop
+	 * would have waited till the System resume callback has begun.
+	 * So wait for the System resume callback to also complete as we want to
+	 * avoid context termination during System resume also.
+	 */
+	wait_event(kbdev->pm.resume_wait, !kbase_pm_is_resuming(kbdev));
 
 	kbase_mem_pool_group_mark_dying(&kctx->mem_pools);
 

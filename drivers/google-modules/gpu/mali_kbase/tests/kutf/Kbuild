@@ -19,9 +19,9 @@
 #
 
 ifeq ($(CONFIG_MALI_KUTF),y)
-obj-m += kutf.o
+obj-m += mali_kutf.o
 
-kutf-y := \
+mali_kutf-y := \
     kutf_mem.o \
     kutf_resultset.o \
     kutf_suite.o \

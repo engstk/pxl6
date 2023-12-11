@@ -619,7 +619,7 @@ void exynos_dqe_hibernation_enter(struct exynos_dqe *dqe)
 		histogram_collect_bins(dqe, &dqe->state.histogram_cached_bins);
 		histogram_set_run_state(dqe, HSTATE_HIBERNATION);
 	} else if (dqe->state.hist_run_state == HSTATE_PENDING_FRAMEDONE) {
-		WARN(1, "pending histogram during hibernation\n");
+		pr_debug("pending histogram during hibernation\n");
 		histogram_set_run_state(dqe, HSTATE_DISABLED);
 	}
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);

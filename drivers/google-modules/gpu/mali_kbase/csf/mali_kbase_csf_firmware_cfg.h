@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2020-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -70,6 +70,22 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 					      const struct kbase_csf_mcu_fw *const fw,
 					      const u32 *entry, unsigned int size, bool updatable);
 
+#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
+/**
+ * kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails() - Enable the config in FW to support
+ *                                                      Host based control of SC power rails
+ *
+ * Look for the config entry that enables support in FW for the Host based
+ * control of shader core power rails and set it before the intial boot
+ * or reload of firmware.
+ *
+ * @kbdev:     Kbase device structure
+ *
+ * Return: 0 if successful, negative error code on failure
+ */
+int kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails(struct kbase_device *kbdev);
+#endif
+
 /**
  * kbase_csf_firmware_cfg_find_config_address() - Get a FW config option address
  *
@@ -81,5 +97,37 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
  */
 int kbase_csf_firmware_cfg_find_config_address(struct kbase_device *kbdev, const char *name,
 					       u32 *addr);
+/**
+ * kbase_csf_firmware_cfg_fw_wa_enable() - Enable firmware workarounds configuration.
+ *
+ * @kbdev:     Kbase device structure
+ *
+ * Look for the config entry that enables support in FW for workarounds and set it according to
+ * the firmware workaround configuration before the initial boot or reload of firmware.
+ *
+ * Return: 0 if successful, negative error code on failure
+ */
+int kbase_csf_firmware_cfg_fw_wa_enable(struct kbase_device *kbdev);
+
+/**
+ * kbase_csf_firmware_cfg_fw_wa_init() - Initialize firmware workarounds configuration.
+ *
+ * @kbdev:     Kbase device structure
+ *
+ * Retrieve and save the firmware workarounds configuration from device-tree "quirks_ext" property.
+ * Then, look for the config entry that enables support in FW for workarounds and set it according
+ * to the configuration before the initial firmware boot.
+ *
+ * Return: 0 if successful, negative error code on failure
+ */
+int kbase_csf_firmware_cfg_fw_wa_init(struct kbase_device *kbdev);
+
+/**
+ * kbase_csf_firmware_cfg_fw_wa_term - Delete local cache for firmware workarounds configuration.
+ *
+ * @kbdev: Pointer to the Kbase device
+ *
+ */
+void kbase_csf_firmware_cfg_fw_wa_term(struct kbase_device *kbdev);
 
 #endif /* _KBASE_CSF_FIRMWARE_CFG_H_ */

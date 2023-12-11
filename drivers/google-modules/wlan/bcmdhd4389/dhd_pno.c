@@ -1168,6 +1168,7 @@ dhd_pno_stop_for_ssid(dhd_pub_t *dhd)
 	_pno_state = PNO_GET_PNOSTATE(dhd);
 	if (!(_pno_state->pno_mode & DHD_PNO_LEGACY_MODE)) {
 		DHD_ERROR(("%s : LEGACY PNO MODE is not enabled\n", __FUNCTION__));
+		err = BCME_UNSUPPORTED;
 		goto exit;
 	}
 	DHD_PNO(("%s enter\n", __FUNCTION__));

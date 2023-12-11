@@ -17,12 +17,18 @@
 #include "mali_kbase_config_platform.h"
 #include "pixel_gpu_slc.h"
 
+struct dirty_region {
+	u64 first_vpfn;
+	u64 last_vpfn;
+	u64 dirty_pgds;
+};
 
 /**
  * struct gpu_slc_liveness_update_info - Buffer info, and live ranges
  *
  * @buffer_va:         Array of buffer base virtual addresses
  * @buffer_sizes:      Array of buffer sizes
+ * @buffer_count:      Number of elements in the va and sizes buffers
  * @live_ranges:       Array of &struct kbase_pixel_gpu_slc_liveness_mark denoting live ranges for
  *                     each buffer
  * @live_ranges_count: Number of elements in the live ranges buffer
@@ -30,6 +36,7 @@
 struct gpu_slc_liveness_update_info {
 	u64* buffer_va;
 	u64* buffer_sizes;
+	u64 buffer_count;
 	struct kbase_pixel_gpu_slc_liveness_mark* live_ranges;
 	u64 live_ranges_count;
 };
@@ -101,26 +108,56 @@ invalid:
 /**
  * gpu_slc_migrate_region - Add PBHA that will make the pages SLC cacheable
  *
- * @kctx:  The &struct kbase_context
- * @reg:   The gpu memory region migrate to an SLC cacheable memory group
+ * @kctx:      The &struct kbase_context
+ * @reg:       The gpu memory region migrate to an SLC cacheable memory group
+ * @dirty_reg: The &struct dirty_region containing the extent of the dirty page table entries
  */
-static void gpu_slc_migrate_region(struct kbase_context *kctx, struct kbase_va_region* reg)
+static void gpu_slc_migrate_region(struct kbase_context *kctx, struct kbase_va_region *reg, struct dirty_region *dirty_reg)
 {
 	int err;
+	u64 vpfn;
+	size_t page_nr;
 
 	KBASE_DEBUG_ASSERT(kctx);
 	KBASE_DEBUG_ASSERT(reg);
 
-	err = kbase_mmu_update_pages(kctx, reg->start_pfn,
+	vpfn = reg->start_pfn;
+	page_nr = kbase_reg_current_backed_size(reg);
+
+	err = kbase_mmu_update_pages_no_flush(kctx->kbdev, &kctx->mmu, vpfn,
 			kbase_get_gpu_phy_pages(reg),
-			kbase_reg_current_backed_size(reg),
+			page_nr,
 			reg->flags,
-			MGM_SLC_GROUP_ID);
+			MGM_SLC_GROUP_ID,
+			&dirty_reg->dirty_pgds);
+
+	/* Track the dirty region */
+	dirty_reg->first_vpfn = min(dirty_reg->first_vpfn, vpfn);
+	dirty_reg->last_vpfn = max(dirty_reg->last_vpfn, vpfn + page_nr);
+
 	if (err)
 		dev_warn(kctx->kbdev->dev, "pixel: failed to move region to SLC: %d", err);
 	else
 		/* If everything is good, then set the new group on the region. */
 		reg->gpu_alloc->group_id = MGM_SLC_GROUP_ID;
+}
+
+/**
+ * gpu_slc_flush_dirty_region - Perform an MMU flush for a dirty page region
+ *
+ * @kctx:      The &struct kbase_context
+ * @dirty_reg: The &struct dirty_region containing the extent of the dirty page table entries
+ */
+static void gpu_slc_flush_dirty_region(struct kbase_context *kctx, struct dirty_region *dirty_reg)
+{
+	size_t const dirty_page_nr =
+	    (dirty_reg->last_vpfn - min(dirty_reg->first_vpfn, dirty_reg->last_vpfn));
+
+	if (!dirty_page_nr)
+		return;
+
+	kbase_mmu_flush_invalidate_update_pages(
+	    kctx->kbdev, kctx, dirty_reg->first_vpfn, dirty_page_nr, dirty_reg->dirty_pgds);
 }
 
 /**
@@ -168,6 +205,11 @@ static void gpu_slc_liveness_update(struct kbase_context* kctx,
 	struct kbase_device* kbdev = kctx->kbdev;
 	struct pixel_context *pc = kbdev->platform_context;
 	struct pixel_platform_data *kctx_pd = kctx->platform_data;
+	struct dirty_region dirty_reg = {
+		.first_vpfn = U64_MAX,
+		.last_vpfn = 0,
+		.dirty_pgds = 0,
+	};
 	u64 current_usage = 0;
 	u64 current_demand = 0;
 	u64 free_space;
@@ -194,8 +236,15 @@ static void gpu_slc_liveness_update(struct kbase_context* kctx,
 	for (i = 0; i < info->live_ranges_count; ++i)
 	{
 		struct kbase_va_region *reg;
-		u64 const size = info->buffer_sizes[info->live_ranges[i].index];
-		u64 const va = info->buffer_va[info->live_ranges[i].index];
+                u64 size;
+                u64 va;
+		u32 index = info->live_ranges[i].index;
+
+		if (unlikely(index >= info->buffer_count))
+			continue;
+
+		size = info->buffer_sizes[index];
+		va = info->buffer_va[index];
 
 		reg = gpu_slc_get_region(kctx, va);
 		if(!reg)
@@ -210,7 +259,7 @@ static void gpu_slc_liveness_update(struct kbase_context* kctx,
 
 			/* Check whether there's free space in the partition to store the buffer */
 			if (free_space >= current_usage + size)
-				gpu_slc_migrate_region(kctx, reg);
+				gpu_slc_migrate_region(kctx, reg, &dirty_reg);
 
 			/* This may be true, even if the space calculation above returned false,
 			 * as a previous call to this function may have migrated the region.
@@ -231,6 +280,9 @@ static void gpu_slc_liveness_update(struct kbase_context* kctx,
 			break;
 		}
 	}
+	/* Perform single page table flush */
+	gpu_slc_flush_dirty_region(kctx, &dirty_reg);
+
 	/* Indicates a missing live range end marker */
 	WARN_ON_ONCE(current_demand != 0 || current_usage != 0);
 
@@ -265,25 +317,34 @@ static void gpu_slc_liveness_update(struct kbase_context* kctx,
 int gpu_pixel_handle_buffer_liveness_update_ioctl(struct kbase_context* kctx,
                                                   struct kbase_ioctl_buffer_liveness_update* update)
 {
-	int err = 0;
+	int err = -EINVAL;
 	struct gpu_slc_liveness_update_info info;
-	u64* buff;
+	u64* buff = NULL;
+	u64 total_buff_size;
 
 	/* Compute the sizes of the user space arrays that we need to copy */
 	u64 const buffer_info_size = sizeof(u64) * update->buffer_count;
 	u64 const live_ranges_size =
 	    sizeof(struct kbase_pixel_gpu_slc_liveness_mark) * update->live_ranges_count;
 
-	/* Nothing to do */
+	/* Guard against overflows and empty sizes */
 	if (!buffer_info_size || !live_ranges_size)
 		goto done;
-
+	if (U64_MAX / sizeof(u64) < update->buffer_count)
+		goto done;
+	if (U64_MAX / sizeof(struct kbase_pixel_gpu_slc_liveness_mark) < update->live_ranges_count)
+		goto done;
 	/* Guard against nullptr */
 	if (!update->live_ranges_address || !update->buffer_va_address || !update->buffer_sizes_address)
 		goto done;
+	/* Calculate the total buffer size required and detect overflows */
+	if ((U64_MAX - live_ranges_size) / 2 < buffer_info_size)
+		goto done;
+
+	total_buff_size = buffer_info_size * 2 + live_ranges_size;
 
 	/* Allocate the memory we require to copy from user space */
-	buff = kmalloc(buffer_info_size * 2 + live_ranges_size, GFP_KERNEL);
+	buff = kmalloc(total_buff_size, GFP_KERNEL);
 	if (buff == NULL) {
 		dev_err(kctx->kbdev->dev, "pixel: failed to allocate buffer for liveness update");
 		err = -ENOMEM;
@@ -294,6 +355,7 @@ int gpu_pixel_handle_buffer_liveness_update_ioctl(struct kbase_context* kctx,
 	info = (struct gpu_slc_liveness_update_info){
 	    .buffer_va = buff,
 	    .buffer_sizes = buff + update->buffer_count,
+	    .buffer_count = update->buffer_count,
 	    .live_ranges = (struct kbase_pixel_gpu_slc_liveness_mark*)(buff + update->buffer_count * 2),
 	    .live_ranges_count = update->live_ranges_count,
 	};

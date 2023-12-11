@@ -30,7 +30,7 @@
 typedef int vm_fault_t;
 #endif
 
-#define MEMORY_GROUP_MANAGER_NR_GROUPS (16)
+#define MEMORY_GROUP_MANAGER_NR_GROUPS (4)
 
 struct memory_group_manager_device;
 struct memory_group_manager_import_data;
@@ -122,7 +122,8 @@ struct memory_group_manager_ops {
 	 * This function allows the memory group manager to modify a GPU page
 	 * table entry before it is stored by the kbase module (controller
 	 * driver). It may set certain bits in the page table entry attributes
-	 * or in the physical address, based on the physical memory group ID.
+	 * or modify the physical address, based on the physical memory group ID
+	 * and/or additional data in struct memory_group_manager_device.
 	 *
 	 * Return: A modified GPU page table entry to be stored in a page table.
 	 */

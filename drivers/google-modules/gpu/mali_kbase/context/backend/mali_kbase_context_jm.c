@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -27,7 +27,6 @@
 #include <gpu/mali_kbase_gpu_regmap.h>
 #include <mali_kbase.h>
 #include <mali_kbase_ctx_sched.h>
-#include <mali_kbase_dma_fence.h>
 #include <mali_kbase_kinstr_jm.h>
 #include <mali_kbase_mem_linux.h>
 #include <mali_kbase_mem_pool_group.h>
@@ -37,12 +36,14 @@
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 #include <mali_kbase_debug_mem_view.h>
 #include <mali_kbase_debug_mem_zones.h>
+#include <mali_kbase_debug_mem_allocs.h>
 #include <mali_kbase_mem_pool_debugfs.h>
 
 void kbase_context_debugfs_init(struct kbase_context *const kctx)
 {
 	kbase_debug_mem_view_init(kctx);
 	kbase_debug_mem_zones_init(kctx);
+	kbase_debug_mem_allocs_init(kctx);
 	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, kctx);
 	kbase_jit_debugfs_init(kctx);
 	kbasep_jd_debugfs_ctx_init(kctx);
@@ -128,8 +129,6 @@ static const struct kbase_context_init context_init[] = {
 	{ NULL, kbase_context_free, NULL },
 	{ kbase_context_common_init, kbase_context_common_term,
 	  "Common context initialization failed" },
-	{ kbase_dma_fence_init, kbase_dma_fence_term,
-	  "DMA fence initialization failed" },
 	{ kbase_context_mem_pool_group_init, kbase_context_mem_pool_group_term,
 	  "Memory pool group initialization failed" },
 	{ kbase_mem_evictable_init, kbase_mem_evictable_deinit,
@@ -180,7 +179,7 @@ struct kbase_context *kbase_create_context(struct kbase_device *kbdev,
 	bool is_compat,
 	base_context_create_flags const flags,
 	unsigned long const api_version,
-	struct file *const filp)
+	struct kbase_file *const kfile)
 {
 	struct kbase_context *kctx;
 	unsigned int i = 0;
@@ -199,7 +198,7 @@ struct kbase_context *kbase_create_context(struct kbase_device *kbdev,
 
 	kctx->kbdev = kbdev;
 	kctx->api_version = api_version;
-	kctx->filp = filp;
+	kctx->kfile = kfile;
 	kctx->create_flags = flags;
 
 	if (is_compat)
@@ -259,6 +258,17 @@ void kbase_destroy_context(struct kbase_context *kctx)
 		wait_event(kbdev->pm.resume_wait,
 			   !kbase_pm_is_suspending(kbdev));
 	}
+
+	/* Have synchronized against the System suspend and incremented the
+	 * pm.active_count. So any subsequent invocation of System suspend
+	 * callback would get blocked.
+	 * If System suspend callback was already in progress then the above loop
+	 * would have waited till the System resume callback has begun.
+	 * So wait for the System resume callback to also complete as we want to
+	 * avoid context termination during System resume also.
+	 */
+	wait_event(kbdev->pm.resume_wait, !kbase_pm_is_resuming(kbdev));
+
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
 	atomic_dec(&kbdev->pm.gpu_users_waiting);
 #endif /* CONFIG_MALI_ARBITER_SUPPORT */
