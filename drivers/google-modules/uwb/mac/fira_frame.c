@@ -425,6 +425,38 @@ hie_error:
 	return false;
 }
 
+static u8 *fira_frame_twr_get_aoa_info(u8 *p,
+                                       struct fira_ranging_info *ranging_info,
+                                       bool aoa_azimuth_present,
+                                       bool aoa_elevation_present,
+                                       bool aoa_fom_present)
+{
+        if (aoa_azimuth_present) {
+                ranging_info->remote_aoa_azimuth_present = true;
+                ranging_info->remote_aoa_azimuth_2pi = get_unaligned_le16(p);
+                p += sizeof(s16);
+        }
+        if (aoa_elevation_present) {
+                ranging_info->remote_aoa_elevation_present = true;
+                ranging_info->remote_aoa_elevation_pi = get_unaligned_le16(p);
+                p += sizeof(s16);
+        }
+        if (aoa_fom_present) {
+                u8 aoa_azimuth_fom = 0, aoa_elevation_fom = 0;
+
+                ranging_info->remote_aoa_fom_present = true;
+                if (aoa_azimuth_present)
+                        aoa_azimuth_fom = *p++;
+                if (aoa_elevation_present)
+                        aoa_elevation_fom = *p++;
+                ranging_info->remote_aoa_azimuth_fom =
+                        (aoa_azimuth_fom > 100) ? 0 : aoa_azimuth_fom;
+                ranging_info->remote_aoa_elevation_fom =
+                        (aoa_elevation_fom > 100) ? 0 : aoa_elevation_fom;
+        }
+        return p;
+}
+
 static bool fira_frame_control_read(struct fira_local *local, u8 *p,
 				    unsigned int ie_len, unsigned int *n_slots,
 				    bool *stop, int *block_stride_len)
@@ -756,23 +788,8 @@ fira_frame_result_report_fill_ranging_info(struct fira_local *local,
 		ranging_info->tof_rctu = get_unaligned_le32(p);
 		p += sizeof(u32);
 	}
-	if (aoa_azimuth_present) {
-		ranging_info->remote_aoa_azimuth_present = true;
-		ranging_info->remote_aoa_azimuth_2pi = get_unaligned_le16(p);
-		p += sizeof(s16);
-	}
-	if (aoa_elevation_present) {
-		ranging_info->remote_aoa_elevation_present = true;
-		ranging_info->remote_aoa_elevation_pi = get_unaligned_le16(p);
-		p += sizeof(s16);
-	}
-	if (aoa_fom_present) {
-		ranging_info->remote_aoa_fom_present = true;
-		if (aoa_azimuth_present)
-			ranging_info->remote_aoa_azimuth_fom = *p++;
-		if (aoa_elevation_present)
-			ranging_info->remote_aoa_elevation_fom = *p++;
-	}
+	p = fira_frame_twr_get_aoa_info(p, ranging_info, aoa_azimuth_present,
+					aoa_elevation_present, aoa_fom_present);
 	if (neg_tof_present) {
 		/* When negative ToF is present at end of frame,
 		 * ToF read ahead MUST be 0, so, is safe to overwrite */

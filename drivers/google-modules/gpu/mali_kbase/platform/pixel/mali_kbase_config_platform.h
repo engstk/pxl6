@@ -81,6 +81,12 @@ extern struct protected_mode_ops pixel_protected_ops;
 #include <linux/workqueue.h>
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+#include <linux/atomic.h>
+#include <linux/notifier.h>
+#include <linux/workqueue.h>
+#endif /* IS_ENABLED(CONFIG_EXYNOS_ITMON) */
+
 /* SOC level includes */
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
 #include <soc/google/bcl.h>
@@ -299,6 +305,12 @@ struct gpu_dvfs_metrics_uid_stats;
  * @slc.lock:           Synchronize updates to the SLC partition accounting variables.
  * @slc.demand:         The total demand for SLC space, an aggregation of each kctx's demand.
  * @slc.usage:          The total amount of SLC space used, an aggregation of each kctx's usage.
+ *
+ * @itmon.wq:     A workqueue for ITMON page table search.
+ * @itmon.work:   The work item for the above.
+ * @itmon.nb:     The ITMON notifier block.
+ * @itmon.pa:     The faulting physical address.
+ * @itmon.active: Active count, non-zero while a search is active.
  */
 struct pixel_context {
 	struct kbase_device *kbdev;
@@ -414,6 +426,16 @@ struct pixel_context {
 		u64 demand;
 		u64 usage;
 	} slc;
+
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+	struct {
+		struct workqueue_struct *wq;
+		struct work_struct work;
+		struct notifier_block nb;
+		phys_addr_t pa;
+		atomic_t active;
+	} itmon;
+#endif
 };
 
 /**

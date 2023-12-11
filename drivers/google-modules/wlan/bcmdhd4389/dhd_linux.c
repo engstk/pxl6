@@ -14031,6 +14031,16 @@ void dhd_detach(dhd_pub_t *dhdp)
 	}
 #endif /* CONFIG_HAS_EARLYSUSPEND && DHD_USE_EARLYSUSPEND */
 
+	if (dhdp->dbg) {
+#ifdef DEBUGABILITY
+#ifdef DBG_PKT_MON
+		dhd_os_dbg_detach_pkt_monitor(dhdp);
+		osl_spin_lock_deinit(dhd->pub.osh, dhd->pub.dbg->pkt_mon_lock);
+#endif /* DBG_PKT_MON */
+#endif /* DEBUGABILITY */
+		dhd_os_dbg_detach(dhdp);
+	}
+
 	/* delete all interfaces, start with virtual  */
 	if (dhd->dhd_state & DHD_ATTACH_STATE_ADD_IF) {
 		int i = 1;
@@ -14203,17 +14213,6 @@ void dhd_detach(dhd_pub_t *dhdp)
 		dhdp->dbus = NULL;
 	}
 #endif /* BCMDBUS */
-#ifdef DEBUGABILITY
-	if (dhdp->dbg) {
-#ifdef DBG_PKT_MON
-		dhd_os_dbg_detach_pkt_monitor(dhdp);
-		osl_spin_lock_deinit(dhd->pub.osh, dhd->pub.dbg->pkt_mon_lock);
-#endif /* DBG_PKT_MON */
-	}
-#endif /* DEBUGABILITY */
-	if (dhdp->dbg) {
-		dhd_os_dbg_detach(dhdp);
-	}
 #ifdef DHD_MEM_STATS
 	osl_spin_lock_deinit(dhd->pub.osh, dhd->pub.mem_stats_lock);
 #endif /* DHD_MEM_STATS */
@@ -19044,6 +19043,20 @@ char map_path[PATH_MAX] = VENDOR_PATH CONFIG_BCMDHD_MAP_PATH;
 extern int dhd_collect_coredump(dhd_pub_t *dhdp, dhd_dump_t *dump);
 #endif /* DHD_COREDUMP */
 
+#ifdef DHD_SSSR_COREDUMP
+static bool
+dhd_is_coredump_reqd(char *trapstr, uint str_len)
+{
+#ifdef DHD_SKIP_COREDUMP_ON_HC
+	if (trapstr && str_len &&
+		strnstr(trapstr, DHD_COREDUMP_IGNORE_TRAP_SIG, str_len)) {
+		return FALSE;
+	}
+#endif /* DHD_SKIP_COREDUMP_ON_HC */
+	return TRUE;
+}
+#endif /* DHD_SSSR_COREDUMP */
+
 static void
 dhd_mem_dump(void *handle, void *event_info, u8 event)
 {
@@ -19065,6 +19078,7 @@ dhd_mem_dump(void *handle, void *event_info, u8 event)
 	char pc_fn[DHD_FUNC_STR_LEN] = "\0";
 	char lr_fn[DHD_FUNC_STR_LEN] = "\0";
 	trap_t *tr;
+	bool collect_coredump = FALSE;
 #endif /* DHD_COREDUMP */
 	uint32 memdump_type;
 
@@ -19192,19 +19206,27 @@ dhd_mem_dump(void *handle, void *event_info, u8 event)
 	DHD_ERROR(("%s: dump reason: %s\n", __FUNCTION__, dhdp->memdump_str));
 
 #ifdef DHD_SSSR_COREDUMP
-	ret = dhd_collect_coredump(dhdp, dump);
-	if (ret == BCME_ERROR) {
-		DHD_ERROR(("%s: dhd_collect_coredump() failed.\n", __FUNCTION__));
-		goto exit;
-	} else if (ret == BCME_UNSUPPORTED) {
-		DHD_LOG_MEM(("%s: Unable to collect SSSR dumps. Skip it.\n",
+	if (dhd_is_coredump_reqd(dhdp->memdump_str,
+		strnlen(dhdp->memdump_str, DHD_MEMDUMP_LONGSTR_LEN))) {
+		ret = dhd_collect_coredump(dhdp, dump);
+		if (ret == BCME_ERROR) {
+			DHD_ERROR(("%s: dhd_collect_coredump() failed.\n",
+				__FUNCTION__));
+			goto exit;
+		} else if (ret == BCME_UNSUPPORTED) {
+			DHD_LOG_MEM(("%s: Unable to collect SSSR dumps. Skip it.\n",
+				__FUNCTION__));
+		}
+		collect_coredump = TRUE;
+	} else {
+		DHD_PRINT(("%s: coredump not collected, dhd_is_coredump_reqd returns false\n",
 			__FUNCTION__));
 	}
 #endif /* DHD_SSSR_COREDUMP */
 	if (memdump_type == DUMP_TYPE_BY_SYSDUMP) {
 		DHD_LOG_MEM(("%s: coredump is not supported for BY_SYSDUMP/non trap cases\n",
 			__FUNCTION__));
-	} else {
+	} else if (collect_coredump) {
 		DHD_ERROR(("%s: writing SoC_RAM dump\n", __FUNCTION__));
 		if (wifi_platform_set_coredump(dhd->adapter, dump->buf,
 			dump->bufsize, dhdp->memdump_str)) {

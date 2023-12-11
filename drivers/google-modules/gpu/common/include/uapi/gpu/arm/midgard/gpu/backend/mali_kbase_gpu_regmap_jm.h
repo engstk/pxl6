@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -21,10 +21,5 @@
 
 #ifndef _UAPI_KBASE_GPU_REGMAP_JM_H_
 #define _UAPI_KBASE_GPU_REGMAP_JM_H_
-
-/* GPU control registers */
-#define LATEST_FLUSH            0x038   /* (RO) Flush ID of latest
-					 * clean-and-invalidate operation
-					 */
 
 #endif /* _UAPI_KBASE_GPU_REGMAP_JM_H_ */

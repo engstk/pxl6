@@ -3305,11 +3305,72 @@ static int exynos_panel_bridge_atomic_check(struct drm_bridge *bridge,
 {
 	struct exynos_panel *ctx = bridge_to_exynos_panel(bridge);
 	struct drm_atomic_state *state = new_crtc_state->state;
+	const struct drm_display_mode *current_mode = &ctx->current_mode->mode;
 	const struct exynos_panel_funcs *funcs = ctx->desc->exynos_panel_func;
 	int ret;
 
 	if (unlikely(!new_crtc_state))
 		return 0;
+
+	if (unlikely(!current_mode)) {
+		dev_warn(ctx->dev, "%s: failed to get current mode, skip mode check\n", __func__);
+	} else {
+		struct drm_display_mode *target_mode = &new_crtc_state->adjusted_mode;
+		int current_vrefresh = drm_mode_vrefresh(current_mode);
+		int target_vrefresh = drm_mode_vrefresh(target_mode);
+
+		if (current_mode->hdisplay != target_mode->hdisplay &&
+		    current_mode->vdisplay != target_mode->vdisplay) {
+			if (current_vrefresh != target_vrefresh) {
+				/*
+				 * While switching resolution and refresh rate (from high to low) in
+				 * the same commit, the frame transfer time will become longer due
+				 * to BTS update. In the case, frame done time may cross to the next
+				 * vsync, which will hit DDIC’s constraint and cause the noises.
+				 * Keep the current BTS (higher one) for a few frames to avoid the
+				 * problem.
+				 */
+				if (current_vrefresh > target_vrefresh) {
+					target_mode->clock =
+						target_mode->htotal * target_mode->vtotal *
+						current_vrefresh / 1000;
+					if (target_mode->clock != new_crtc_state->mode.clock) {
+						new_crtc_state->mode_changed = true;
+						dev_dbg(ctx->dev,
+							"%s: keep mode (%s) clock %dhz on rrs\n",
+							__func__, target_mode->name,
+							current_vrefresh);
+					}
+				}
+
+				ctx->mode_in_progress = MODE_RES_AND_RR_IN_PROGRESS;
+			} else {
+				ctx->mode_in_progress = MODE_RES_IN_PROGRESS;
+			}
+		} else {
+			if (ctx->mode_in_progress == MODE_RES_AND_RR_IN_PROGRESS &&
+			    new_crtc_state->adjusted_mode.clock != new_crtc_state->mode.clock) {
+				new_crtc_state->mode_changed = true;
+				new_crtc_state->adjusted_mode.clock = new_crtc_state->mode.clock;
+				dev_dbg(ctx->dev, "%s: restore mode (%s) clock after rrs\n",
+					__func__, new_crtc_state->mode.name);
+			}
+
+			if (current_vrefresh != target_vrefresh)
+				ctx->mode_in_progress = MODE_RR_IN_PROGRESS;
+			else
+				ctx->mode_in_progress = MODE_DONE;
+		}
+
+		if (current_mode->hdisplay != target_mode->hdisplay ||
+		    current_mode->vdisplay != target_mode->vdisplay ||
+		    current_vrefresh != target_vrefresh)
+			dev_dbg(ctx->dev,
+				"%s: current %dx%d@%d, target %dx%d@%d, type %d\n", __func__,
+				current_mode->hdisplay, current_mode->vdisplay, current_vrefresh,
+				target_mode->hdisplay, target_mode->vdisplay, target_vrefresh,
+				ctx->mode_in_progress);
+	}
 
 	if (funcs && funcs->atomic_check) {
 		ret = funcs->atomic_check(ctx, state);
@@ -3441,44 +3502,69 @@ void exynos_panel_wait_for_vsync_done(struct exynos_panel *ctx, u32 te_us, u32 p
 {
 	u32 delay_us;
 
+	DPU_ATRACE_BEGIN(__func__);
 	if (unlikely(exynos_panel_wait_for_vblank(ctx))) {
 		delay_us = period_us + 1000;
 		usleep_range(delay_us, delay_us + 10);
+		DPU_ATRACE_END(__func__);
 		return;
 	}
 
 	delay_us = exynos_panel_vsync_start_time_us(te_us, period_us);
 	usleep_range(delay_us, delay_us + 10);
+	DPU_ATRACE_END(__func__);
 }
 EXPORT_SYMBOL(exynos_panel_wait_for_vsync_done);
 
-/* avoid accumulate te varaince cause predicted value is not accurate enough */
+static u32 get_rr_switch_applied_te_count(struct exynos_panel *ctx)
+{
+	/* New refresh rate should take effect immediately after exiting AOD mode */
+	if (ctx->last_rr_switch_ts == ctx->last_lp_exit_ts)
+		return 1;
+
+	/* New rr will take effect at the first vsync after sending rr command, but
+	 * we only know te rising ts. The worse case, new rr take effect at 2nd TE.
+	 */
+	return 2;
+}
+
+static bool is_last_rr_applied(struct exynos_panel *ctx, ktime_t last_te)
+{
+	s64 rr_switch_delta_us;
+	u32 te_period_before_rr_switch_us;
+	u32 rr_switch_applied_te_count;
+
+	if (last_te == 0)
+		return false;
+
+	rr_switch_delta_us = ktime_us_delta(last_te, ctx->last_rr_switch_ts);
+	te_period_before_rr_switch_us = ctx->last_rr != 0 ? USEC_PER_SEC / ctx->last_rr : 0;
+	rr_switch_applied_te_count = get_rr_switch_applied_te_count(ctx);
+
+	if (rr_switch_delta_us > ((rr_switch_applied_te_count - 1) *
+			te_period_before_rr_switch_us))
+		return true;
+
+	return false;
+}
+
+/* avoid accumulate te varaince cause predicted value is not precision enough */
 #define ACCEPTABLE_TE_PERIOD_DETLA_NS		(3 * NSEC_PER_SEC)
 #define ACCEPTABLE_TE_RR_SWITCH_DELTA_US	(500)
 static ktime_t exynos_panel_te_ts_prediction(struct exynos_panel *ctx, ktime_t last_te,
 					     u32 te_period_us)
 {
-	const struct exynos_panel_desc *desc = ctx->desc;
 	s64 rr_switch_delta_us, te_last_rr_switch_delta_us;
 	u32 te_period_before_rr_switch_us;
 	u32 rr_switch_applied_te_count;
 	s64 te_period_delta_ns;
 
-	if (!desc || last_te == 0)
+	if (last_te == 0)
 		return 0;
 
 	rr_switch_delta_us = ktime_us_delta(last_te, ctx->last_rr_switch_ts);
 	te_period_before_rr_switch_us = ctx->last_rr != 0 ? USEC_PER_SEC / ctx->last_rr : 0;
-
-	if (ctx->last_rr_switch_ts == ctx->last_lp_exit_ts) {
-		/* New refresh rate should take effect immediately after exiting AOD mode */
-		rr_switch_applied_te_count = 1;
-	} else {
-		/* New rr will take effect at the first vsync after sending rr command, but we
-		 * only know te rising ts. The worse case, new rr take effect at 2nd TE
-		 */
-		rr_switch_applied_te_count = 2;
-	}
+	rr_switch_applied_te_count = get_rr_switch_applied_te_count(ctx);
 
 	if (rr_switch_delta_us < 0 && te_period_before_rr_switch_us != 0) {
 		/* last know TE ts is before sending last rr switch */
@@ -3524,8 +3610,7 @@ static ktime_t exynos_panel_te_ts_prediction(struct exynos_panel *ctx, ktime_t l
 				return first_te_after_rr_switch;
 			}
 		}
-	} else if (rr_switch_delta_us > ((rr_switch_applied_te_count - 1) *
-			te_period_before_rr_switch_us)) {
+	} else if (is_last_rr_applied(ctx, last_te)) {
 		/* new rr has already taken effect at last know TE ts */
 		ktime_t now;
 		s64 since_last_te_us;
@@ -3589,9 +3674,12 @@ static void exynos_panel_check_mipi_sync_timing(struct drm_crtc *crtc,
 	retry = te_period_us / USEC_PER_MSEC + 1;
 
 	do {
+		u32 cur_te_period_us = te_period_us;
+		u32 cur_te_usec = te_usec;
 		ktime_t last_te = 0, now;
 		s64 since_last_te_us;
 		u64 vblank_counter;
+		bool last_rr_applied;
 
 		vblank_counter = drm_crtc_vblank_count_and_time(crtc, &last_te);
 		now = ktime_get();
@@ -3612,21 +3700,22 @@ static void exynos_panel_check_mipi_sync_timing(struct drm_crtc *crtc,
 		 * new rr or for old rr depending on if last rr is sent at TE high or low.
 		 * If the refresh rate switch happens after last_te, last TE width won't change.
 		 */
+		last_rr_applied = is_last_rr_applied(ctx, last_te);
 		if (ctx->last_rr != 0 && ((vblank_counter - ctx->last_rr_te_counter <= 1 &&
-					   ctx->last_rr_te_gpio_value == 0) ||
+					   ctx->last_rr_te_gpio_value == 0 && !last_rr_applied) ||
 					  ktime_after(ctx->last_rr_switch_ts, last_te))) {
-			te_period_us = USEC_PER_SEC / ctx->last_rr;
-			te_usec = ctx->last_rr_te_usec;
+			cur_te_period_us = USEC_PER_SEC / ctx->last_rr;
+			cur_te_usec = ctx->last_rr_te_usec;
 		}
-		left = exynos_panel_vsync_start_time_us(te_usec, te_period_us);
-		right = te_period_us - USEC_PER_MSEC;
+		left = exynos_panel_vsync_start_time_us(cur_te_usec, cur_te_period_us);
+		right = cur_te_period_us - USEC_PER_MSEC;
 		pr_debug(
 			"%s: rr-te: %lld, te-now: %lld, time window [%llu, %llu] te/pulse: %u/%u\n",
 			__func__, ktime_us_delta(last_te, ctx->last_rr_switch_ts),
-			ktime_us_delta(now, last_te), left, right, te_period_us, te_usec);
+			ktime_us_delta(now, last_te), left, right, cur_te_period_us, cur_te_usec);
 
 		/* Only use the most recent TE as a reference point if it's not obsolete */
-		if (since_last_te_us > te_period_us) {
+		if (since_last_te_us > cur_te_period_us) {
 			DPU_ATRACE_BEGIN("time_window_wait_crtc");
 			if (vblank_taken || !drm_crtc_vblank_get(crtc)) {
 				drm_crtc_wait_one_vblank(crtc);
@@ -4175,6 +4264,9 @@ int exynos_panel_common_init(struct mipi_dsi_device *dsi,
 		if (ret)
 			dev_err(ctx->dev, "unable to create cabc_mode\n");
 	}
+
+	ctx->mode_in_progress = MODE_DONE;
+
 	exynos_panel_handoff(ctx);
 
 	ret = mipi_dsi_attach(dsi);

@@ -230,6 +230,9 @@ static const struct kbase_device_init dev_init[] = {
 	{ gpu_sysfs_init, gpu_sysfs_term, "sysfs init failed" },
 	{ gpu_sscd_init, gpu_sscd_term, "SSCD init failed" },
 	{ gpu_slc_init, gpu_slc_term, "SLC init failed" },
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+	{ gpu_itmon_init, gpu_itmon_term, "ITMON notifier init failed" },
+#endif
 };
 
 static void gpu_pixel_term_partial(struct kbase_device *kbdev,

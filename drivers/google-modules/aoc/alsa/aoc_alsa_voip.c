@@ -76,20 +76,17 @@ static enum hrtimer_restart aoc_voip_irq_process(struct aoc_alsa_stream *alsa_st
 	}
 	alsa_stream->prev_consumed = consumed;
 
-	/* Update the pcm pointer  */
-	if (unlikely(alsa_stream->n_overflow)) {
-		alsa_stream->pos = (consumed + 0x100000000 * alsa_stream->n_overflow -
-				    alsa_stream->hw_ptr_base) %
-				   alsa_stream->buffer_size;
-	} else {
-		alsa_stream->pos = (consumed - alsa_stream->hw_ptr_base) % alsa_stream->buffer_size;
-	}
-
-	/* Do not queue a work if the cancel_work is active */
-	if (atomic_read(&alsa_stream->cancel_work_active) > 0)
+	if (!aoc_pcm_update_pos(alsa_stream, consumed))
 		return HRTIMER_RESTART;
 
-	if (!queue_work(system_highpri_wq, &alsa_stream->pcm_period_work)) {
+	alsa_stream->prev_pos = alsa_stream->pos;
+
+	/* Do not queue a work if the cancel_work is active */
+	if (atomic_read(&alsa_stream->cancel_work_active) > 0
+			|| alsa_stream->voip_period_wq == NULL)
+		return HRTIMER_RESTART;
+
+	if (!queue_work(alsa_stream->voip_period_wq, &alsa_stream->pcm_period_work)) {
 		wake_up(&alsa_stream->substream->runtime->sleep);
 		wake_up(&alsa_stream->substream->runtime->tsleep);
 		alsa_stream->wq_busy_count++;
@@ -198,6 +195,12 @@ static int snd_aoc_pcm_open(struct snd_soc_component *component,
 	atomic_set(&alsa_stream->cancel_work_active, 0);
 
 	INIT_WORK(&alsa_stream->pcm_period_work, aoc_pcm_period_work_handler);
+	alsa_stream->voip_period_wq = alloc_ordered_workqueue("alsa_voip_period_work", WQ_HIGHPRI);
+	if (!alsa_stream->voip_period_wq) {
+		err = -ENOMEM;
+		pr_err("ERR: fail to alloc workqueue for %s", rtd->dai_link->name);
+		goto out;
+	}
 
 	/* Ring buffer will be flushed at prepare() before playback/capture */
 	alsa_stream->hw_ptr_base = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
@@ -205,6 +208,7 @@ static int snd_aoc_pcm_open(struct snd_soc_component *component,
 						 aoc_ring_bytes_written(dev->service, AOC_UP);
 	alsa_stream->prev_consumed = alsa_stream->hw_ptr_base;
 	alsa_stream->n_overflow = 0;
+	alsa_stream->prev_buffer_cnt = 0;
 
 	err = aoc_audio_open(alsa_stream);
 	if (err != 0) {
@@ -235,7 +239,15 @@ static int snd_aoc_pcm_open(struct snd_soc_component *component,
 
 	return 0;
 out:
-	kfree(alsa_stream);
+	if (alsa_stream) {
+		if (alsa_stream->voip_period_wq) {
+			flush_workqueue(alsa_stream->voip_period_wq);
+			destroy_workqueue(alsa_stream->voip_period_wq);
+			alsa_stream->voip_period_wq = NULL;
+		}
+		kfree(alsa_stream);
+	}
+
 	if (dev) {
 		free_aoc_audio_service(rtd->dai_link->name, dev);
 		dev = NULL;
@@ -260,7 +272,11 @@ static int snd_aoc_pcm_close(struct snd_soc_component *component,
 	aoc_timer_stop_sync(alsa_stream);
 	atomic_set(&alsa_stream->cancel_work_active, 1);
 	audio_free_isr(alsa_stream->dev);
-	cancel_work_sync(&alsa_stream->pcm_period_work);
+	if (alsa_stream->voip_period_wq) {
+		flush_workqueue(alsa_stream->voip_period_wq);
+		destroy_workqueue(alsa_stream->voip_period_wq);
+		alsa_stream->voip_period_wq = NULL;
+	}
 	atomic_set(&alsa_stream->cancel_work_active, 0);
 
 	if (mutex_lock_interruptible(&chip->audio_mutex)) {
@@ -381,11 +397,15 @@ static int snd_aoc_pcm_prepare(struct snd_soc_component *component,
 	alsa_stream->buffer_size = snd_pcm_lib_buffer_bytes(substream);
 	alsa_stream->period_size = snd_pcm_lib_period_bytes(substream);
 	alsa_stream->pos = 0;
+	alsa_stream->prev_pos = 0;
+	alsa_stream->pos_delta = 0;
+
 	alsa_stream->hw_ptr_base = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
 						 aoc_ring_bytes_written(dev->service, AOC_DOWN) :
 						 aoc_ring_bytes_written(dev->service, AOC_UP);
 	alsa_stream->prev_consumed = alsa_stream->hw_ptr_base;
 	alsa_stream->n_overflow = 0;
+	alsa_stream->prev_buffer_cnt = 0;
 
 	pr_notice("Start voip call\n");
 	err = prepare_voipcall(alsa_stream);
