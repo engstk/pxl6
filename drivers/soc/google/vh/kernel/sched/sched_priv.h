@@ -16,12 +16,23 @@
 #define THREAD_PRIORITY_TOP_APP_BOOST 110
 #define THREAD_PRIORITY_BACKGROUND    130
 #define THREAD_PRIORITY_LOWEST        139
+#define LIST_QUEUED         0xa5a55a5a
+#define LIST_NOT_QUEUED     0x5a5aa5a5
 
 /*
  * For cpu running normal tasks, its uclamp.min will be 0 and uclamp.max will be 1024,
  * and the sum will be 1024. We use this as index that cpu is not running important tasks.
  */
 #define DEFAULT_IMPRATANCE_THRESHOLD	1024
+
+/*
+ * Sets uclamp_max to the task based on the most efficient point of the CPU the
+ * task is currently running on.
+ */
+#define AUTO_UCLAMP_MAX_MAGIC		-2
+
+#define AUTO_UCLAMP_MAX_FLAG_TASK	BIT(0)
+#define AUTO_UCLAMP_MAX_FLAG_GROUP	BIT(1)
 
 #define UCLAMP_BUCKET_DELTA DIV_ROUND_CLOSEST(SCHED_CAPACITY_SCALE, UCLAMP_BUCKETS)
 
@@ -37,6 +48,7 @@
 
 extern unsigned int sched_capacity_margin[CPU_NUM];
 extern unsigned int sched_dvfs_headroom[CPU_NUM];
+extern unsigned int sched_auto_uclamp_max[CPU_NUM];
 
 #define cpu_overutilized(cap, max, cpu)	\
 		((cap) * sched_capacity_margin[cpu] > (max) << SCHED_CAPACITY_SHIFT)
@@ -78,6 +90,7 @@ struct vendor_group_property {
 	bool prefer_idle;
 	bool prefer_high_cap;
 	bool task_spreading;
+	bool auto_uclamp_max;
 #if !IS_ENABLED(CONFIG_USE_VENDOR_GROUP_UTIL)
 	unsigned int group_throttle;
 #endif
@@ -147,6 +160,9 @@ struct vendor_group_list {
 unsigned long apply_dvfs_headroom(unsigned long util, int cpu, bool tapered);
 unsigned long map_util_freq_pixel_mod(unsigned long util, unsigned long freq,
 				      unsigned long cap);
+void rvh_uclamp_eff_get_pixel_mod(void *data, struct task_struct *p, enum uclamp_id clamp_id,
+				  struct uclamp_se *uclamp_max, struct uclamp_se *uclamp_eff,
+				  int *ret);
 
 enum vendor_group_attribute {
 	VTA_TASK_GROUP,
@@ -181,6 +197,8 @@ DECLARE_STATIC_KEY_FALSE(tapered_dvfs_headroom_enable);
  */
 extern struct uclamp_se uclamp_default[UCLAMP_CNT];
 
+void set_next_buddy(struct sched_entity *se);
+
 static inline unsigned long task_util(struct task_struct *p)
 {
 	return READ_ONCE(p->se.avg.util_avg);
@@ -214,6 +232,14 @@ static inline unsigned int uclamp_none(enum uclamp_id clamp_id)
 	if (clamp_id == UCLAMP_MIN)
 		return 0;
 	return SCHED_CAPACITY_SCALE;
+}
+
+static inline void uclamp_se_set(struct uclamp_se *uc_se,
+				 unsigned int value, bool user_defined)
+{
+	uc_se->value = value;
+	uc_se->bucket_id = get_bucket_id(value);
+	uc_se->user_defined = user_defined;
 }
 
 extern inline void uclamp_rq_inc_id(struct rq *rq, struct task_struct *p,
@@ -375,6 +401,23 @@ static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
 }
 #endif
 
+static inline unsigned long
+uclamp_eff_value_pixel_mod(struct task_struct *p, enum uclamp_id clamp_id)
+{
+	struct uclamp_se uc_max = uclamp_default[clamp_id];
+	struct uclamp_se uc_eff;
+	int ret;
+
+	/* Task currently refcounted: use back-annotated (effective) value */
+	if (p->uclamp[clamp_id].active)
+		return (unsigned long)p->uclamp[clamp_id].value;
+
+	// This function will always return uc_eff
+	rvh_uclamp_eff_get_pixel_mod(NULL, p, clamp_id, &uc_max, &uc_eff, &ret);
+
+	return (unsigned long)uc_eff.value;
+}
+
 /*****************************************************************************/
 /*                       New Code Section                                    */
 /*****************************************************************************/
@@ -401,6 +444,16 @@ static inline struct vendor_rq_struct *get_vendor_rq_struct(struct rq *rq)
 	return (struct vendor_rq_struct *)rq->android_vendor_data1;
 }
 
+static inline bool get_uclamp_fork_reset(struct task_struct *p, bool inherited)
+{
+
+	if (inherited)
+		return get_vendor_task_struct(p)->uclamp_fork_reset ||
+			get_vendor_binder_task_struct(p)->uclamp_fork_reset;
+	else
+		return get_vendor_task_struct(p)->uclamp_fork_reset;
+}
+
 static inline bool get_prefer_idle(struct task_struct *p)
 {
 	// For group based prefer_idle vote, filter our smaller or low prio or
@@ -410,12 +463,13 @@ static inline bool get_prefer_idle(struct task_struct *p)
 	struct vendor_task_struct *vp = get_vendor_task_struct(p);
 	struct vendor_binder_task_struct *vbinder = get_vendor_binder_task_struct(p);
 
-	if (vendor_sched_reduce_prefer_idle && !vp->uclamp_fork_reset)
-		return (vg[vp->group].prefer_idle && p->prio <= DEFAULT_PRIO &&
-			uclamp_eff_value(p, UCLAMP_MAX) == SCHED_CAPACITY_SCALE) ||
-			vp->prefer_idle || vbinder->prefer_idle;
+	if (get_uclamp_fork_reset(p, true) || vp->prefer_idle || vbinder->prefer_idle)
+		return true;
+	else if (vendor_sched_reduce_prefer_idle)
+		return vg[vp->group].prefer_idle && p->prio <= DEFAULT_PRIO &&
+			uclamp_eff_value_pixel_mod(p, UCLAMP_MAX) == SCHED_CAPACITY_SCALE;
 	else
-		return vg[vp->group].prefer_idle || vp->prefer_idle || vbinder->prefer_idle;
+		return vg[vp->group].prefer_idle;
 }
 
 static inline void init_vendor_task_struct(struct vendor_task_struct *v_tsk)
@@ -428,9 +482,10 @@ static inline void init_vendor_task_struct(struct vendor_task_struct *v_tsk)
 	v_tsk->group = VG_SYSTEM;
 	v_tsk->direct_reclaim_ts = 0;
 	INIT_LIST_HEAD(&v_tsk->node);
-	v_tsk->queued_to_list = false;
+	v_tsk->queued_to_list = LIST_NOT_QUEUED;
 	v_tsk->uclamp_fork_reset = false;
 	v_tsk->prefer_idle = false;
+	v_tsk->auto_uclamp_max_flags = 0;
 	v_tsk->uclamp_filter.uclamp_min_ignored = 0;
 	v_tsk->uclamp_filter.uclamp_max_ignored = 0;
 	v_tsk->binder_task.uclamp[UCLAMP_MIN] = uclamp_none(UCLAMP_MIN);
@@ -474,6 +529,9 @@ static inline bool uclamp_can_ignore_uclamp_min(struct rq *rq,
 		return false;
 
 	if (task_on_rq_migrating(p))
+		return false;
+
+	if (get_uclamp_fork_reset(p, true))
 		return false;
 
 	if (rt_task(p))
@@ -548,12 +606,15 @@ static inline bool uclamp_can_ignore_uclamp_max(struct rq *rq,
 	if (task_on_rq_migrating(p))
 		return false;
 
+	if (get_uclamp_fork_reset(p, true))
+		return false;
+
 	/*
 	 * If util has crossed uclamp_max threshold, then we have to ensure
 	 * this is always enforced.
 	 */
 	util = is_rt ? task_util(p) : task_util_est(p);
-	uclamp_max = uclamp_eff_value(p, UCLAMP_MAX);
+	uclamp_max = uclamp_eff_value_pixel_mod(p, UCLAMP_MAX);
 	if (util >= uclamp_max)
 		return false;
 
@@ -633,4 +694,73 @@ static inline bool uclamp_is_ignore_uclamp_max(struct task_struct *p)
 {
 	struct vendor_task_struct *vp = get_vendor_task_struct(p);
 	return vp->uclamp_filter.uclamp_max_ignored;
+}
+
+static inline bool apply_uclamp_filters(struct rq *rq, struct task_struct *p)
+{
+	bool auto_uclamp_max = get_vendor_task_struct(p)->auto_uclamp_max_flags;
+	unsigned long rq_uclamp_min = rq->uclamp[UCLAMP_MIN].value;
+	unsigned long rq_uclamp_max = rq->uclamp[UCLAMP_MAX].value;
+	bool force_cpufreq_update;
+
+	if (auto_uclamp_max) {
+		/* GKI has incremented it already, undo that */
+		uclamp_rq_dec_id(rq, p, UCLAMP_MAX);
+		/* update uclamp_max if set to auto */
+		uclamp_se_set(&p->uclamp_req[UCLAMP_MAX],
+			      sched_auto_uclamp_max[task_cpu(p)], true);
+	}
+
+	if (uclamp_can_ignore_uclamp_max(rq, p)) {
+		uclamp_set_ignore_uclamp_max(p);
+		if (!auto_uclamp_max) {
+			/* GKI has incremented it already, undo that */
+			uclamp_rq_dec_id(rq, p, UCLAMP_MAX);
+		}
+	} else if (auto_uclamp_max) {
+		/*
+		 * re-apply uclamp_max applying the potentially new
+		 * auto value
+		 */
+		uclamp_rq_inc_id(rq, p, UCLAMP_MAX);
+
+		/* Reset clamp idle holding when there is one RUNNABLE task */
+		if (rq->uclamp_flags & UCLAMP_FLAG_IDLE)
+			rq->uclamp_flags &= ~UCLAMP_FLAG_IDLE;
+	}
+
+	if (uclamp_can_ignore_uclamp_min(rq, p)) {
+		uclamp_set_ignore_uclamp_min(p);
+		/* GKI has incremented it already, undo that */
+		uclamp_rq_dec_id(rq, p, UCLAMP_MIN);
+	}
+
+	/*
+	 * Force cpufreq update if we filtered and the new rq eff value is
+	 * smaller than it was at func entry.
+	 */
+	force_cpufreq_update = rq_uclamp_min > rq->uclamp[UCLAMP_MIN].value;
+	force_cpufreq_update |= rq_uclamp_max > rq->uclamp[UCLAMP_MAX].value;
+
+	return force_cpufreq_update;
+}
+
+static inline void inc_adpf_counter(struct task_struct *p, atomic_t *num_adpf_tasks)
+{
+	if (rt_task(p))
+		return;
+
+	atomic_inc(num_adpf_tasks);
+	/*
+	 * Tell the scheduler that this tasks really wants to run next
+	 */
+	set_next_buddy(&p->se);
+}
+
+static inline void dec_adpf_counter(struct task_struct *p, atomic_t *num_adpf_tasks)
+{
+	if (rt_task(p))
+		return;
+
+	atomic_dec(num_adpf_tasks);
 }
