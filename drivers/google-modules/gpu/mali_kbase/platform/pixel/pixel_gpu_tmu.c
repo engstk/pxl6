@@ -207,7 +207,7 @@ static int gpu_tmu_notifier(struct notifier_block *notifier, unsigned long event
 			return NOTIFY_BAD;
 		}
 		dev_info(kbdev->dev,
-			"%s: GPU_THROTTLING event received limiting GPU clock to %d kHz\n",
+			"%s: Adjusting GPU clock to %d kHz for thermal constraints (this is normal)\n",
 			__func__, pc->dvfs.table[level].clk[GPU_DVFS_CLK_SHADERS]);
 		break;
 	default:

@@ -14,6 +14,8 @@
  */
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_atomic_uapi.h>
+#include <drm/drm_modeset_lock.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_vblank.h>
 #include <drm/exynos_drm.h>
@@ -1552,8 +1554,10 @@ static ssize_t early_wakeup_store(struct device *dev,
 	if (!trigger)
 		return len;
 
+	DPU_ATRACE_BEGIN(__func__);
 	decon = dev_get_drvdata(dev);
 	exynos_hibernation_async_exit(decon->hibernation);
+	DPU_ATRACE_END(__func__);
 
 	return len;
 }
@@ -2317,19 +2321,64 @@ static int decon_runtime_resume(struct device *dev)
 	return 0;
 }
 
+static int decon_atomic_suspend(struct decon_device *decon)
+{
+	struct drm_modeset_acquire_ctx ctx;
+	struct drm_atomic_state *suspend_state;
+	int ret = 0;
+
+	if (!decon) {
+		decon_err(decon, "%s: decon is not ready\n", __func__);
+		return -EINVAL;
+	}
+	drm_modeset_acquire_init(&ctx, 0);
+	suspend_state = exynos_crtc_suspend(&decon->crtc->base, &ctx);
+	if (!IS_ERR(suspend_state))
+		decon->suspend_state = suspend_state;
+	else
+		ret = PTR_ERR(suspend_state);
+
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
+	return ret;
+}
+
+static int decon_atomic_resume(struct decon_device *decon)
+{
+	struct drm_modeset_acquire_ctx ctx;
+	int ret = 0;
+
+	if (!decon) {
+		decon_err(decon, "%s: decon is not ready\n", __func__);
+		return -EINVAL;
+	}
+	drm_modeset_acquire_init(&ctx, 0);
+	if (!IS_ERR_OR_NULL(decon->suspend_state)) {
+		ret = exynos_crtc_resume(decon->suspend_state, &ctx);
+		drm_atomic_state_put(decon->suspend_state);
+	}
+	decon->suspend_state = NULL;
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
+	return ret;
+}
+
 static int decon_suspend(struct device *dev)
 {
 	struct decon_device *decon = dev_get_drvdata(dev);
 	int ret;
 
-	if (!decon_is_effectively_active(decon))
-		return 0;
-
 	decon_debug(decon, "%s\n", __func__);
+
+	if (!decon->hibernation)
+		return decon_atomic_suspend(decon);
 
 	ret = exynos_hibernation_suspend(decon->hibernation);
 
-	DPU_EVENT_LOG(DPU_EVT_DECON_SUSPEND, decon->id, NULL);
+	if (ret == -ENOTCONN)
+		ret = 0;
+	else
+		DPU_EVENT_LOG(DPU_EVT_DECON_SUSPEND, decon->id, NULL);
 
 	return ret;
 }
@@ -2337,15 +2386,19 @@ static int decon_suspend(struct device *dev)
 static int decon_resume(struct device *dev)
 {
 	struct decon_device *decon = dev_get_drvdata(dev);
+	int ret = 0;
 
 	if (!decon_is_effectively_active(decon))
 		return 0;
 
 	decon_debug(decon, "%s\n", __func__);
 
+	if (!decon->hibernation)
+		ret = decon_atomic_resume(decon);
+
 	DPU_EVENT_LOG(DPU_EVT_DECON_RESUME, decon->id, NULL);
 
-	return 0;
+	return ret;
 }
 #endif
 

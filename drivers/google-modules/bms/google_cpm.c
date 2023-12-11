@@ -2888,6 +2888,48 @@ error_done:
 
 DEBUG_ATTRIBUTE_WO(mdis_out);
 
+static void chg_mdis_tdev_free(struct mdis_thermal_device *tdev,
+			       struct gcpm_drv *gcpm)
+{
+	devm_kfree(gcpm->device, tdev->thermal_mitigation);
+	tdev->thermal_mitigation = NULL;
+}
+
+static int mdis_tdev_register(const char *of_name, const char *tcd_name,
+			      struct mdis_thermal_device *ctdev,
+			      const struct thermal_cooling_device_ops *ops)
+{
+	struct device_node *cooling_node = NULL;
+	int ret;
+
+	cooling_node = of_find_node_by_name(NULL, of_name);
+	if (!cooling_node) {
+		pr_err("No %s OF node for cooling device\n", of_name);
+		return -EINVAL;
+	}
+
+	ctdev->tcd = thermal_of_cooling_device_register(cooling_node,
+							tcd_name,
+							ctdev,
+							ops);
+	if (IS_ERR_OR_NULL(ctdev->tcd)) {
+		const long err = PTR_ERR(ctdev->tcd);
+
+		pr_err("error registering %s cooling device (%ld)\n", tcd_name, err);
+		return err;
+	}
+
+	ret = device_create_file(&ctdev->tcd->device, &dev_attr_state2power_table);
+	if (ret)
+		dev_err(ctdev->gcpm->device, "cound not create state table *(%d)\n", ret);
+
+	ret = device_create_file(&ctdev->tcd->device, &dev_attr_mdis_out_table);
+	if (ret)
+		dev_err(ctdev->gcpm->device, "cound not create out table *(%d)\n", ret);
+
+	return 0;
+}
+
 static int mdis_size_show(void *data, u64 *val)
 {
 	struct gcpm_drv *gcpm = data;
@@ -2908,13 +2950,7 @@ static int mdis_size_store(void *data, u64 val)
 
 	mutex_lock(&gcpm->chg_psy_lock);
 
-	limits = devm_kzalloc(gcpm->device, newsize_bytes, GFP_KERNEL);
-	if (!limits) {
-		ret = -ENOMEM;
-		goto exit;
-	}
 	bytes = (newsize <= tdev->thermal_levels ? newsize : tdev->thermal_levels) * sizeof(u32);
-	memcpy(limits, tdev->thermal_mitigation, bytes);
 
 	for (index = 0; index < gcpm->mdis_out_count; index++) {
 		limits = devm_kzalloc(gcpm->device, newsize_bytes * gcpm->mdis_in_count, GFP_KERNEL);
@@ -2928,10 +2964,34 @@ static int mdis_size_store(void *data, u64 val)
 		devm_kfree(gcpm->device, gcpm->mdis_out_limits[index]);
 		gcpm->mdis_out_limits[index] = limits;
 	}
+
+	limits = devm_kzalloc(gcpm->device, newsize_bytes, GFP_KERNEL);
+	if (!limits) {
+		ret = -ENOMEM;
+		goto exit;
+	}
+	memcpy(limits, tdev->thermal_mitigation, bytes);
+
 	devm_kfree(gcpm->device, tdev->thermal_mitigation);
 	tdev->thermal_mitigation = limits;
 	tdev->thermal_levels = newsize;
 	ret = 0;
+
+	/* Need to re-register cooling device because size is stored in the thermal framework */
+	thermal_cooling_device_unregister(tdev->tcd);
+
+	ret = mdis_tdev_register(MDIS_OF_CDEV_NAME, MDIS_CDEV_NAME,
+				 tdev, &chg_mdis_tcd_ops);
+	if (ret) {
+		dev_err(gcpm->device,
+			"Couldn't register %s rc=%d\n", MDIS_OF_CDEV_NAME, ret);
+
+		/* Free the limits too! */
+		chg_mdis_tdev_free(tdev, gcpm);
+		ret = -EINVAL;
+		goto exit;
+	}
+
 exit:
 	mutex_unlock(&gcpm->chg_psy_lock);
 	return ret;
@@ -3051,39 +3111,6 @@ static int gcpm_tdev_init(struct mdis_thermal_device *tdev, const char *name,
 	tdev->thermal_levels = levels;
 	tdev->thermal_mitigation = limits;
 	tdev->gcpm = gcpm;
-	return 0;
-}
-
-static void chg_mdis_tdev_free(struct mdis_thermal_device *tdev,
-			       struct gcpm_drv *gcpm)
-{
-	devm_kfree(gcpm->device, tdev->thermal_mitigation);
-	tdev->thermal_mitigation = NULL;
-}
-
-static int mdis_tdev_register(const char *of_name, const char *tcd_name,
-			      struct mdis_thermal_device *ctdev,
-			      const struct thermal_cooling_device_ops *ops)
-{
-	struct device_node *cooling_node = NULL;
-
-	cooling_node = of_find_node_by_name(NULL, of_name);
-	if (!cooling_node) {
-		pr_err("No %s OF node for cooling device\n", of_name);
-		return -EINVAL;
-	}
-
-	ctdev->tcd = thermal_of_cooling_device_register(cooling_node,
-							tcd_name,
-							ctdev,
-							ops);
-	if (IS_ERR_OR_NULL(ctdev->tcd)) {
-		const long err = PTR_ERR(ctdev->tcd);
-
-		pr_err("error registering %s cooling device (%ld)\n", tcd_name, err);
-		return err;
-	}
-
 	return 0;
 }
 
@@ -3280,15 +3307,6 @@ static int gcpm_init_mdis(struct gcpm_drv *gcpm)
 		chg_mdis_tdev_free(tdev, gcpm);
 		return -EINVAL;
 	}
-
-	/* state and debug */
-	ret = device_create_file(&tdev->tcd->device, &dev_attr_state2power_table);
-	if (ret)
-		dev_err(gcpm->device, "cound not create state table *(%d)\n", ret);
-
-	ret = device_create_file(&tdev->tcd->device, &dev_attr_mdis_out_table);
-	if (ret)
-		dev_err(gcpm->device, "cound not create out table *(%d)\n", ret);
 
 	if (!gcpm->debug_entry)
 		return 0;

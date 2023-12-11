@@ -8,7 +8,7 @@
 #include <linux/spinlock.h>
 #include "pixel_gpu_uevent.h"
 
-#define GPU_UEVENT_TIMEOUT_MS (30000U) /* 30s */
+#define GPU_UEVENT_TIMEOUT_MS (1200000U) /* 20min */
 
 static struct gpu_uevent_ctx {
     unsigned long last_uevent_ts[GPU_UEVENT_TYPE_MAX];

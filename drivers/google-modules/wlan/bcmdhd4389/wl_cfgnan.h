@@ -657,6 +657,11 @@ typedef struct nan_hal_capabilities {
 	uint32 max_subscribe_address;
 	uint32 ndpe_attr_supported;
 	bool is_instant_mode_supported;
+	bool is_6g_supported;
+	bool is_he_supported;
+	bool is_pairing_supported;
+	bool is_set_cluster_id_supported;
+	bool is_suspension_supported;
 } nan_hal_capabilities_t;
 
 typedef struct _nan_hal_resp {
@@ -1015,7 +1020,8 @@ typedef enum {
 	NAN_ATTRIBUTE_INSTANT_MODE_ENABLE		= 230,
 	NAN_ATTRIBUTE_INSTANT_COMM_CHAN			= 231,
 	NAN_ATTRIBUTE_CHRE_REQUEST			= 232,
-	NAN_ATTRIBUTE_MAX				= 233
+	NAN_ATTRIBUTE_SVC_CFG_SUSPENDABLE               = 233,
+	NAN_ATTRIBUTE_MAX				= 234
 } NAN_ATTRIBUTE;
 
 enum geofence_suspend_reason {

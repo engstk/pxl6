@@ -5567,6 +5567,25 @@ const wl_event_msg_t *e, void *data)
 }
 
 s32
+wl_cfgvif_csa_start_ind(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
+const wl_event_msg_t *e, void *data)
+{
+	struct net_device *ndev = NULL;
+
+	if (!cfgdev) {
+		WL_ERR(("invalid arg\n"));
+		return BCME_ERROR;
+	}
+
+	ndev = cfgdev_to_wlc_ndev(cfgdev, cfg);
+	WL_INFORM_MEM(("[%s] csa started\n", ndev->name));
+
+	wl_set_drv_status(cfg, CSA_ACTIVE, ndev);
+
+	return BCME_OK;
+}
+
+s32
 wl_csa_complete_ind(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 const wl_event_msg_t *e, void *data)
 {
@@ -5574,15 +5593,21 @@ const wl_event_msg_t *e, void *data)
 	u32 chanspec = 0;
 	struct net_device *ndev = NULL;
 	struct ether_addr bssid;
+	u32 status = dtoh32(e->status);
 
 	WL_DBG(("Enter\n"));
-	if (unlikely(e->status)) {
-		WL_ERR(("status:0x%x \n", e->status));
-		return -1;
-	}
 
 	if (likely(cfgdev)) {
 		ndev = cfgdev_to_wlc_ndev(cfgdev, cfg);
+		wl_clr_drv_status(cfg, CSA_ACTIVE, ndev);
+
+		WL_INFORM_MEM(("[%s] CSA ind. ch:0x%x status:%d\n",
+			ndev->name, chanspec, status));
+		if (status != WLC_E_STATUS_SUCCESS) {
+			WL_ERR(("csa complete error. status:0x%x\n", e->status));
+			return BCME_ERROR;
+		}
+
 		/* Get association state if not AP and then query chanspec */
 		if (!((wl_get_mode_by_netdev(cfg, ndev)) == WL_MODE_AP)) {
 			error = wldev_ioctl_get(ndev, WLC_GET_BSSID, &bssid, ETHER_ADDR_LEN);
@@ -5599,7 +5624,6 @@ const wl_event_msg_t *e, void *data)
 			return -1;
 		}
 
-		WL_INFORM_MEM(("[%s] CSA ind. ch:0x%x\n", ndev->name, chanspec));
 		if (wl_get_mode_by_netdev(cfg, ndev) == WL_MODE_AP) {
 			/* For AP/GO role */
 			wl_ap_channel_ind(cfg, ndev, chanspec);

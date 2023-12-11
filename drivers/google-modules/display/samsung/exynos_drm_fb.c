@@ -15,6 +15,7 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_bridge.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
@@ -545,20 +546,64 @@ static void exynos_rmem_free(struct decon_device *decon)
 	decon->fb_handover.phys_size = 0;
 }
 
-
-static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
+static void
+exynos_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state,
+			unsigned int *disabling_crtc_mask)
 {
-	int i;
-	struct drm_device *dev = old_state->dev;
 	struct decon_device *decon;
+	struct drm_connector *connector;
+	struct drm_connector_state *old_conn_state, *new_conn_state;
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
-	struct drm_connector *connector;
-	struct drm_connector_state *old_conn_state;
-	struct drm_connector_state *new_conn_state;
-	unsigned int disabling_crtc_mask = 0;
+	int i;
 
-	DPU_ATRACE_BEGIN("exynos_atomic_commit_tail");
+	for_each_oldnew_connector_in_state(old_state, connector, old_conn_state,
+			new_conn_state, i) {
+		struct drm_encoder *encoder;
+		struct drm_bridge *bridge;
+
+		/* Shut down everything that's in the changeset and currently
+		 * still on. So need to check the old, saved state.
+		 */
+		if (!old_conn_state->crtc)
+			continue;
+
+		old_crtc_state = drm_atomic_get_old_crtc_state(old_state, old_conn_state->crtc);
+
+		if (new_conn_state->crtc)
+			new_crtc_state = drm_atomic_get_new_crtc_state(
+						old_state,
+						new_conn_state->crtc);
+		else
+			new_crtc_state = NULL;
+
+		/*  TODO(b/237120310): needs cleanup after we identify mode_changed handling */
+		if (old_crtc_state->self_refresh_active && new_crtc_state &&
+			new_crtc_state->mode_changed)
+			old_crtc_state->active = true;
+
+		if (!exynos_crtc_needs_disable(old_crtc_state, new_crtc_state) ||
+			!drm_atomic_crtc_needs_modeset(old_conn_state->crtc->state))
+			continue;
+
+		encoder = old_conn_state->best_encoder;
+
+		/* We shouldn't get this far if we didn't previously have
+		 * an encoder.. but WARN_ON() rather than explode.
+		 */
+		if (WARN_ON(!encoder))
+			continue;
+
+		DRM_DEBUG_ATOMIC("disabling bridge chain [ENCODER:%u:%s]\n",
+				encoder->base.id, encoder->name);
+
+		/*
+		 * Each encoder has at most one connector (since we always steal
+		 * it away), so we won't call disable hooks twice.
+		 */
+		bridge = drm_bridge_chain_get_first_bridge(encoder);
+		drm_atomic_bridge_chain_disable(bridge, old_state);
+	}
 
 	for_each_oldnew_crtc_in_state(old_state, crtc, old_crtc_state,
 			new_crtc_state, i) {
@@ -588,7 +633,7 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 		if (drm_atomic_crtc_effectively_active(old_crtc_state) && !new_crtc_state->active) {
 			/* keep runtime vote while disabling is taking place */
 			pm_runtime_get_sync(decon->dev);
-			disabling_crtc_mask |= drm_crtc_mask(crtc);
+			*disabling_crtc_mask |= drm_crtc_mask(crtc);
 		}
 
 		if (old_crtc_state->active && drm_atomic_crtc_needs_modeset(new_crtc_state)) {
@@ -606,13 +651,109 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 
 			DPU_ATRACE_END("crtc_disable");
 		}
-		/*  TODO(b/237120310): needs cleanup after we identify mode_changed handling */
-		if (old_crtc_state->self_refresh_active && new_crtc_state->mode_changed)
-			old_crtc_state->active = true;
 	}
 
+	for_each_oldnew_connector_in_state(old_state, connector, old_conn_state,
+			new_conn_state, i) {
+		const struct drm_encoder_helper_funcs *funcs;
+		struct drm_encoder *encoder;
+		struct drm_bridge *bridge;
+
+		/* Shut down everything that's in the changeset and currently
+		 * still on. So need to check the old, saved state.
+		 */
+		if (!old_conn_state->crtc)
+			continue;
+
+		old_crtc_state = drm_atomic_get_old_crtc_state(old_state, old_conn_state->crtc);
+
+		if (new_conn_state->crtc)
+			new_crtc_state = drm_atomic_get_new_crtc_state(
+						old_state,
+						new_conn_state->crtc);
+		else
+			new_crtc_state = NULL;
+
+		if (!exynos_crtc_needs_disable(old_crtc_state, new_crtc_state) ||
+			!drm_atomic_crtc_needs_modeset(old_conn_state->crtc->state))
+			continue;
+
+		encoder = old_conn_state->best_encoder;
+
+		/* We shouldn't get this far if we didn't previously have
+		 * an encoder.. but WARN_ON() rather than explode.
+		 */
+		if (WARN_ON(!encoder))
+			continue;
+
+		funcs = encoder->helper_private;
+
+		DRM_DEBUG_ATOMIC("disabling [ENCODER:%u:%s]\n",
+				encoder->base.id, encoder->name);
+
+		/*
+		 * Each encoder has at most one connector (since we always steal
+		 * it away), so we won't call disable hooks twice.
+		 */
+		bridge = drm_bridge_chain_get_first_bridge(encoder);
+
+		/* Right function depends upon target state. */
+		if (funcs) {
+			if (funcs->atomic_disable)
+				funcs->atomic_disable(encoder, old_state);
+			else if (new_conn_state->crtc && funcs->prepare)
+				funcs->prepare(encoder);
+			else if (funcs->disable)
+				funcs->disable(encoder);
+			else if (funcs->dpms)
+				funcs->dpms(encoder, DRM_MODE_DPMS_OFF);
+		}
+
+		drm_atomic_bridge_chain_post_disable(bridge, old_state);
+	}
+}
+
+/**
+ * exynos_drm_atomic_helper_commit_modeset_disables - modeset commit to disable outputs
+ * @dev: DRM device
+ * @old_state: atomic state object with old state structures
+ * @disabling_crtc_mask: the disabling crtc mask
+ *
+ * This function shuts down all the outputs that need to be shut down and
+ * prepares them (if required) with the new mode.
+ *
+ * For compatibility with legacy CRTC helpers this should be called before
+ * drm_atomic_helper_commit_planes(), which is what the default commit function
+ * does. But drivers with different needs can group the modeset commits together
+ * and do the plane commits at the end. This is useful for drivers doing runtime
+ * PM since planes updates then only happen when the CRTC is actually enabled.
+ */
+static void exynos_drm_atomic_helper_commit_modeset_disables(struct drm_device *dev,
+			struct drm_atomic_state *old_state, unsigned int *disabling_crtc_mask)
+{
+	exynos_disable_outputs(dev, old_state, disabling_crtc_mask);
+
+	drm_atomic_helper_update_legacy_modeset_state(dev, old_state);
+	drm_atomic_helper_calc_timestamping_constants(old_state);
+
+	exynos_crtc_set_mode(dev, old_state);
+}
+
+static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
+{
+	int i;
+	struct drm_device *dev = old_state->dev;
+	struct decon_device *decon;
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *new_crtc_state;
+	struct drm_connector *connector;
+	struct drm_connector_state *old_conn_state;
+	struct drm_connector_state *new_conn_state;
+	unsigned int disabling_crtc_mask = 0;
+
+	DPU_ATRACE_BEGIN("exynos_atomic_commit_tail");
 	DPU_ATRACE_BEGIN("modeset");
-	drm_atomic_helper_commit_modeset_disables(dev, old_state);
+	exynos_drm_atomic_helper_commit_modeset_disables(dev, old_state, &disabling_crtc_mask);
 
 	exynos_atomic_bts_pre_update(dev, old_state);
 
