@@ -2556,6 +2556,9 @@ static struct aoc_section_header *find_ramdump_section(struct aoc_ramdump_header
 {
 	int i;
 
+	if (ramdump_header->num_sections != RAMDUMP_NUM_SECTIONS)
+		return NULL;
+
 	for (i = 0; i < ramdump_header->num_sections; i++)
 		if (ramdump_header->sections[i].type == section_type)
 			return &ramdump_header->sections[i];
