@@ -93,9 +93,10 @@ extern void rvh_remove_entity_load_avg_pixel_mod(void *data, struct cfs_rq *cfs_
 						 struct sched_entity *se);
 extern void rvh_update_blocked_fair_pixel_mod(void *data, struct rq *rq);
 #endif
-extern void rvh_set_user_nice_pixel_mod(void *data, struct task_struct *p, long *nice,
-					bool *allowed);
+extern void rvh_set_user_nice_locked_pixel_mod(void *data, struct task_struct *p, long *nice);
 extern void rvh_setscheduler_pixel_mod(void *data, struct task_struct *p);
+extern void rvh_update_misfit_status_pixel_mod(void *data, struct task_struct *p,
+			struct rq *rq, bool *need_update);
 
 extern struct cpufreq_governor sched_pixel_gov;
 
@@ -281,6 +282,11 @@ static int vh_sched_init(void)
 	if (ret)
 		return ret;
 
+	ret = register_trace_android_rvh_update_misfit_status(
+		rvh_update_misfit_status_pixel_mod, NULL);
+	if (ret)
+		return ret;
+
 	ret = register_trace_android_rvh_post_init_entity_util_avg(
 		rvh_post_init_entity_util_avg_pixel_mod, NULL);
 	if (ret)
@@ -349,7 +355,8 @@ static int vh_sched_init(void)
 	if (ret)
 		return ret;
 
-	ret = register_trace_android_rvh_set_user_nice(rvh_set_user_nice_pixel_mod, NULL);
+	ret = register_trace_android_rvh_set_user_nice_locked(rvh_set_user_nice_locked_pixel_mod,
+		NULL);
 	if (ret)
 		return ret;
 

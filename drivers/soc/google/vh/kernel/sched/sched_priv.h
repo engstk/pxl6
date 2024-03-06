@@ -216,17 +216,6 @@ static inline unsigned long task_util_est(struct task_struct *p)
 	return max(task_util(p), _task_util_est(p));
 }
 
-static inline unsigned long uclamp_rq_get(struct rq *rq,
-					  enum uclamp_id clamp_id)
-{
-	return READ_ONCE(rq->uclamp[clamp_id].value);
-}
-
-static inline bool uclamp_rq_is_idle(struct rq *rq)
-{
-	return rq->uclamp_flags & UCLAMP_FLAG_IDLE;
-}
-
 static inline unsigned int uclamp_none(enum uclamp_id clamp_id)
 {
 	if (clamp_id == UCLAMP_MIN)
@@ -492,8 +481,10 @@ static inline void init_vendor_task_struct(struct vendor_task_struct *v_tsk)
 	v_tsk->binder_task.uclamp[UCLAMP_MIN] = uclamp_none(UCLAMP_MAX);
 	v_tsk->binder_task.prefer_idle = false;
 	v_tsk->binder_task.active = false;
+	v_tsk->binder_task.uclamp_fork_reset = false;
 	v_tsk->uclamp_pi[UCLAMP_MIN] = uclamp_none(UCLAMP_MIN);
 	v_tsk->uclamp_pi[UCLAMP_MAX] = uclamp_none(UCLAMP_MAX);
+	v_tsk->runnable_start_ns = -1;
 }
 
 int acpu_init(void);
@@ -745,22 +736,30 @@ static inline bool apply_uclamp_filters(struct rq *rq, struct task_struct *p)
 	return force_cpufreq_update;
 }
 
-static inline void inc_adpf_counter(struct task_struct *p, atomic_t *num_adpf_tasks)
+static inline void inc_adpf_counter(struct task_struct *p, struct rq *rq)
 {
+	struct vendor_rq_struct *vrq;
+
 	if (rt_task(p))
 		return;
 
-	atomic_inc(num_adpf_tasks);
+	vrq = get_vendor_rq_struct(rq);
+
+	atomic_inc(&vrq->num_adpf_tasks);
 	/*
 	 * Tell the scheduler that this tasks really wants to run next
 	 */
 	set_next_buddy(&p->se);
 }
 
-static inline void dec_adpf_counter(struct task_struct *p, atomic_t *num_adpf_tasks)
+static inline void dec_adpf_counter(struct task_struct *p, struct rq *rq)
 {
+	struct vendor_rq_struct *vrq = get_vendor_rq_struct(rq);
+
 	if (rt_task(p))
 		return;
 
-	atomic_dec(num_adpf_tasks);
+	vrq = get_vendor_rq_struct(rq);
+
+	atomic_dec(&vrq->num_adpf_tasks);
 }
