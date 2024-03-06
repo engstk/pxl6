@@ -1,0 +1,20 @@
+What:		/sys/devices/platform/audiometrics/cca_show
+Date:		Aug, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides CCA count but not resets count value.
+
+What:		/sys/devices/platform/audiometrics/cca_count_read_once_show
+Date:		Aug, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides CCA count and resets count value.
+
+What: /sys/devices/platform/audiometrics/call_count
+Date: Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides total count of voice-call and VoIP-call
