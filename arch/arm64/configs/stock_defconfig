@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm64 5.10.177 Kernel Configuration
+# Linux/arm64 5.10.189 Kernel Configuration
 #
 CONFIG_CC_VERSION_TEXT="Android (8508608, based on r450784e) clang version 14.0.7 (https://android.googlesource.com/toolchain/llvm-project 4c603efb0cca074e9238af8b4106c30add4418f6)"
 CONFIG_GCC_VERSION=0
@@ -817,7 +817,7 @@ CONFIG_MODULE_SIG_HASH="sha1"
 # CONFIG_MODULE_ALLOW_MISSING_NAMESPACE_IMPORTS is not set
 # CONFIG_UNUSED_SYMBOLS is not set
 CONFIG_TRIM_UNUSED_KSYMS=y
-CONFIG_UNUSED_KSYMS_WHITELIST="/mnt/disks/build-disk/src/android/common-android13-5.10-2023-07/out/android13-5.10/common/abi_symbollist.raw"
+CONFIG_UNUSED_KSYMS_WHITELIST="/mnt/disks/build-disk/src/android/common-android13-5.10-2023-11/out/android13-5.10/common/abi_symbollist.raw"
 CONFIG_MODULES_TREE_LOOKUP=y
 CONFIG_BLOCK=y
 CONFIG_BLK_RQ_ALLOC_TIME=y
@@ -1314,7 +1314,6 @@ CONFIG_HAVE_NET_DSA=y
 CONFIG_VLAN_8021Q=y
 # CONFIG_VLAN_8021Q_GVRP is not set
 # CONFIG_VLAN_8021Q_MVRP is not set
-# CONFIG_DECNET is not set
 CONFIG_LLC=y
 # CONFIG_LLC2 is not set
 # CONFIG_ATALK is not set
@@ -1389,8 +1388,6 @@ CONFIG_NET_CLS_FW=y
 CONFIG_NET_CLS_U32=y
 # CONFIG_CLS_U32_PERF is not set
 CONFIG_CLS_U32_MARK=y
-# CONFIG_NET_CLS_RSVP is not set
-# CONFIG_NET_CLS_RSVP6 is not set
 CONFIG_NET_CLS_FLOW=y
 # CONFIG_NET_CLS_CGROUP is not set
 CONFIG_NET_CLS_BPF=y
@@ -1808,7 +1805,6 @@ CONFIG_BLK_DEV_LOOP_MIN_COUNT=16
 # CONFIG_BLK_DEV_DRBD is not set
 # CONFIG_BLK_DEV_NBD is not set
 # CONFIG_BLK_DEV_SKD is not set
-# CONFIG_BLK_DEV_SX8 is not set
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_COUNT=16
 CONFIG_BLK_DEV_RAM_SIZE=8192
@@ -1940,6 +1936,7 @@ CONFIG_SCSI_LOWLEVEL=y
 # CONFIG_SCSI_AIC94XX is not set
 # CONFIG_SCSI_MVSAS is not set
 # CONFIG_SCSI_MVUMI is not set
+# CONFIG_SCSI_DPT_I2O is not set
 # CONFIG_SCSI_ADVANSYS is not set
 # CONFIG_SCSI_ARCMSR is not set
 # CONFIG_SCSI_ESAS2R is not set
@@ -3768,7 +3765,7 @@ CONFIG_DRM_GEM_SHMEM_HELPER=y
 # CONFIG_DRM_AST is not set
 # CONFIG_DRM_MGAG200 is not set
 # CONFIG_DRM_RCAR_DW_HDMI is not set
-# CONFIG_DRM_RCAR_LVDS is not set
+# CONFIG_DRM_RCAR_USE_LVDS is not set
 # CONFIG_DRM_SUN4I is not set
 # CONFIG_DRM_QXL is not set
 # CONFIG_DRM_BOCHS is not set
