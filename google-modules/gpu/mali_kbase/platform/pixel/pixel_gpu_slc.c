@@ -49,7 +49,7 @@ struct gpu_slc_liveness_update_info {
 static void gpu_slc_lock_as(struct kbase_context *kctx)
 {
 	down_write(kbase_mem_get_process_mmap_lock());
-	kbase_gpu_vm_lock(kctx);
+	kbase_gpu_vm_lock_with_pmode_sync(kctx);
 }
 
 /**
@@ -59,7 +59,7 @@ static void gpu_slc_lock_as(struct kbase_context *kctx)
  */
 static void gpu_slc_unlock_as(struct kbase_context *kctx)
 {
-	kbase_gpu_vm_unlock(kctx);
+	kbase_gpu_vm_unlock_with_pmode_sync(kctx);
 	up_write(kbase_mem_get_process_mmap_lock());
 }
 
@@ -96,6 +96,12 @@ static struct kbase_va_region* gpu_slc_get_region(struct kbase_context *kctx, u6
 
 	/* Validate the region */
 	if (kbase_is_region_invalid_or_free(reg))
+		goto invalid;
+	/* Might be shrunk */
+	if (kbase_is_region_shrinkable(reg))
+		goto invalid;
+	/* Driver internal alloc */
+	if (kbase_va_region_is_no_user_free(reg))
 		goto invalid;
 
 	return reg;
