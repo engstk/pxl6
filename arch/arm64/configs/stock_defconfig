@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm64 5.10.189 Kernel Configuration
+# Linux/arm64 5.10.198 Kernel Configuration
 #
 CONFIG_CC_VERSION_TEXT="Android (8508608, based on r450784e) clang version 14.0.7 (https://android.googlesource.com/toolchain/llvm-project 4c603efb0cca074e9238af8b4106c30add4418f6)"
 CONFIG_GCC_VERSION=0
@@ -609,7 +609,6 @@ CONFIG_ARM_SCMI_PROTOCOL=y
 # CONFIG_ARM_SCMI_POWER_DOMAIN is not set
 CONFIG_ARM_SCPI_PROTOCOL=y
 # CONFIG_ARM_SCPI_POWER_DOMAIN is not set
-# CONFIG_ARM_SDE_INTERFACE is not set
 # CONFIG_FIRMWARE_MEMMAP is not set
 # CONFIG_FW_CFG_SYSFS is not set
 # CONFIG_QCOM_SCM is not set
@@ -817,7 +816,7 @@ CONFIG_MODULE_SIG_HASH="sha1"
 # CONFIG_MODULE_ALLOW_MISSING_NAMESPACE_IMPORTS is not set
 # CONFIG_UNUSED_SYMBOLS is not set
 CONFIG_TRIM_UNUSED_KSYMS=y
-CONFIG_UNUSED_KSYMS_WHITELIST="/mnt/disks/build-disk/src/android/common-android13-5.10-2023-11/out/android13-5.10/common/abi_symbollist.raw"
+CONFIG_UNUSED_KSYMS_WHITELIST="/mnt/disks/build-disk/src/android/common-android13-5.10-2024-01/out/android13-5.10/common/abi_symbollist.raw"
 CONFIG_MODULES_TREE_LOOKUP=y
 CONFIG_BLOCK=y
 CONFIG_BLK_RQ_ALLOC_TIME=y
@@ -4387,7 +4386,7 @@ CONFIG_USB_XHCI_PCI=y
 CONFIG_USB_XHCI_PLATFORM=y
 # CONFIG_USB_XHCI_HISTB is not set
 CONFIG_USB_EHCI_HCD=y
-# CONFIG_USB_EHCI_ROOT_HUB_TT is not set
+CONFIG_USB_EHCI_ROOT_HUB_TT=y
 CONFIG_USB_EHCI_TT_NEWSCHED=y
 CONFIG_USB_EHCI_PCI=y
 # CONFIG_USB_EHCI_FSL is not set
@@ -5382,6 +5381,10 @@ CONFIG_IIO_CONSUMERS_PER_TRIGGER=2
 # CONFIG_VF610_ADC is not set
 # CONFIG_XILINX_XADC is not set
 # end of Analog to digital converters
+
+#
+# Analog to digital and digital to analog converters
+#
 
 #
 # Analog Front Ends
