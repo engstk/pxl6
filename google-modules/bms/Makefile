@@ -101,6 +101,7 @@ max77759-objs += max77759_maxq.o
 obj-$(CONFIG_MAX1720X_BATTERY)  += max1720x-battery.o
 max1720x-battery-objs += max1720x_battery.o
 max1720x-battery-objs += max1720x_outliers.o
+max1720x-battery-objs += maxfg_logging.o
 max1720x-battery-objs += max_m5.o
 
 # OVP

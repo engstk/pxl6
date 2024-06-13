@@ -24,6 +24,8 @@
 
 #include "device/mali_kbase_device.h"
 #include <csf/mali_kbase_csf_registers.h>
+#include <hw_access/mali_kbase_hw_access_regmap.h>
+#include <uapi/gpu/arm/midgard/gpu/mali_kbase_gpu_regmap.h>
 
 /*
  * PAGE_KERNEL_RO was only defined on 32bit ARM in 4.19 in:
@@ -87,7 +89,6 @@ extern char fw_git_sha[BUILD_INFO_GIT_SHA_LEN];
 
 struct kbase_device;
 
-
 /**
  * struct kbase_csf_mapping - Memory mapping for CSF memory.
  * @phys:      Physical memory allocation used by the mapping.
@@ -141,8 +142,8 @@ struct kbase_csf_cmd_stream_info {
  * @offset: Offset of the word to be written, in bytes.
  * @value: Value to be written.
  */
-void kbase_csf_firmware_cs_input(
-	const struct kbase_csf_cmd_stream_info *info, u32 offset, u32 value);
+void kbase_csf_firmware_cs_input(const struct kbase_csf_cmd_stream_info *info, u32 offset,
+				 u32 value);
 
 /**
  * kbase_csf_firmware_cs_input_read() - Read a word in a CS's input page
@@ -152,8 +153,8 @@ void kbase_csf_firmware_cs_input(
  * @info: CSI provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_cs_input_read(
-	const struct kbase_csf_cmd_stream_info *const info, const u32 offset);
+u32 kbase_csf_firmware_cs_input_read(const struct kbase_csf_cmd_stream_info *const info,
+				     const u32 offset);
 
 /**
  * kbase_csf_firmware_cs_input_mask() - Set part of a word in a CS's input page
@@ -163,9 +164,8 @@ u32 kbase_csf_firmware_cs_input_read(
  * @value: Value to be written.
  * @mask: Bitmask with the bits to be modified set.
  */
-void kbase_csf_firmware_cs_input_mask(
-	const struct kbase_csf_cmd_stream_info *info, u32 offset,
-	u32 value, u32 mask);
+void kbase_csf_firmware_cs_input_mask(const struct kbase_csf_cmd_stream_info *info, u32 offset,
+				      u32 value, u32 mask);
 
 /**
  * kbase_csf_firmware_cs_output() - Read a word in a CS's output page
@@ -175,8 +175,7 @@ void kbase_csf_firmware_cs_input_mask(
  * @info: CSI provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_cs_output(
-	const struct kbase_csf_cmd_stream_info *info, u32 offset);
+u32 kbase_csf_firmware_cs_output(const struct kbase_csf_cmd_stream_info *info, u32 offset);
 /**
  * struct kbase_csf_cmd_stream_group_info - CSG interface provided by the
  *                                          firmware.
@@ -214,9 +213,8 @@ struct kbase_csf_cmd_stream_group_info {
  * @offset: Offset of the word to be written, in bytes.
  * @value: Value to be written.
  */
-void kbase_csf_firmware_csg_input(
-	const struct kbase_csf_cmd_stream_group_info *info, u32 offset,
-	u32 value);
+void kbase_csf_firmware_csg_input(const struct kbase_csf_cmd_stream_group_info *info, u32 offset,
+				  u32 value);
 
 /**
  * kbase_csf_firmware_csg_input_read() - Read a word in a CSG's input page
@@ -226,8 +224,8 @@ void kbase_csf_firmware_csg_input(
  * @info: CSG interface provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_csg_input_read(
-	const struct kbase_csf_cmd_stream_group_info *info, u32 offset);
+u32 kbase_csf_firmware_csg_input_read(const struct kbase_csf_cmd_stream_group_info *info,
+				      u32 offset);
 
 /**
  * kbase_csf_firmware_csg_input_mask() - Set part of a word in a CSG's
@@ -238,9 +236,8 @@ u32 kbase_csf_firmware_csg_input_read(
  * @value: Value to be written.
  * @mask: Bitmask with the bits to be modified set.
  */
-void kbase_csf_firmware_csg_input_mask(
-	const struct kbase_csf_cmd_stream_group_info *info, u32 offset,
-	u32 value, u32 mask);
+void kbase_csf_firmware_csg_input_mask(const struct kbase_csf_cmd_stream_group_info *info,
+				       u32 offset, u32 value, u32 mask);
 
 /**
  * kbase_csf_firmware_csg_output()- Read a word in a CSG's output page
@@ -250,8 +247,8 @@ void kbase_csf_firmware_csg_input_mask(
  * @info: CSG interface provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_csg_output(
-	const struct kbase_csf_cmd_stream_group_info *info, u32 offset);
+u32 kbase_csf_firmware_csg_output(const struct kbase_csf_cmd_stream_group_info *info, u32 offset);
+
 
 /**
  * struct kbase_csf_global_iface - Global CSF interface
@@ -293,8 +290,8 @@ struct kbase_csf_global_iface {
  * @offset: Offset of the word to be written, in bytes.
  * @value: Value to be written.
  */
-void kbase_csf_firmware_global_input(
-	const struct kbase_csf_global_iface *iface, u32 offset, u32 value);
+void kbase_csf_firmware_global_input(const struct kbase_csf_global_iface *iface, u32 offset,
+				     u32 value);
 
 /**
  * kbase_csf_firmware_global_input_mask() - Set part of a word in the global
@@ -305,9 +302,8 @@ void kbase_csf_firmware_global_input(
  * @value: Value to be written.
  * @mask: Bitmask with the bits to be modified set.
  */
-void kbase_csf_firmware_global_input_mask(
-	const struct kbase_csf_global_iface *iface, u32 offset,
-	u32 value, u32 mask);
+void kbase_csf_firmware_global_input_mask(const struct kbase_csf_global_iface *iface, u32 offset,
+					  u32 value, u32 mask);
 
 /**
  * kbase_csf_firmware_global_input_read() - Read a word in a global input page
@@ -317,8 +313,7 @@ void kbase_csf_firmware_global_input_mask(
  * @info: CSG interface provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_global_input_read(
-	const struct kbase_csf_global_iface *info, u32 offset);
+u32 kbase_csf_firmware_global_input_read(const struct kbase_csf_global_iface *info, u32 offset);
 
 /**
  * kbase_csf_firmware_global_output() - Read a word in the global output page
@@ -328,8 +323,7 @@ u32 kbase_csf_firmware_global_input_read(
  * @iface: CSF interface provided by the firmware.
  * @offset: Offset of the word to be read, in bytes.
  */
-u32 kbase_csf_firmware_global_output(
-	const struct kbase_csf_global_iface *iface, u32 offset);
+u32 kbase_csf_firmware_global_output(const struct kbase_csf_global_iface *iface, u32 offset);
 
 /**
  * kbase_csf_ring_doorbell() - Ring the doorbell
@@ -351,8 +345,7 @@ void kbase_csf_ring_doorbell(struct kbase_device *kbdev, int doorbell_nr);
  * is not permanently mapped on the CPU address space, therefore it maps it
  * and then unmaps it to access it independently.
  */
-void kbase_csf_read_firmware_memory(struct kbase_device *kbdev,
-	u32 gpu_addr, u32 *value);
+void kbase_csf_read_firmware_memory(struct kbase_device *kbdev, u32 gpu_addr, u32 *value);
 
 /**
  * kbase_csf_update_firmware_memory - Write a value in a GPU address
@@ -366,8 +359,7 @@ void kbase_csf_read_firmware_memory(struct kbase_device *kbdev,
  * is not permanently mapped on the CPU address space, therefore it maps it
  * and then unmaps it to access it independently.
  */
-void kbase_csf_update_firmware_memory(struct kbase_device *kbdev,
-	u32 gpu_addr, u32 value);
+void kbase_csf_update_firmware_memory(struct kbase_device *kbdev, u32 gpu_addr, u32 value);
 
 /**
  * kbase_csf_read_firmware_memory_exe - Read a value in a GPU address in the
@@ -385,8 +377,7 @@ void kbase_csf_update_firmware_memory(struct kbase_device *kbdev,
  * their final execution location during firmware boot using an address based on the
  * final execution location.
  */
-void kbase_csf_read_firmware_memory_exe(struct kbase_device *kbdev,
-	u32 gpu_addr, u32 *value);
+void kbase_csf_read_firmware_memory_exe(struct kbase_device *kbdev, u32 gpu_addr, u32 *value);
 
 /**
  * kbase_csf_update_firmware_memory_exe - Write a value in a GPU address in the
@@ -404,8 +395,7 @@ void kbase_csf_read_firmware_memory_exe(struct kbase_device *kbdev,
  * their final execution location during firmware boot using an address based on the
  * final execution location.
  */
-void kbase_csf_update_firmware_memory_exe(struct kbase_device *kbdev,
-	u32 gpu_addr, u32 value);
+void kbase_csf_update_firmware_memory_exe(struct kbase_device *kbdev, u32 gpu_addr, u32 value);
 
 /**
  * kbase_csf_firmware_early_init() - Early initialization for the firmware.
@@ -567,10 +557,21 @@ static inline bool kbase_csf_firmware_mcu_halted(struct kbase_device *kbdev)
 #if IS_ENABLED(CONFIG_MALI_NO_MALI)
 	return true;
 #else
-	return (kbase_reg_read(kbdev, GPU_CONTROL_REG(MCU_STATUS)) ==
-		MCU_STATUS_HALTED);
+	return (kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(MCU_STATUS)) == MCU_STATUS_VALUE_HALT);
 #endif /* CONFIG_MALI_NO_MALI */
 }
+
+/**
+ * kbase_csf_firmware_mcu_halt_req_complete - Check if the MCU Halt request is complete
+ *
+ * @kbdev: Instance of a GPU platform device that implements a CSF interface.
+ *
+ * This function needs to be called after Halt request has been sent to the FW.
+ *
+ * Return: true if the Halt request is complete, otherwise false.
+ */
+bool kbase_csf_firmware_mcu_halt_req_complete(struct kbase_device *kbdev);
+
 
 /**
  * kbase_csf_firmware_trigger_mcu_halt - Send the Global request to firmware to
@@ -648,8 +649,7 @@ void kbase_csf_firmware_reload_completed(struct kbase_device *kbdev);
  * @kbdev: Instance of a GPU platform device that implements a CSF interface.
  * @core_mask: Mask of the enabled shader cores.
  */
-void kbase_csf_firmware_global_reinit(struct kbase_device *kbdev,
-				      u64 core_mask);
+void kbase_csf_firmware_global_reinit(struct kbase_device *kbdev, u64 core_mask);
 
 /**
  * kbase_csf_firmware_global_reinit_complete - Check the Global configuration
@@ -675,8 +675,8 @@ bool kbase_csf_firmware_global_reinit_complete(struct kbase_device *kbdev);
  * @core_mask:                New core mask value if update_core_mask is true,
  *                            otherwise unused.
  */
-void kbase_csf_firmware_update_core_attr(struct kbase_device *kbdev,
-		bool update_core_pwroff_timer, bool update_core_mask, u64 core_mask);
+void kbase_csf_firmware_update_core_attr(struct kbase_device *kbdev, bool update_core_pwroff_timer,
+					 bool update_core_mask, u64 core_mask);
 
 /**
  * kbase_csf_firmware_core_attr_updated - Check the Global configuration
@@ -718,11 +718,11 @@ bool kbase_csf_firmware_core_attr_updated(struct kbase_device *kbdev);
  *
  * Return: Total number of CSs, summed across all groups.
  */
-u32 kbase_csf_firmware_get_glb_iface(
-	struct kbase_device *kbdev, struct basep_cs_group_control *group_data,
-	u32 max_group_num, struct basep_cs_stream_control *stream_data,
-	u32 max_total_stream_num, u32 *glb_version, u32 *features,
-	u32 *group_num, u32 *prfcnt_size, u32 *instr_features);
+u32 kbase_csf_firmware_get_glb_iface(struct kbase_device *kbdev,
+				     struct basep_cs_group_control *group_data, u32 max_group_num,
+				     struct basep_cs_stream_control *stream_data,
+				     u32 max_total_stream_num, u32 *glb_version, u32 *features,
+				     u32 *group_num, u32 *prfcnt_size, u32 *instr_features);
 
 /**
  * kbase_csf_firmware_get_timeline_metadata - Get CSF firmware header timeline
@@ -734,8 +734,8 @@ u32 kbase_csf_firmware_get_glb_iface(
  *
  * Return: The firmware timeline metadata content which match @p name.
  */
-const char *kbase_csf_firmware_get_timeline_metadata(struct kbase_device *kbdev,
-	const char *name, size_t *size);
+const char *kbase_csf_firmware_get_timeline_metadata(struct kbase_device *kbdev, const char *name,
+						     size_t *size);
 
 /**
  * kbase_csf_firmware_mcu_shared_mapping_init - Allocate and map MCU shared memory.
@@ -757,12 +757,10 @@ const char *kbase_csf_firmware_get_timeline_metadata(struct kbase_device *kbdev,
  *
  * Return: 0 if success, or an error code on failure.
  */
-int kbase_csf_firmware_mcu_shared_mapping_init(
-		struct kbase_device *kbdev,
-		unsigned int num_pages,
-		unsigned long cpu_map_properties,
-		unsigned long gpu_map_properties,
-		struct kbase_csf_mapping *csf_mapping);
+int kbase_csf_firmware_mcu_shared_mapping_init(struct kbase_device *kbdev, unsigned int num_pages,
+					       unsigned long cpu_map_properties,
+					       unsigned long gpu_map_properties,
+					       struct kbase_csf_mapping *csf_mapping);
 
 /**
  * kbase_csf_firmware_mcu_shared_mapping_term - Unmap and free MCU shared memory.
@@ -770,8 +768,8 @@ int kbase_csf_firmware_mcu_shared_mapping_init(
  * @kbdev:       Device pointer.
  * @csf_mapping: Metadata of the memory mapping to terminate.
  */
-void kbase_csf_firmware_mcu_shared_mapping_term(
-		struct kbase_device *kbdev, struct kbase_csf_mapping *csf_mapping);
+void kbase_csf_firmware_mcu_shared_mapping_term(struct kbase_device *kbdev,
+						struct kbase_csf_mapping *csf_mapping);
 
 #ifdef CONFIG_MALI_DEBUG
 extern bool fw_debug;
@@ -780,9 +778,9 @@ extern bool fw_debug;
 static inline long kbase_csf_timeout_in_jiffies(const unsigned int msecs)
 {
 #ifdef CONFIG_MALI_DEBUG
-	return (fw_debug ? MAX_SCHEDULE_TIMEOUT : msecs_to_jiffies(msecs));
+	return (fw_debug ? MAX_SCHEDULE_TIMEOUT : (long)msecs_to_jiffies(msecs));
 #else
-	return msecs_to_jiffies(msecs);
+	return (long)msecs_to_jiffies(msecs);
 #endif
 }
 
@@ -817,15 +815,15 @@ void kbase_csf_firmware_disable_gpu_idle_timer(struct kbase_device *kbdev);
  *
  * Return: the internally recorded hysteresis (nominal) value.
  */
-u32 kbase_csf_firmware_get_gpu_idle_hysteresis_time(struct kbase_device *kbdev);
+u64 kbase_csf_firmware_get_gpu_idle_hysteresis_time(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_firmware_set_gpu_idle_hysteresis_time - Set the firmware GPU idle
  *                                               detection hysteresis duration
  *
- * @kbdev: Instance of a GPU platform device that implements a CSF interface.
- * @dur:     The duration value (unit: milliseconds) for the configuring
- *           hysteresis field for GPU idle detection
+ * @kbdev:  Instance of a GPU platform device that implements a CSF interface.
+ * @dur_ns: The duration value (unit: nanoseconds) for the configuring
+ *          hysteresis field for GPU idle detection
  *
  * The supplied value will be recorded internally without any change. But the
  * actual field value will be subject to hysteresis source frequency scaling
@@ -837,7 +835,7 @@ u32 kbase_csf_firmware_get_gpu_idle_hysteresis_time(struct kbase_device *kbdev);
  *
  * Return: the actual internally configured hysteresis field value.
  */
-u32 kbase_csf_firmware_set_gpu_idle_hysteresis_time(struct kbase_device *kbdev, u32 dur);
+u32 kbase_csf_firmware_set_gpu_idle_hysteresis_time(struct kbase_device *kbdev, u64 dur_ns);
 
 /**
  * kbase_csf_firmware_get_mcu_core_pwroff_time - Get the MCU shader Core power-off
@@ -848,14 +846,14 @@ u32 kbase_csf_firmware_set_gpu_idle_hysteresis_time(struct kbase_device *kbdev, 
  * Return: the internally recorded MCU shader Core power-off (nominal) timeout value. The unit
  *         of the value is in micro-seconds.
  */
-u32 kbase_csf_firmware_get_mcu_core_pwroff_time(struct kbase_device *kbdev);
+u64 kbase_csf_firmware_get_mcu_core_pwroff_time(struct kbase_device *kbdev);
 
 /**
  * kbase_csf_firmware_set_mcu_core_pwroff_time - Set the MCU shader Core power-off
  *                                               time value
  *
  * @kbdev:   Instance of a GPU platform device that implements a CSF interface.
- * @dur:     The duration value (unit: micro-seconds) for configuring MCU
+ * @dur_ns:  The duration value (unit: nanoseconds) for configuring MCU
  *           core power-off timer, when the shader cores' power
  *           transitions are delegated to the MCU (normal operational
  *           mode)
@@ -874,7 +872,7 @@ u32 kbase_csf_firmware_get_mcu_core_pwroff_time(struct kbase_device *kbdev);
  * Return: the actual internal core power-off timer value in register defined
  *         format.
  */
-u32 kbase_csf_firmware_set_mcu_core_pwroff_time(struct kbase_device *kbdev, u32 dur);
+u32 kbase_csf_firmware_set_mcu_core_pwroff_time(struct kbase_device *kbdev, u64 dur_ns);
 
 /**
  * kbase_csf_firmware_reset_mcu_core_pwroff_time - Reset the MCU shader Core power-off
@@ -905,8 +903,7 @@ u32 kbase_csf_firmware_reset_mcu_core_pwroff_time(struct kbase_device *kbdev);
  */
 static inline u32 kbase_csf_interface_version(u32 major, u32 minor, u32 patch)
 {
-	return ((major << GLB_VERSION_MAJOR_SHIFT) |
-		(minor << GLB_VERSION_MINOR_SHIFT) |
+	return ((major << GLB_VERSION_MAJOR_SHIFT) | (minor << GLB_VERSION_MINOR_SHIFT) |
 		(patch << GLB_VERSION_PATCH_SHIFT));
 }
 

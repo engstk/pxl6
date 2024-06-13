@@ -124,7 +124,7 @@ config MALI_MIDGARD_ENABLE_TRACE
 
 config MALI_ARBITER_SUPPORT
 	bool "Enable arbiter support for Mali"
-	depends on MALI_MIDGARD && !MALI_CSF_SUPPORT
+	depends on MALI_MIDGARD
 	default n
 	help
 	  Enable support for the arbiter interface in the driver.
@@ -173,32 +173,20 @@ menuconfig MALI_EXPERT
 
 if MALI_EXPERT
 
-config LARGE_PAGE_ALLOC_OVERRIDE
-	bool "Override default setting of 2MB pages"
+config LARGE_PAGE_SUPPORT
+	bool "Support for 2MB page allocations"
 	depends on MALI_MIDGARD && MALI_EXPERT
-	default n
+	default y
 	help
-	  An override config for LARGE_PAGE_ALLOC config.
-	  When LARGE_PAGE_ALLOC_OVERRIDE is Y, 2MB page allocation will be
-	  enabled by LARGE_PAGE_ALLOC. When this is N, the feature will be
-	  enabled when GPU HW satisfies requirements.
+	 Rather than allocating all GPU memory page-by-page, allow the system
+	 to decide whether to attempt to allocate 2MB pages from the kernel.
+	 This reduces TLB pressure.
 
-	  If in doubt, say N
+	 Note that this option only enables the support for the module parameter
+	 and does not necessarily mean that 2MB pages will be used automatically.
+	 This depends on GPU support.
 
-config LARGE_PAGE_ALLOC
-	bool "Attempt to allocate 2MB pages"
-	depends on MALI_MIDGARD && MALI_EXPERT
-	default n
-	help
-	  Rather than allocating all GPU memory page-by-page, attempt to
-	  allocate 2MB pages from the kernel. This reduces TLB pressure and
-	  helps to prevent memory fragmentation.
-
-	  Note this config applies only when LARGE_PAGE_ALLOC_OVERRIDE config
-	  is enabled and enabling this on a GPU HW that does not satisfy
-	  requirements can cause serious problem.
-
-	  If in doubt, say N
+	 If in doubt, say Y.
 
 config PAGE_MIGRATION_SUPPORT
 	bool "Enable support for page migration"
@@ -215,16 +203,6 @@ config PAGE_MIGRATION_SUPPORT
 
 	  If in doubt, say Y. To strip out page migration symbols and support,
 	  say N.
-
-config MALI_MEMORY_FULLY_BACKED
-	bool "Enable memory fully physically-backed"
-	depends on MALI_MIDGARD && MALI_EXPERT
-	default n
-	help
-	  This option enables full physical backing of all virtual
-	  memory allocations in the kernel. Notice that this build
-	  option only affects allocations of grow-on-GPU-page-fault
-	  memory.
 
 config MALI_CORESTACK
 	bool "Enable support of GPU core stack power control"
@@ -398,15 +376,6 @@ config MALI_HW_ERRATA_1485982_USE_CLOCK_ALTERNATIVE
 	  tree using the property, opp-mali-errata-1485982. Otherwise the
 	  slowest clock will be selected.
 
-config MALI_HOST_CONTROLS_SC_RAILS
-	bool "Enable Host based control of the shader core power rails"
-	depends on MALI_CSF_SUPPORT
-	default n
-	help
-	  This option enables the Host based control of the power rails for
-	  shader cores. It is recommended to use PDCA (Power Domain Control
-	  Adapter) inside the GPU to handshake with SoC PMU to control the
-	  power of cores.
 endif
 
 config MALI_ARBITRATION

@@ -334,9 +334,6 @@ struct pixel_context {
 		struct bcl_device *bcl_dev;
 #endif
 		struct pixel_rail_state_log *rail_state_log;
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-		bool ifpo_enabled;
-#endif
 	} pm;
 
 #ifdef CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING

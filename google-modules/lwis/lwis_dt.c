@@ -1181,12 +1181,13 @@ static int parse_i2c_device_priority(struct lwis_i2c_device *i2c_dev)
 		return 0;
 	}
 	if (ret) {
-		pr_err("invalid i2c-device-priority value\n");
+		dev_err(i2c_dev->base_dev.dev, "invalid i2c-device-priority value\n");
 		return ret;
 	}
 	if ((i2c_dev->device_priority < I2C_DEVICE_HIGH_PRIORITY) ||
 	    (i2c_dev->device_priority > I2C_DEVICE_LOW_PRIORITY)) {
-		pr_err("invalid i2c-device-priority value %d\n", i2c_dev->device_priority);
+		dev_err(i2c_dev->base_dev.dev, "invalid i2c-device-priority value %d\n",
+			i2c_dev->device_priority);
 		return -EINVAL;
 	}
 
@@ -1219,7 +1220,7 @@ static int parse_i2c_lock_group_id(struct lwis_i2c_device *i2c_dev)
 	return 0;
 }
 
-static int parse_transaction_process_limit(struct lwis_device *lwis_dev)
+static void parse_transaction_process_limit(struct lwis_device *lwis_dev)
 {
 	struct device_node *dev_node;
 
@@ -1228,8 +1229,6 @@ static int parse_transaction_process_limit(struct lwis_device *lwis_dev)
 
 	of_property_read_u32(dev_node, "transaction-process-limit",
 			     &lwis_dev->transaction_process_limit);
-
-	return 0;
 }
 
 int lwis_base_parse_dt(struct lwis_device *lwis_dev)
@@ -1408,7 +1407,6 @@ int lwis_i2c_device_parse_dt(struct lwis_i2c_device *i2c_dev)
 
 	ret = parse_i2c_device_priority(i2c_dev);
 	if (ret) {
-		dev_err(i2c_dev->base_dev.dev, "Error parsing i2c device priority\n");
 		return ret;
 	}
 

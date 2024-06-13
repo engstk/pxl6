@@ -21,6 +21,14 @@
 #ifndef _KBASE_MEM_MIGRATE_H
 #define _KBASE_MEM_MIGRATE_H
 
+#include <linux/version_compat_defs.h>
+
+#include <linux/types.h>
+
+struct kbase_device;
+struct file;
+struct page;
+
 /**
  * DOC: Base kernel page migration implementation.
  */
@@ -31,7 +39,7 @@
 
 #define PAGE_ISOLATE_SHIFT (7)
 #define PAGE_ISOLATE_MASK ((u8)1 << PAGE_ISOLATE_SHIFT)
-#define PAGE_ISOLATE_SET(status, value)                                                            \
+#define PAGE_ISOLATE_SET(status, value) \
 	((status & ~PAGE_ISOLATE_MASK) | (value << PAGE_ISOLATE_SHIFT))
 #define IS_PAGE_ISOLATED(status) ((bool)(status & PAGE_ISOLATE_MASK))
 
@@ -102,6 +110,7 @@ void kbase_mem_migrate_set_address_space_ops(struct kbase_device *kbdev, struct 
  *
  * Enables page migration by default based on GPU and setup work queue to
  * defer freeing pages during page migration callbacks.
+ * This function must be called only when a kbase device is initialized.
  */
 void kbase_mem_migrate_init(struct kbase_device *kbdev);
 

@@ -32,12 +32,14 @@ struct lwis_transaction {
 	struct list_head process_queue_node;
 	struct hlist_node pending_map_node;
 	int signaled_count;
-	/* Flag used for level trigger conditions, indicating the transaction
+	/*
+	 * Flag used for level trigger conditions, indicating the transaction
 	 * should be queued right after creation
 	 */
 	bool queue_immediately;
-	/* temporary variables to add supports for mixing events and fences in
-	 * trigger_condition. Will be removed and refacter into an union soon.
+	/*
+	 * temporary variables to add support for mixing events and fences in
+	 * trigger_condition. Will be removed and refactor into an union soon.
 	 */
 	bool is_weak_transaction;
 	int64_t id;
@@ -48,21 +50,24 @@ struct lwis_transaction {
 	struct list_head completion_fence_list;
 	/* Precondition fence file pointer */
 	struct file *precondition_fence_fp;
-	/* If the transaction has more entries to process than the transaction_process_limit
-	   for the processing device, then this will save the number of entries that are
-	   remaining to be processed after a given transaction process cycle
-	*/
+	/*
+	 * If the transaction has more entries to process than the transaction_process_limit
+	 * for the processing device, then this will save the number of entries that are
+	 * remaining to be processed after a given transaction process cycle
+	 */
 	int remaining_entries_to_process;
-	/* Starting read buffer pointer is set to the last read location when the transaction
-	   process limit has reached. During the next run for the transaction, this pointer
-	   will be referred to correctly point to the read buffer for the run.
-	*/
+	/*
+	 * Starting read buffer pointer is set to the last read location when the transaction
+	 * process limit has reached. During the next run for the transaction, this pointer
+	 * will be referred to correctly point to the read buffer for the run.
+	 */
 	uint8_t *starting_read_buf;
 };
 
-/* For debugging purposes, keeps track of the transaction information, as
+/*
+ * For debugging purposes, keeps track of the transaction information, as
  * well as the time it executes and the time it took to execute.
-*/
+ */
 struct lwis_transaction_history {
 	struct lwis_transaction_info_v2 info;
 	int64_t process_timestamp;
@@ -94,7 +99,8 @@ int lwis_transaction_cancel(struct lwis_client *client, int64_t id);
 
 void lwis_transaction_free(struct lwis_device *lwis_dev, struct lwis_transaction **ptransaction);
 
-/* Expects lwis_client->transaction_lock to be acquired before calling
+/*
+ * Expects lwis_client->transaction_lock to be acquired before calling
  * the following functions. */
 int lwis_transaction_submit_locked(struct lwis_client *client,
 				   struct lwis_transaction *transaction);

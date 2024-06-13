@@ -476,7 +476,6 @@ static int cmd_device_enable(struct lwis_client *lwis_client, struct lwis_cmd_pk
 	lwis_dev->enabled++;
 	lwis_client->is_enabled = true;
 	lwis_dev->is_suspended = false;
-	dev_info(lwis_dev->dev, "Device enabled\n");
 exit_locked:
 	mutex_unlock(&lwis_dev->client_lock);
 	header->ret_code = ret;
@@ -1146,7 +1145,7 @@ static int construct_transaction_from_cmd(struct lwis_client *client, uint32_t c
 	struct lwis_transaction *k_transaction;
 	struct lwis_device *lwis_dev = client->lwis_dev;
 
-	k_transaction = kmalloc(sizeof(*k_transaction), GFP_KERNEL);
+	k_transaction = kzalloc(sizeof(struct lwis_transaction), GFP_KERNEL);
 	if (!k_transaction) {
 		dev_err(lwis_dev->dev, "Failed to allocate transaction info\n");
 		return -ENOMEM;

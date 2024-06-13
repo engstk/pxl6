@@ -4569,6 +4569,11 @@ static void chg_init_votables(struct chg_drv *chg_drv)
 	gvotable_cast_int_vote(chg_drv->msc_fcc_votable, MAX_VOTER,
 			       chg_drv->batt_profile_fcc_ua,
 			       chg_drv->batt_profile_fcc_ua > 0);
+
+	/* update temp dry run votable if bd_temp_dry_run is set from DT */
+	if (chg_drv->msc_temp_dry_run_votable && chg_drv->bd_state.bd_temp_dry_run)
+		gvotable_cast_bool_vote(chg_drv->msc_temp_dry_run_votable, MSC_CHG_VOTER,
+					chg_drv->bd_state.bd_temp_dry_run);
 }
 
 static int fan_get_level(struct chg_thermal_device *tdev)

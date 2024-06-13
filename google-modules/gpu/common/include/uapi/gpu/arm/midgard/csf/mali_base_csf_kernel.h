@@ -48,7 +48,6 @@
 
 #define BASE_MEM_RESERVED_BIT_20 ((base_mem_alloc_flags)1 << 20)
 
-
 /* Must be FIXABLE memory: its GPU VA will be determined at a later point,
  * at which time it will be at a fixed GPU VA.
  */
@@ -61,8 +60,7 @@
 /* A mask of all the flags which are only valid for allocations within kbase,
  * and may not be passed from user space.
  */
-#define BASEP_MEM_FLAGS_KERNEL_ONLY \
-	(BASEP_MEM_PERMANENT_KERNEL_MAPPING | BASEP_MEM_NO_USER_FREE)
+#define BASEP_MEM_FLAGS_KERNEL_ONLY (BASEP_MEM_PERMANENT_KERNEL_MAPPING | BASEP_MEM_NO_USER_FREE)
 
 /* A mask of all currently reserved flags
  */
@@ -74,8 +72,7 @@
 #define BASEP_MEM_CSF_USER_IO_PAGES_HANDLE (48ul << LOCAL_PAGE_SHIFT)
 
 #define KBASE_CSF_NUM_USER_IO_PAGES_HANDLE \
-	((BASE_MEM_COOKIE_BASE - BASEP_MEM_CSF_USER_IO_PAGES_HANDLE) >> \
-	 LOCAL_PAGE_SHIFT)
+	((BASE_MEM_COOKIE_BASE - BASEP_MEM_CSF_USER_IO_PAGES_HANDLE) >> LOCAL_PAGE_SHIFT)
 
 /* Valid set of just-in-time memory allocation flags */
 #define BASE_JIT_ALLOC_VALID_FLAGS ((__u8)0)
@@ -92,23 +89,21 @@
 /* Bitpattern describing the ::base_context_create_flags that can be
  * passed to base_context_init()
  */
-#define BASEP_CONTEXT_CREATE_ALLOWED_FLAGS \
-	(BASE_CONTEXT_CCTX_EMBEDDED | \
-	 BASE_CONTEXT_CSF_EVENT_THREAD | \
+#define BASEP_CONTEXT_CREATE_ALLOWED_FLAGS                            \
+	(BASE_CONTEXT_CCTX_EMBEDDED | BASE_CONTEXT_CSF_EVENT_THREAD | \
 	 BASEP_CONTEXT_CREATE_KERNEL_FLAGS)
 
 /* Flags for base tracepoint specific to CSF */
 
 /* Enable KBase tracepoints for CSF builds */
-#define BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS (1 << 2)
+#define BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS (1U << 2)
 
 /* Enable additional CSF Firmware side tracepoints */
-#define BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS (1 << 3)
+#define BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS (1U << 3)
 
-#define BASE_TLSTREAM_FLAGS_MASK (BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS | \
-		BASE_TLSTREAM_JOB_DUMPING_ENABLED | \
-		BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS | \
-		BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS)
+#define BASE_TLSTREAM_FLAGS_MASK                                                        \
+	(BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS | BASE_TLSTREAM_JOB_DUMPING_ENABLED | \
+	 BASE_TLSTREAM_ENABLE_CSF_TRACEPOINTS | BASE_TLSTREAM_ENABLE_CSFFW_TRACEPOINTS)
 
 /* Number of pages mapped into the process address space for a bound GPU
  * command queue. A pair of input/output pages and a Hw doorbell page
@@ -146,7 +141,7 @@
 #define BASE_CSF_EXCEPTION_HANDLER_FLAGS_MASK (BASE_CSF_TILER_OOM_EXCEPTION_FLAG)
 
 /* Initial value for LATEST_FLUSH register */
-#define POWER_DOWN_LATEST_FLUSH_VALUE ((uint32_t)1)
+#define POWER_DOWN_LATEST_FLUSH_VALUE ((__u32)1)
 
 /**
  * enum base_kcpu_command_type - Kernel CPU queue command type.
@@ -162,7 +157,7 @@
  * @BASE_KCPU_COMMAND_TYPE_JIT_ALLOC:          jit_alloc,
  * @BASE_KCPU_COMMAND_TYPE_JIT_FREE:           jit_free,
  * @BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND:      group_suspend,
- * @BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER:      error_barrier,
+ * @BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER:      error_barrier
  */
 enum base_kcpu_command_type {
 	BASE_KCPU_COMMAND_TYPE_FENCE_SIGNAL,
@@ -177,7 +172,7 @@ enum base_kcpu_command_type {
 	BASE_KCPU_COMMAND_TYPE_JIT_ALLOC,
 	BASE_KCPU_COMMAND_TYPE_JIT_FREE,
 	BASE_KCPU_COMMAND_TYPE_GROUP_SUSPEND,
-	BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER,
+	BASE_KCPU_COMMAND_TYPE_ERROR_BARRIER
 };
 
 /**

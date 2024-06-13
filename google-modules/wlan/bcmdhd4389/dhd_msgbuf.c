@@ -7914,6 +7914,12 @@ BCMFASTPATH(dhd_prot_txstatus_process)(dhd_pub_t *dhd, void *msg)
 	txstatus = (host_txbuf_cmpl_t *)msg;
 
 	flowid = txstatus->compl_hdr.flow_ring_id;
+	if (DHD_FLOW_RING_INV_ID(dhd, flowid)) {
+		DHD_ERROR(("%s: invalid flowid:%d alloc_max:%d fid_max:%d\n",
+			__FUNCTION__, flowid, dhd->num_h2d_rings, dhd->max_tx_flowid));
+		return;
+	}
+
 	flow_ring_node = DHD_FLOW_RING(dhd, flowid);
 #ifdef AGG_H2D_DB
 	flow_ring = DHD_RING_IN_FLOWRINGS_POOL(prot, flowid);

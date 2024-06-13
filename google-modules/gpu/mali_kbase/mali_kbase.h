@@ -26,29 +26,6 @@
 
 #include <mali_kbase_debug.h>
 
-#include <linux/atomic.h>
-#include <linux/highmem.h>
-#include <linux/hrtimer.h>
-#include <linux/ktime.h>
-#include <linux/list.h>
-#include <linux/mm.h>
-#include <linux/mutex.h>
-#include <linux/rwsem.h>
-#include <linux/sched.h>
-#if (KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE)
-#include <linux/sched/mm.h>
-#endif
-#include <linux/slab.h>
-#include <linux/spinlock.h>
-#include <linux/vmalloc.h>
-#include <linux/wait.h>
-#include <linux/workqueue.h>
-#include <linux/kthread.h>
-#include <linux/interrupt.h>
-
-#include <linux/sched/rt.h>
-#include <uapi/linux/sched/types.h>
-
 #include <uapi/gpu/arm/midgard/mali_base_kernel.h>
 
 #include <mali_kbase_linux.h>
@@ -80,18 +57,43 @@
 
 #include "ipa/mali_kbase_ipa.h"
 
+#if MALI_USE_CSF
+#include "csf/mali_kbase_csf.h"
+#endif
+
 #if IS_ENABLED(CONFIG_GPU_TRACEPOINTS)
 #include <trace/events/gpu.h>
 #endif
 
 #include "mali_linux_trace.h"
 
+#include <linux/atomic.h>
+#include <linux/highmem.h>
+#include <linux/hrtimer.h>
+#include <linux/ktime.h>
+#include <linux/list.h>
+#include <linux/mm.h>
+#include <linux/mutex.h>
+#include <linux/rwsem.h>
+#include <linux/sched.h>
+#if (KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE)
+#include <linux/sched/mm.h>
+#endif
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/vmalloc.h>
+#include <linux/wait.h>
+#include <linux/workqueue.h>
+#include <linux/interrupt.h>
+#include <linux/kthread.h>
+
+#include <linux/sched/rt.h>
+#include <uapi/linux/sched/types.h>
+
 #define KBASE_DRV_NAME "mali"
 #define KBASE_TIMELINE_NAME KBASE_DRV_NAME ".timeline"
 
 #if MALI_USE_CSF
-#include "csf/mali_kbase_csf.h"
-
 /* Physical memory group ID for CSF user I/O.
  */
 #define KBASE_MEM_GROUP_CSF_IO BASE_MEM_GROUP_DEFAULT
@@ -118,6 +120,14 @@ struct kbase_device *kbase_device_alloc(void);
  * been setup before calling kbase_device_init
  */
 
+/**
+ * kbase_device_misc_init() - Miscellaneous initialization for kbase device
+ * @kbdev: Pointer to the kbase device
+ *
+ * This function must be called only when a kbase device is initialized.
+ *
+ * Return: 0 on success
+ */
 int kbase_device_misc_init(struct kbase_device *kbdev);
 void kbase_device_misc_term(struct kbase_device *kbdev);
 void kbase_device_free(struct kbase_device *kbdev);
@@ -165,17 +175,32 @@ void kbase_release_device(struct kbase_device *kbdev);
  * Return: if successful, address of the unmapped area aligned as required;
  *         error code (negative) in case of failure;
  */
-unsigned long kbase_context_get_unmapped_area(struct kbase_context *kctx,
-		const unsigned long addr, const unsigned long len,
-		const unsigned long pgoff, const unsigned long flags);
+unsigned long kbase_context_get_unmapped_area(struct kbase_context *kctx, const unsigned long addr,
+					      const unsigned long len, const unsigned long pgoff,
+					      const unsigned long flags);
 
-
-int assign_irqs(struct kbase_device *kbdev);
+/**
+ * kbase_get_irqs() - Get GPU interrupts from the device tree.
+ *
+ * @kbdev: The kbase device structure of the device
+ *
+ * This function must be called once only when a kbase device is initialized.
+ *
+ * Return: 0 on success. Error code (negative) on failure.
+ */
+int kbase_get_irqs(struct kbase_device *kbdev);
 
 int kbase_sysfs_init(struct kbase_device *kbdev);
 void kbase_sysfs_term(struct kbase_device *kbdev);
 
-
+/**
+ * kbase_protected_mode_init() - Initialize kbase device for protected mode.
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ *
+ * This function must be called only when a kbase device is initialized.
+ *
+ * Return: 0 on success.
+ */
 int kbase_protected_mode_init(struct kbase_device *kbdev);
 void kbase_protected_mode_term(struct kbase_device *kbdev);
 
@@ -197,7 +222,6 @@ int kbase_device_pm_init(struct kbase_device *kbdev);
  */
 void kbase_device_pm_term(struct kbase_device *kbdev);
 
-
 int power_control_init(struct kbase_device *kbdev);
 void power_control_term(struct kbase_device *kbdev);
 
@@ -210,7 +234,9 @@ static inline int kbase_device_debugfs_init(struct kbase_device *kbdev)
 	return 0;
 }
 
-static inline void kbase_device_debugfs_term(struct kbase_device *kbdev) { }
+static inline void kbase_device_debugfs_term(struct kbase_device *kbdev)
+{
+}
 #endif /* CONFIG_DEBUG_FS */
 
 int registers_map(struct kbase_device *kbdev);
@@ -220,6 +246,14 @@ int kbase_device_coherency_init(struct kbase_device *kbdev);
 
 
 #if !MALI_USE_CSF
+/**
+ * kbase_jd_init() - Initialize kbase context for job dispatcher.
+ * @kctx:   Pointer to the kbase context to be initialized.
+ *
+ * This function must be called only when a kbase context is instantiated.
+ *
+ * Return: 0 on success.
+ */
 int kbase_jd_init(struct kbase_context *kctx);
 void kbase_jd_exit(struct kbase_context *kctx);
 
@@ -234,9 +268,8 @@ void kbase_jd_exit(struct kbase_context *kctx);
  *
  * Return: 0 on success or error code
  */
-int kbase_jd_submit(struct kbase_context *kctx,
-		void __user *user_addr, u32 nr_atoms, u32 stride,
-		bool uk6_atom);
+int kbase_jd_submit(struct kbase_context *kctx, void __user *user_addr, u32 nr_atoms, u32 stride,
+		    bool uk6_atom);
 
 /**
  * kbase_jd_done_worker - Handle a job completion
@@ -257,8 +290,8 @@ int kbase_jd_submit(struct kbase_context *kctx,
  */
 void kbase_jd_done_worker(struct kthread_work *data);
 
-void kbase_jd_done(struct kbase_jd_atom *katom, int slot_nr, ktime_t *end_timestamp,
-		kbasep_js_atom_done_code done_code);
+void kbase_jd_done(struct kbase_jd_atom *katom, unsigned int slot_nr, ktime_t *end_timestamp,
+		   kbasep_js_atom_done_code done_code);
 void kbase_jd_cancel(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_zap_context(struct kbase_context *kctx);
 
@@ -309,7 +342,7 @@ void kbase_job_done(struct kbase_device *kbdev, u32 done);
  * The hwaccess_lock must be held when calling this function.
  */
 void kbase_job_slot_ctx_priority_check_locked(struct kbase_context *kctx,
-				struct kbase_jd_atom *katom);
+					      struct kbase_jd_atom *katom);
 
 /**
  * kbase_job_slot_softstop_start_rp() - Soft-stop the atom at the start
@@ -324,8 +357,7 @@ void kbase_job_slot_ctx_priority_check_locked(struct kbase_context *kctx,
  *
  * Return: 0 if successful, otherwise a negative error code.
  */
-int kbase_job_slot_softstop_start_rp(struct kbase_context *kctx,
-		struct kbase_va_region *reg);
+int kbase_job_slot_softstop_start_rp(struct kbase_context *kctx, struct kbase_va_region *reg);
 
 /**
  * kbase_job_slot_softstop - Soft-stop the specified job slot
@@ -339,8 +371,8 @@ int kbase_job_slot_softstop_start_rp(struct kbase_context *kctx,
  *
  * Where possible any job in the next register is evicted before the soft-stop.
  */
-void kbase_job_slot_softstop(struct kbase_device *kbdev, int js,
-		struct kbase_jd_atom *target_katom);
+void kbase_job_slot_softstop(struct kbase_device *kbdev, unsigned int js,
+			     struct kbase_jd_atom *target_katom);
 
 void kbase_job_slot_softstop_swflags(struct kbase_device *kbdev, unsigned int js,
 				     struct kbase_jd_atom *target_katom, u32 sw_flags);
@@ -366,7 +398,7 @@ void kbase_job_slot_softstop_swflags(struct kbase_device *kbdev, unsigned int js
  * state when the soft/hard-stop action is complete
  */
 void kbase_job_check_enter_disjoint(struct kbase_device *kbdev, u32 action,
-		base_jd_core_req core_reqs, struct kbase_jd_atom *target_katom);
+				    base_jd_core_req core_reqs, struct kbase_jd_atom *target_katom);
 
 /**
  * kbase_job_check_leave_disjoint - potentially leave disjoint state
@@ -376,16 +408,15 @@ void kbase_job_check_enter_disjoint(struct kbase_device *kbdev, u32 action,
  * Work out whether to leave disjoint state when finishing an atom that was
  * originated by kbase_job_check_enter_disjoint().
  */
-void kbase_job_check_leave_disjoint(struct kbase_device *kbdev,
-		struct kbase_jd_atom *target_katom);
+void kbase_job_check_leave_disjoint(struct kbase_device *kbdev, struct kbase_jd_atom *target_katom);
 
 #endif /* !MALI_USE_CSF */
 
-void kbase_event_post(struct kbase_context *ctx, struct kbase_jd_atom *event);
+void kbase_event_post(struct kbase_context *kctx, struct kbase_jd_atom *event);
 #if !MALI_USE_CSF
-int kbase_event_dequeue(struct kbase_context *ctx, struct base_jd_event_v2 *uevent);
+int kbase_event_dequeue(struct kbase_context *kctx, struct base_jd_event_v2 *uevent);
 #endif /* !MALI_USE_CSF */
-int kbase_event_pending(struct kbase_context *ctx);
+int kbase_event_pending(struct kbase_context *kctx);
 int kbase_event_init(struct kbase_context *kctx);
 void kbase_event_close(struct kbase_context *kctx);
 void kbase_event_cleanup(struct kbase_context *kctx);
@@ -400,8 +431,7 @@ void _kbase_event_wakeup(struct kbase_context *kctx, bool sync);
  *			which is to be validated.
  * Return: 0 if jit allocation is valid; negative error code otherwise
  */
-int kbasep_jit_alloc_validate(struct kbase_context *kctx,
-					struct base_jit_alloc_info *info);
+int kbasep_jit_alloc_validate(struct kbase_context *kctx, struct base_jit_alloc_info *info);
 
 /**
  * kbase_jit_retry_pending_alloc() - Retry blocked just-in-time memory
@@ -419,14 +449,13 @@ void kbase_jit_retry_pending_alloc(struct kbase_context *kctx);
  * @buffer:	Pointer to the memory location allocated for the object
  *		of the type struct @kbase_debug_copy_buffer.
  */
-static inline void kbase_free_user_buffer(
-		struct kbase_debug_copy_buffer *buffer)
+static inline void kbase_free_user_buffer(struct kbase_debug_copy_buffer *buffer)
 {
 	struct page **pages = buffer->extres_pages;
-	int nr_pages = buffer->nr_extres_pages;
+	uint nr_pages = buffer->nr_extres_pages;
 
 	if (pages) {
-		int i;
+		uint i;
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *pg = pages[i];
@@ -448,9 +477,7 @@ void kbasep_remove_waiting_soft_job(struct kbase_jd_atom *katom);
 #if IS_ENABLED(CONFIG_SYNC_FILE)
 void kbase_soft_event_wait_callback(struct kbase_jd_atom *katom);
 #endif
-int kbase_soft_event_update(struct kbase_context *kctx,
-			    u64 event,
-			    unsigned char new_status);
+int kbase_soft_event_update(struct kbase_context *kctx, u64 event, unsigned char new_status);
 
 void kbasep_soft_job_timeout_worker(struct timer_list *timer);
 void kbasep_complete_triggered_soft_events(struct kbase_context *kctx, u64 evt);
@@ -520,14 +547,13 @@ static inline bool kbase_pm_is_gpu_lost(struct kbase_device *kbdev)
  * state.  Once in gpu lost state new GPU jobs will no longer be
  * scheduled.
  */
-static inline void kbase_pm_set_gpu_lost(struct kbase_device *kbdev,
-	bool gpu_lost)
+static inline void kbase_pm_set_gpu_lost(struct kbase_device *kbdev, bool gpu_lost)
 {
 	const int new_val = (gpu_lost ? 1 : 0);
 	const int cur_val = atomic_xchg(&kbdev->pm.gpu_lost, new_val);
 
 	if (new_val != cur_val)
-		KBASE_KTRACE_ADD(kbdev, ARB_GPU_LOST, NULL, new_val);
+		KBASE_KTRACE_ADD(kbdev, ARB_GPU_LOST, NULL, (u64)new_val);
 }
 #endif
 
@@ -664,17 +690,17 @@ int kbase_pm_force_mcu_wakeup_after_sleep(struct kbase_device *kbdev);
  *
  * Return: the atom's ID.
  */
-static inline int kbase_jd_atom_id(struct kbase_context *kctx,
-				   const struct kbase_jd_atom *katom)
+static inline unsigned int kbase_jd_atom_id(struct kbase_context *kctx,
+					    const struct kbase_jd_atom *katom)
 {
-	int result;
+	unsigned int result;
 
 	KBASE_DEBUG_ASSERT(kctx);
 	KBASE_DEBUG_ASSERT(katom);
 	KBASE_DEBUG_ASSERT(katom->kctx == kctx);
 
 	result = katom - &kctx->jctx.atoms[0];
-	KBASE_DEBUG_ASSERT(result >= 0 && result <= BASE_JD_ATOM_COUNT);
+	KBASE_DEBUG_ASSERT(result <= BASE_JD_ATOM_COUNT);
 	return result;
 }
 
@@ -685,8 +711,7 @@ static inline int kbase_jd_atom_id(struct kbase_context *kctx,
  *
  * Return: Pointer to struct kbase_jd_atom associated with the supplied ID
  */
-static inline struct kbase_jd_atom *kbase_jd_atom_from_id(
-		struct kbase_context *kctx, int id)
+static inline struct kbase_jd_atom *kbase_jd_atom_from_id(struct kbase_context *kctx, int id)
 {
 	return &kctx->jctx.atoms[id];
 }
@@ -716,6 +741,8 @@ static inline struct kbase_jd_atom *kbase_jd_atom_from_id(
  *
  * The disjoint event counter is also incremented immediately whenever a job is soft stopped
  * and during context creation.
+ *
+ * This function must be called only when a kbase device is initialized.
  *
  * Return: 0 on success and non-zero value on failure.
  */
@@ -795,6 +822,22 @@ int kbase_device_pcm_dev_init(struct kbase_device *const kbdev);
  */
 void kbase_device_pcm_dev_term(struct kbase_device *const kbdev);
 
+#if MALI_USE_CSF
+
+/**
+ * kbasep_adjust_prioritized_process() - Adds or removes the specified PID from
+ *                                       the list of prioritized processes.
+ *
+ * @kbdev: Pointer to the structure for the kbase device
+ * @add: True if the process should be prioritized, false otherwise
+ * @tgid: The process/thread group ID
+ *
+ * Return: true if the operation was successful, false otherwise
+ */
+bool kbasep_adjust_prioritized_process(struct kbase_device *kbdev, bool add, uint32_t tgid);
+
+#endif /* MALI_USE_CSF */
+
 /**
  * KBASE_DISJOINT_STATE_INTERLEAVED_CONTEXT_COUNT_THRESHOLD - If a job is soft stopped
  * and the number of contexts is >= this value it is reported as a disjoint event
@@ -844,7 +887,7 @@ int kbase_kthread_run_worker_rt(struct kbase_device *kbdev,
 void kbase_destroy_kworker_stack(struct kthread_worker *worker);
 
 #if !defined(UINT64_MAX)
-	#define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFULL)
+#define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFULL)
 #endif
 
 /**
@@ -856,9 +899,9 @@ void kbase_destroy_kworker_stack(struct kthread_worker *worker);
  *
  * Return: sampled value of kfile::fops_count.
  */
-static inline u32 kbase_file_fops_count(struct kbase_file *kfile)
+static inline int kbase_file_fops_count(struct kbase_file *kfile)
 {
-	u32 fops_count;
+	int fops_count;
 
 	spin_lock(&kfile->lock);
 	fops_count = kfile->fops_count;

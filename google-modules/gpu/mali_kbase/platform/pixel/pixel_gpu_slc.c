@@ -127,6 +127,10 @@ static void gpu_slc_migrate_region(struct kbase_context *kctx, struct kbase_va_r
 	KBASE_DEBUG_ASSERT(kctx);
 	KBASE_DEBUG_ASSERT(reg);
 
+	if (gpu_slc_in_group(reg)) {
+		return;
+	}
+
 	vpfn = reg->start_pfn;
 	page_nr = kbase_reg_current_backed_size(reg);
 

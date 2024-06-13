@@ -32,6 +32,7 @@ enum dsim_state {
 	DSIM_STATE_SUSPEND,	/* inactive */
 	DSIM_STATE_BYPASS,	/* bypass mode, dsim shouldn't be used */
 	DSIM_STATE_HANDOVER,
+	DSIM_STATE_MISSING,	/* no panel identified */
 };
 
 enum dsim_dual_dsi {

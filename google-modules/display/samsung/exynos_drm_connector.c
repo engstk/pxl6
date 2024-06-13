@@ -130,6 +130,17 @@ static void exynos_drm_connector_print_state(struct drm_printer *p,
 		funcs->atomic_print_state(p, exynos_connector_state);
 }
 
+static int exynos_drm_connector_late_register(struct drm_connector *connector)
+{
+	struct exynos_drm_connector *exynos_connector = to_exynos_connector(connector);
+	const struct exynos_drm_connector_funcs *funcs = exynos_connector->funcs;
+
+	if (funcs && funcs->late_register)
+		return funcs->late_register(exynos_connector);
+
+	return -EINVAL;
+}
+
 static const struct drm_connector_funcs exynos_drm_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.reset = exynos_drm_connector_reset,
@@ -138,6 +149,7 @@ static const struct drm_connector_funcs exynos_drm_connector_funcs = {
 	.atomic_get_property = exynos_drm_connector_get_property,
 	.atomic_set_property = exynos_drm_connector_set_property,
 	.atomic_print_state = exynos_drm_connector_print_state,
+	.late_register = exynos_drm_connector_late_register,
 };
 
 bool is_exynos_drm_connector(const struct drm_connector *connector)

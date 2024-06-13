@@ -48,6 +48,14 @@ static inline const char *gpu_uevent_type_str(enum gpu_uevent_type type) {
     GPU_UEVENT_INFO(PM_TIMEOUT)                 \
     GPU_UEVENT_INFO(CSF_RESET_OK)               \
     GPU_UEVENT_INFO(CSF_RESET_FAILED)           \
+    GPU_UEVENT_INFO(TILER_OOM)                  \
+    GPU_UEVENT_INFO(PROGRESS_TIMER)             \
+    GPU_UEVENT_INFO(CS_ERROR)                   \
+    GPU_UEVENT_INFO(FW_ERROR)                   \
+    GPU_UEVENT_INFO(PMODE_EXIT_TIMEOUT)         \
+    GPU_UEVENT_INFO(PMODE_ENTRY_FAILURE)        \
+    GPU_UEVENT_INFO(GPU_PAGE_FAULT)             \
+    GPU_UEVENT_INFO(MMU_AS_ACTIVE_STUCK)        \
     GPU_UEVENT_INFO(MAX)
 
 #define GPU_UEVENT_INFO(info) GPU_UEVENT_INFO_##info,
@@ -70,5 +78,7 @@ struct gpu_uevent {
 };
 
 void pixel_gpu_uevent_send(struct kbase_device *kbdev, const struct gpu_uevent *evt);
+
+void pixel_gpu_uevent_kmd_error_send(struct kbase_device *kbdev, const enum gpu_uevent_info info);
 
 #endif /* _PIXEL_GPU_UEVENT_H_ */

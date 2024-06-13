@@ -468,9 +468,11 @@ int fira_crypto_rotate_elements(struct fira_crypto *fira_crypto_ctx,
 	if (r)
 		goto error_out;
 
-	if (fira_crypto_ctx->base.aead.ctx == NULL)
-		r = fira_crypto_aead_set_key(&fira_crypto_ctx->base.aead,
-				fira_crypto_ctx->base.derived_payload_key);
+	if (fira_crypto_ctx->base.aead.ctx)
+		fira_crypto_aead_destroy(&fira_crypto_ctx->base.aead);
+
+	r = fira_crypto_aead_set_key(&fira_crypto_ctx->base.aead,
+			fira_crypto_ctx->base.derived_payload_key);
 
 error_out:
 	memzero_explicit(context, sizeof(context));

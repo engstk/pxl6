@@ -717,6 +717,30 @@ void gbms_logbuffer_prlog(struct logbuffer *log, int level, int debug_no_logbuff
 }
 EXPORT_SYMBOL_GPL(gbms_logbuffer_prlog);
 
+void gbms_logbuffer_devlog(struct logbuffer *log, struct device *dev, int level,
+			  int debug_no_logbuffer, int debug_printk_prlog,
+			  const char *f, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, f);
+
+	vaf.fmt = f;
+	vaf.va = &args;
+
+	if (!debug_no_logbuffer)
+		logbuffer_vlog(log, f, args);
+
+	if (level <= debug_printk_prlog)
+		dev_printk_emit(level, dev, "%s %s: %pV",
+				dev_driver_string(dev),
+				dev_name(dev), &vaf);
+
+	va_end(args);
+}
+EXPORT_SYMBOL_GPL(gbms_logbuffer_devlog);
+
 bool chg_state_is_disconnected(const union gbms_charger_state *chg_state)
 {
 	return ((chg_state->f.flags & GBMS_CS_FLAG_BUCK_EN) == 0) &&

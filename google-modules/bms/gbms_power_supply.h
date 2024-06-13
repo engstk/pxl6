@@ -93,6 +93,7 @@ enum gbms_property {
 	GBMS_PROP_FG_REG_LOGGING,	/* GBMS FG logging */
 	GBMS_PROP_WLC_VCPOUT,		/* GBMS wlc cpout voltage */
 	GBMS_PROP_BATT_ID,              /* GBMS battery id */
+	GBMS_PROP_RECAL_FG,		/* GBMS FG reset */
 };
 
 union gbms_propval {

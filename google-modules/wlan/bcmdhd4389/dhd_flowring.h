@@ -133,6 +133,9 @@
 	(DHD_IF_ROLE_AP(pub, idx) || DHD_IF_ROLE_P2PGO(pub, idx) ||\
 		DHD_IF_ROLE_NAN(pub, idx))
 
+#define DHD_FLOW_RING_INV_ID(dhdp, flowid) \
+	(flowid < FLOWID_RESERVED) || (flowid > (dhdp)->max_tx_flowid)
+
 #define DHD_FLOW_RING(dhdp, flowid) \
 	(flow_ring_node_t *)&(((flow_ring_node_t *)((dhdp)->flow_ring_table))[flowid])
 

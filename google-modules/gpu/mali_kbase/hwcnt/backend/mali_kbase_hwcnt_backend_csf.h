@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2021-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2021-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -30,6 +30,8 @@
 #include "hwcnt/backend/mali_kbase_hwcnt_backend.h"
 #include "hwcnt/backend/mali_kbase_hwcnt_backend_csf_if.h"
 #include "hwcnt/mali_kbase_hwcnt_watchdog_if.h"
+
+struct kbase_hwcnt_physical_enable_map;
 
 /**
  * kbase_hwcnt_backend_csf_create() - Create a CSF hardware counter backend
@@ -113,6 +115,28 @@ void kbase_hwcnt_backend_csf_on_unrecoverable_error(struct kbase_hwcnt_backend_i
  * @iface: Non-NULL pointer to HWC backend interface.
  */
 void kbase_hwcnt_backend_csf_on_before_reset(struct kbase_hwcnt_backend_interface *iface);
+
+/**
+ * kbase_hwcnt_backend_csf_set_hw_availability() - CSF HWC backend function to
+ *                                                 set current HW configuration.
+ *                                                 HWC must be disabled before
+ *                                                 this function is called.
+ * @iface: Non-NULL pointer to HWC backend interface.
+ * @num_l2_slices: Current number of L2 slices allocated to the GPU.
+ * @shader_present_bitmap: Current shader-present bitmap that is allocated to the GPU.
+ */
+void kbase_hwcnt_backend_csf_set_hw_availability(struct kbase_hwcnt_backend_interface *iface,
+						 size_t num_l2_slices,
+						 uint64_t shader_present_bitmap);
+
+/** kbasep_hwcnt_backend_csf_process_enable_map() - Process the enable_map to
+ *                                                  guarantee headers are
+ *                                                  enabled if any counter is
+ *                                                  required.
+ * @phys_enable_map: HWC physical enable map to be processed.
+ */
+void kbasep_hwcnt_backend_csf_process_enable_map(
+	struct kbase_hwcnt_physical_enable_map *phys_enable_map);
 
 /**
  * kbase_hwcnt_backend_csf_on_prfcnt_sample() - CSF performance counter sample

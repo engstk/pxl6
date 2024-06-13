@@ -995,10 +995,8 @@ static int exynos_drm_bind(struct device *dev)
 	exynos_drm_connector_create_properties(drm);
 
 	priv_state = kzalloc(sizeof(*priv_state), GFP_KERNEL);
-	if (!priv_state) {
-		ret = -ENOMEM;
-		goto err_free_drm;
-	}
+	if (!priv_state)
+		return -ENOMEM;
 
 	priv_state->available_win_mask = BIT(MAX_WIN_PER_DECON) - 1;
 
@@ -1069,8 +1067,6 @@ err_unbind_all:
 	component_unbind_all(dev, drm);
 err_priv_state_cleanup:
 	drm_atomic_private_obj_fini(&private->obj);
-err_free_drm:
-	drm_dev_put(drm);
 
 	return ret;
 }
@@ -1092,6 +1088,8 @@ static void exynos_drm_unbind(struct device *dev)
 	component_unbind_all(dev, drm);
 
 	drm_dev_put(drm);
+
+	dev_set_drvdata(dev, NULL);
 }
 
 static const struct component_master_ops exynos_drm_ops = {
@@ -1104,6 +1102,8 @@ static int exynos_drm_platform_probe(struct platform_device *pdev)
 	struct component_match *match;
 
 	pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
+
+	platform_set_drvdata(pdev, NULL);
 
 	match = exynos_drm_match_add(&pdev->dev);
 	if (IS_ERR(match))
@@ -1121,7 +1121,10 @@ static int exynos_drm_platform_remove(struct platform_device *pdev)
 
 static void exynos_drm_platform_shutdown(struct platform_device *pdev)
 {
-	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
+	struct drm_device *drm_dev = platform_get_drvdata(pdev);
+
+	if (drm_dev)
+		drm_atomic_helper_shutdown(drm_dev);
 }
 
 static struct platform_driver exynos_drm_platform_driver = {

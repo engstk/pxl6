@@ -77,8 +77,8 @@ static int kbase_backend_late_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_DEBUG
 #if IS_ENABLED(CONFIG_MALI_REAL_HW)
-	if (kbasep_common_test_interrupt_handlers(kbdev) != 0) {
-		dev_err(kbdev->dev, "Interrupt assignment check failed.\n");
+	if (kbase_validate_interrupts(kbdev) != 0) {
+		dev_err(kbdev->dev, "Interrupt validation failed.\n");
 		err = -EINVAL;
 		goto fail_interrupt_test;
 	}
@@ -218,7 +218,7 @@ static const struct kbase_device_init dev_init[] = {
 #if !IS_ENABLED(CONFIG_MALI_REAL_HW)
 	{ kbase_gpu_device_create, kbase_gpu_device_destroy, "Dummy model initialization failed" },
 #else /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
-	{ assign_irqs, NULL, "IRQ search failed" },
+	{ kbase_get_irqs, NULL, "IRQ search failed" },
 #endif /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
 #if !IS_ENABLED(CONFIG_MALI_NO_MALI)
 	{ registers_map, registers_unmap, "Register map failed" },
@@ -258,8 +258,6 @@ static const struct kbase_device_init dev_init[] = {
 	  "GPU hwcnt context initialization failed" },
 	{ kbase_device_hwcnt_virtualizer_init, kbase_device_hwcnt_virtualizer_term,
 	  "GPU hwcnt virtualizer initialization failed" },
-	{ kbase_device_vinstr_init, kbase_device_vinstr_term,
-	  "Virtual instrumentation initialization failed" },
 	{ kbase_device_kinstr_prfcnt_init, kbase_device_kinstr_prfcnt_term,
 	  "Performance counter instrumentation initialization failed" },
 	{ kbase_backend_late_init, kbase_backend_late_term, "Late backend initialization failed" },
@@ -287,8 +285,7 @@ static const struct kbase_device_init dev_init[] = {
 	{ kbase_device_late_init, kbase_device_late_term, "Late device initialization failed" },
 };
 
-static void kbase_device_term_partial(struct kbase_device *kbdev,
-		unsigned int i)
+static void kbase_device_term_partial(struct kbase_device *kbdev, unsigned int i)
 {
 	while (i-- > 0) {
 		if (dev_init[i].term)
@@ -319,8 +316,8 @@ int kbase_device_init(struct kbase_device *kbdev)
 			err = dev_init[i].init(kbdev);
 			if (err) {
 				if (err != -EPROBE_DEFER)
-					dev_err(kbdev->dev, "%s error = %d\n",
-						dev_init[i].err_mes, err);
+					dev_err(kbdev->dev, "%s error = %d\n", dev_init[i].err_mes,
+						err);
 				kbase_device_term_partial(kbdev, i);
 				break;
 			}

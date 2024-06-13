@@ -1,12 +1,9 @@
 
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Google LWIS I2C Bus Manager
  *
- * Copyright (c) 2023 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright 2023 Google LLC.
  */
 
 #ifndef LWIS_I2C_BUS_MANAGER_H_
@@ -22,13 +19,18 @@
  * in which the requests will be executed
  */
 enum lwis_i2c_device_priority_level {
-	I2C_DEVICE_HIGH_PRIORITY = 0,
-	I2C_DEVICE_MEDIUM_PRIORITY = 1,
-	I2C_DEVICE_LOW_PRIORITY = 2,
-	I2C_MAX_PRIORITY_LEVELS = 3
+	I2C_DEVICE_HIGH_PRIORITY,
+	I2C_DEVICE_MEDIUM_PRIORITY,
+	I2C_DEVICE_LOW_PRIORITY,
+	I2C_MAX_PRIORITY_LEVELS
 };
 
-// Forward declaration
+/* enum lwis_i2c_client_connection:
+ * Defines the I2C client connection status
+ * being requested
+ */
+enum lwis_i2c_client_connection { I2C_CLIENT_CONNECT, I2C_CLIENT_DISCONNECT };
+
 struct lwis_i2c_device;
 
 /* struct lwis_i2c_bus_manager_list:
@@ -50,7 +52,7 @@ struct lwis_i2c_bus_manager_identifier {
  * This is a collection of process request nodes that identify
  * the lwis device requests in order they were queued.
  * The scheduler is set to operate requests in a
- * first in-first out  manner, starting and updating the head
+ * first in-first out manner, starting and updating the head
  * and working towards the tail end. */
 struct lwis_i2c_process_queue {
 	/* Head node for the process queue */
@@ -66,7 +68,7 @@ struct lwis_i2c_process_queue {
 struct lwis_i2c_bus_manager {
 	/* Unique identifier for this I2C bus manager */
 	int i2c_bus_id;
-	/* Name of I2C Bus manager corresponds to the name of the I2C Bus*/
+	/* Name of I2C Bus manager corresponds to the name of the I2C Bus */
 	char i2c_bus_name[LWIS_MAX_NAME_STRING_LEN];
 	/* Lock to control access to bus transfers */
 	struct mutex i2c_bus_lock;
@@ -97,7 +99,7 @@ void lwis_i2c_bus_manager_lock_i2c_bus(struct lwis_device *lwis_dev);
 
 void lwis_i2c_bus_manager_unlock_i2c_bus(struct lwis_device *lwis_dev);
 
-struct lwis_i2c_bus_manager *lwis_i2c_bus_manager_get_manager(struct lwis_device *lwis_dev);
+struct lwis_i2c_bus_manager *lwis_i2c_bus_manager_get(struct lwis_device *lwis_dev);
 
 int lwis_i2c_bus_manager_create(struct lwis_i2c_device *i2c_dev);
 

@@ -914,6 +914,8 @@ static int st21nfc_probe(struct i2c_client *client,
 	if (st21nfc_dev == NULL)
 		return -ENOMEM;
 
+	dev->init_name = "i2c-st21nfc";
+
 	/* store for later use */
 	st21nfc_dev->client = client;
 	st21nfc_dev->r_state_current = ST21NFC_HEADER;
