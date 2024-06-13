@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Google LWIS I2C Bus Manager
+ * Google LWIS I2C Bus Manager Scheduler
  *
- * Copyright (c) 2023 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright 2023 Google LLC.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME "-i2c-sched: " fmt
 
@@ -18,10 +15,7 @@
 */
 bool lwis_i2c_process_request_queue_is_empty(struct lwis_i2c_process_queue *process_queue)
 {
-	if ((!process_queue) || ((process_queue) && (process_queue->number_of_nodes == 0))) {
-		return true;
-	}
-	return false;
+	return (!process_queue || (process_queue && (process_queue->number_of_nodes == 0)));
 }
 
 /*
@@ -56,7 +50,6 @@ void lwis_i2c_process_request_queue_destroy(struct lwis_i2c_process_queue *proce
 		list_del(&process_request->request_node);
 		process_request->requesting_client = NULL;
 		kfree(process_request);
-		process_request = NULL;
-		--process_queue->number_of_nodes;
+		process_queue->number_of_nodes--;
 	}
 }

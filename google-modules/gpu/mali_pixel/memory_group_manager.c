@@ -27,9 +27,9 @@
 
 #include <uapi/gpu/arm/midgard/platform/pixel/pixel_memory_group_manager.h>
 
-
+#define NUM_PAGES_IN_2MB_LARGE_PAGE (SZ_2M / PAGE_SIZE)
 #define ORDER_SMALL_PAGE 0
-#define ORDER_LARGE_PAGE 9
+#define ORDER_LARGE_PAGE const_ilog2(NUM_PAGES_IN_2MB_LARGE_PAGE)
 
 /* Borr does not have "real" PBHA support. However, since we only use a 36-bit PA on the bus,
  * AxADDR[39:36] is wired up to the GPU AxUSER[PBHA] field seen by the rest of the system.
@@ -56,8 +56,7 @@
 #define MGM_SENTINEL_PT_SIZE U64_MAX
 
 #define INVALID_GROUP_ID(group_id) \
-	(WARN_ON((group_id) < 0) || \
-	WARN_ON((group_id) >= MEMORY_GROUP_MANAGER_NR_GROUPS))
+	WARN_ON((group_id) >= MEMORY_GROUP_MANAGER_NR_GROUPS)
 
 #if (KERNEL_VERSION(4, 20, 0) > LINUX_VERSION_CODE)
 static inline vm_fault_t vmf_insert_pfn_prot(struct vm_area_struct *vma,
@@ -162,35 +161,35 @@ struct mgm_groups {
 static int mgm_debugfs_state_get(void *data, u64 *val)
 {
 	struct mgm_group *group = data;
-	*val = (int)group->state;
+	*val = (u64)group->state;
 	return 0;
 }
 
 static int mgm_debugfs_size_get(void *data, u64 *val)
 {
 	struct mgm_group *group = data;
-	*val = atomic_read(&group->size);
+	*val = (u64)atomic_read(&group->size);
 	return 0;
 }
 
 static int mgm_debugfs_lp_size_get(void *data, u64 *val)
 {
 	struct mgm_group *group = data;
-	*val = atomic_read(&group->lp_size);
+	*val = (u64)atomic_read(&group->lp_size);
 	return 0;
 }
 
 static int mgm_debugfs_insert_pfn_get(void *data, u64 *val)
 {
 	struct mgm_group *group = data;
-	*val = atomic_read(&group->insert_pfn);
+	*val = (u64)atomic_read(&group->insert_pfn);
 	return 0;
 }
 
 static int mgm_debugfs_update_gpu_pte_get(void *data, u64 *val)
 {
 	struct mgm_group *group = data;
-	*val = atomic_read(&group->update_gpu_pte);
+	*val = (u64)atomic_read(&group->update_gpu_pte);
 	return 0;
 }
 
@@ -409,7 +408,7 @@ static int group_active_pt_id(struct mgm_groups *data, enum pixel_mgm_group_id g
 
 static atomic64_t total_gpu_pages = ATOMIC64_INIT(0);
 
-static atomic_t* get_size_counter(struct memory_group_manager_device* mgm_dev, int group_id, int order)
+static atomic_t* get_size_counter(struct memory_group_manager_device* mgm_dev, unsigned int group_id, unsigned int order)
 {
 	static atomic_t err_atomic;
 	struct mgm_groups *data = mgm_dev->data;
@@ -420,13 +419,13 @@ static atomic_t* get_size_counter(struct memory_group_manager_device* mgm_dev, i
 	case ORDER_LARGE_PAGE:
 		return &data->groups[group_id].lp_size;
 	default:
-		dev_err(data->dev, "Unknown order(%d)\n", order);
+		dev_err(data->dev, "Unknown order(%u)\n", order);
 		return &err_atomic;
 	}
 }
 
-static void update_size(struct memory_group_manager_device *mgm_dev, int
-		group_id, int order, bool alloc)
+static void update_size(struct memory_group_manager_device *mgm_dev, unsigned int
+		group_id, unsigned int order, bool alloc)
 {
 	static DEFINE_RATELIMIT_STATE(gpu_alloc_rs, 10*HZ, 1);
 	atomic_t* size = get_size_counter(mgm_dev, group_id, order);
@@ -643,14 +642,14 @@ done:
 EXPORT_SYMBOL(pixel_mgm_resize_group_to_fit);
 
 static struct page *mgm_alloc_page(
-	struct memory_group_manager_device *mgm_dev, int group_id,
+	struct memory_group_manager_device *mgm_dev, unsigned int group_id,
 	gfp_t gfp_mask, unsigned int order)
 {
 	struct mgm_groups *const data = mgm_dev->data;
 	struct page *p;
 
 	dev_dbg(data->dev,
-		"%s(mgm_dev=%p, group_id=%d gfp_mask=0x%x order=%u\n",
+		"%s(mgm_dev=%p, group_id=%u gfp_mask=0x%x order=%u\n",
 		__func__, (void *)mgm_dev, group_id, gfp_mask, order);
 
 	if (INVALID_GROUP_ID(group_id))
@@ -680,7 +679,7 @@ static struct page *mgm_alloc_page(
 			/* Everything should already be set up*/
 			break;
 		default:
-			dev_err(data->dev, "Group %d in invalid state %d\n",
+			dev_err(data->dev, "Group %u in invalid state %d\n",
 				group_id, data->groups[group_id].state);
 		}
 	}
@@ -698,12 +697,12 @@ static struct page *mgm_alloc_page(
 }
 
 static void mgm_free_page(
-	struct memory_group_manager_device *mgm_dev, int group_id,
+	struct memory_group_manager_device *mgm_dev, unsigned int group_id,
 	struct page *page, unsigned int order)
 {
 	struct mgm_groups *const data = mgm_dev->data;
 
-	dev_dbg(data->dev, "%s(mgm_dev=%p, group_id=%d page=%p order=%u\n",
+	dev_dbg(data->dev, "%s(mgm_dev=%p, group_id=%u page=%p order=%u\n",
 		__func__, (void *)mgm_dev, group_id, (void *)page, order);
 
 	if (INVALID_GROUP_ID(group_id))
@@ -739,14 +738,14 @@ static int mgm_get_import_memory_id(
 }
 
 static u64 mgm_update_gpu_pte(
-	struct memory_group_manager_device *const mgm_dev, int const group_id,
+	struct memory_group_manager_device *const mgm_dev, unsigned int const group_id,
 	int const mmu_level, u64 pte)
 {
 	struct mgm_groups *const data = mgm_dev->data;
 	unsigned int pbha;
 
 	dev_dbg(data->dev,
-		"%s(mgm_dev=%p, group_id=%d, mmu_level=%d, pte=0x%llx)\n",
+		"%s(mgm_dev=%p, group_id=%u, mmu_level=%d, pte=0x%llx)\n",
 		__func__, (void *)mgm_dev, group_id, mmu_level, pte);
 
 	if (INVALID_GROUP_ID(group_id))
@@ -775,7 +774,7 @@ static u64 mgm_update_gpu_pte(
 			pte |= ((u64)pbha & PBHA_BIT_MASK) << PBHA_BIT_POS;
 
 			dev_dbg(data->dev,
-				"%s: group_id=%d pbha=%d "
+				"%s: group_id=%u pbha=%d "
 				"pte=0x%llx -> 0x%llx\n",
 				__func__, group_id, pbha, old_pte, pte);
 
@@ -793,7 +792,7 @@ static u64 mgm_update_gpu_pte(
 	return pte;
 }
 
-static u64 mgm_pte_to_original_pte(struct memory_group_manager_device *mgm_dev, int group_id,
+static u64 mgm_pte_to_original_pte(struct memory_group_manager_device *mgm_dev, unsigned int group_id,
 				int mmu_level, u64 pte)
 {
 	struct mgm_groups *const data = mgm_dev->data;
@@ -812,7 +811,7 @@ static u64 mgm_pte_to_original_pte(struct memory_group_manager_device *mgm_dev, 
 		/* All other groups will have PBHA bits, so clear them */
 		old_pte = pte;
 		pte &= ~((u64)PBHA_BIT_MASK << PBHA_BIT_POS);
-		dev_dbg(data->dev, "%s: group_id=%d pte=0x%llx -> 0x%llx\n", __func__, group_id,
+		dev_dbg(data->dev, "%s: group_id=%u pte=0x%llx -> 0x%llx\n", __func__, group_id,
 			old_pte, pte);
 	}
 
@@ -820,7 +819,7 @@ static u64 mgm_pte_to_original_pte(struct memory_group_manager_device *mgm_dev, 
 }
 
 static vm_fault_t mgm_vmf_insert_pfn_prot(
-	struct memory_group_manager_device *const mgm_dev, int const group_id,
+	struct memory_group_manager_device *const mgm_dev, unsigned int const group_id,
 	struct vm_area_struct *const vma, unsigned long const addr,
 	unsigned long const pfn, pgprot_t const prot)
 {
@@ -828,7 +827,7 @@ static vm_fault_t mgm_vmf_insert_pfn_prot(
 	vm_fault_t fault;
 
 	dev_dbg(data->dev,
-		"%s(mgm_dev=%p, group_id=%d, vma=%p, addr=0x%lx, pfn=0x%lx,"
+		"%s(mgm_dev=%p, group_id=%u, vma=%p, addr=0x%lx, pfn=0x%lx,"
 		" prot=0x%llx)\n",
 		__func__, (void *)mgm_dev, group_id, (void *)vma, addr, pfn,
 		pgprot_val(prot));

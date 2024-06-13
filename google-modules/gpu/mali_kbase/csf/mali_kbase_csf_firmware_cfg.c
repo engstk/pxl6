@@ -31,10 +31,6 @@
 
 #define CSF_FIRMWARE_CFG_LOG_VERBOSITY_ENTRY_NAME "Log verbosity"
 
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-#define HOST_CONTROLS_SC_RAILS_CFG_ENTRY_NAME "Host controls SC rails"
-#endif
-
 #define CSF_FIRMWARE_CFG_WA_CFG0_ENTRY_NAME "WA_CFG0"
 
 /**
@@ -72,10 +68,10 @@ struct firmware_config {
 	u32 cur_val;
 };
 
-#define FW_CFG_ATTR(_name, _mode)					\
-	struct attribute fw_cfg_attr_##_name = {			\
-			.name = __stringify(_name),			\
-			.mode = VERIFY_OCTAL_PERMISSIONS(_mode),	\
+#define FW_CFG_ATTR(_name, _mode)                        \
+	struct attribute fw_cfg_attr_##_name = {         \
+		.name = __stringify(_name),              \
+		.mode = VERIFY_OCTAL_PERMISSIONS(_mode), \
 	}
 
 static FW_CFG_ATTR(min, 0444);
@@ -84,17 +80,14 @@ static FW_CFG_ATTR(cur, 0644);
 
 static void fw_cfg_kobj_release(struct kobject *kobj)
 {
-	struct firmware_config *config =
-		container_of(kobj, struct firmware_config, kobj);
+	struct firmware_config *config = container_of(kobj, struct firmware_config, kobj);
 
 	kfree(config);
 }
 
-static ssize_t show_fw_cfg(struct kobject *kobj,
-	struct attribute *attr, char *buf)
+static ssize_t show_fw_cfg(struct kobject *kobj, struct attribute *attr, char *buf)
 {
-	struct firmware_config *config =
-		container_of(kobj, struct firmware_config, kobj);
+	struct firmware_config *config = container_of(kobj, struct firmware_config, kobj);
 	struct kbase_device *kbdev = config->kbdev;
 	u32 val = 0;
 
@@ -112,22 +105,17 @@ static ssize_t show_fw_cfg(struct kobject *kobj,
 		val = config->cur_val;
 		spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 	} else {
-		dev_warn(kbdev->dev,
-			"Unexpected read from entry %s/%s",
-			config->name, attr->name);
+		dev_warn(kbdev->dev, "Unexpected read from entry %s/%s", config->name, attr->name);
 		return -EINVAL;
 	}
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", val);
 }
 
-static ssize_t store_fw_cfg(struct kobject *kobj,
-	struct attribute *attr,
-	const char *buf,
-	size_t count)
+static ssize_t store_fw_cfg(struct kobject *kobj, struct attribute *attr, const char *buf,
+			    size_t count)
 {
-	struct firmware_config *config =
-		container_of(kobj, struct firmware_config, kobj);
+	struct firmware_config *config = container_of(kobj, struct firmware_config, kobj);
 	struct kbase_device *kbdev = config->kbdev;
 
 	if (!kbdev)
@@ -146,13 +134,7 @@ static ssize_t store_fw_cfg(struct kobject *kobj,
 			return -EINVAL;
 		}
 
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-		if (!strcmp(config->name,
-			    HOST_CONTROLS_SC_RAILS_CFG_ENTRY_NAME))
-			return -EPERM;
-#endif
-		if (!strcmp(config->name,
-			    CSF_FIRMWARE_CFG_WA_CFG0_ENTRY_NAME))
+		if (!strcmp(config->name, CSF_FIRMWARE_CFG_WA_CFG0_ENTRY_NAME))
 			return -EPERM;
 
 		if ((val < config->min) || (val > config->max))
@@ -163,7 +145,7 @@ static ssize_t store_fw_cfg(struct kobject *kobj,
 		cur_val = config->cur_val;
 		if (cur_val == val) {
 			spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
-			return count;
+			return (ssize_t)count;
 		}
 
 		/* If configuration update cannot be performed with
@@ -176,8 +158,7 @@ static ssize_t store_fw_cfg(struct kobject *kobj,
 			 * the User to retry the write.
 			 */
 			if (kbase_reset_gpu_silent(kbdev)) {
-				spin_unlock_irqrestore(&kbdev->hwaccess_lock,
-						       flags);
+				spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 				return -EAGAIN;
 			}
 		}
@@ -191,8 +172,7 @@ static ssize_t store_fw_cfg(struct kobject *kobj,
 		 * in the RONLY section of firmware image, which is not
 		 * reloaded on firmware reboot due to GPU reset.
 		 */
-		kbase_csf_update_firmware_memory(
-			kbdev, config->address, val);
+		kbase_csf_update_firmware_memory(kbdev, config->address, val);
 
 		config->cur_val = val;
 
@@ -225,13 +205,11 @@ static ssize_t store_fw_cfg(struct kobject *kobj,
 		if (!config->updatable)
 			kbase_reset_gpu_wait(kbdev);
 	} else {
-		dev_warn(kbdev->dev,
-			"Unexpected write to entry %s/%s",
-			config->name, attr->name);
+		dev_warn(kbdev->dev, "Unexpected write to entry %s/%s", config->name, attr->name);
 		return -EINVAL;
 	}
 
-	return count;
+	return (ssize_t)count;
 }
 
 static const struct sysfs_ops fw_cfg_ops = {
@@ -263,12 +241,11 @@ int kbase_csf_firmware_cfg_init(struct kbase_device *kbdev)
 {
 	struct firmware_config *config;
 
-	kbdev->csf.fw_cfg_kobj = kobject_create_and_add(
-		CSF_FIRMWARE_CFG_SYSFS_DIR_NAME, &kbdev->dev->kobj);
+	kbdev->csf.fw_cfg_kobj =
+		kobject_create_and_add(CSF_FIRMWARE_CFG_SYSFS_DIR_NAME, &kbdev->dev->kobj);
 	if (!kbdev->csf.fw_cfg_kobj) {
 		kobject_put(kbdev->csf.fw_cfg_kobj);
-		dev_err(kbdev->dev,
-			"Creation of %s sysfs sub-directory failed\n",
+		dev_err(kbdev->dev, "Creation of %s sysfs sub-directory failed\n",
 			CSF_FIRMWARE_CFG_SYSFS_DIR_NAME);
 		return -ENOMEM;
 	}
@@ -276,13 +253,12 @@ int kbase_csf_firmware_cfg_init(struct kbase_device *kbdev)
 	list_for_each_entry(config, &kbdev->csf.firmware_config, node) {
 		int err;
 
-		kbase_csf_read_firmware_memory(kbdev, config->address,
-			&config->cur_val);
+		kbase_csf_read_firmware_memory(kbdev, config->address, &config->cur_val);
 
 		if (!strcmp(config->name, CSF_FIRMWARE_CFG_LOG_VERBOSITY_ENTRY_NAME) &&
 		    (config->cur_val)) {
 			err = kbase_csf_firmware_log_toggle_logging_calls(config->kbdev,
-				config->cur_val);
+									  config->cur_val);
 
 			if (err) {
 				kobject_put(&config->kobj);
@@ -291,13 +267,11 @@ int kbase_csf_firmware_cfg_init(struct kbase_device *kbdev)
 			}
 		}
 
-
-		err = kobject_init_and_add(&config->kobj, &fw_cfg_kobj_type,
-				kbdev->csf.fw_cfg_kobj, "%s", config->name);
+		err = kobject_init_and_add(&config->kobj, &fw_cfg_kobj_type, kbdev->csf.fw_cfg_kobj,
+					   "%s", config->name);
 		if (err) {
 			kobject_put(&config->kobj);
-			dev_err(kbdev->dev,
-				"Creation of %s sysfs sub-directory failed\n",
+			dev_err(kbdev->dev, "Creation of %s sysfs sub-directory failed\n",
 				config->name);
 			return err;
 		}
@@ -313,8 +287,8 @@ void kbase_csf_firmware_cfg_term(struct kbase_device *kbdev)
 	while (!list_empty(&kbdev->csf.firmware_config)) {
 		struct firmware_config *config;
 
-		config = list_first_entry(&kbdev->csf.firmware_config,
-				struct firmware_config, node);
+		config =
+			list_first_entry(&kbdev->csf.firmware_config, struct firmware_config, node);
 		list_del(&config->node);
 
 		if (config->kobj_inited) {
@@ -335,6 +309,7 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 	const char *name = (char *)&entry[3];
 	struct firmware_config *config;
 	const unsigned int name_len = size - CONFIGURATION_ENTRY_NAME_OFFSET;
+	CSTD_UNUSED(fw);
 
 	/* Allocate enough space for struct firmware_config and the
 	 * configuration option name (with NULL termination)
@@ -346,7 +321,7 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 
 	config->kbdev = kbdev;
 	config->updatable = updatable;
-	config->name = (char *)(config+1);
+	config->name = (char *)(config + 1);
 	config->address = entry[0];
 	config->min = entry[1];
 	config->max = entry[2];
@@ -356,9 +331,8 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 
 	list_add(&config->node, &kbdev->csf.firmware_config);
 
-	dev_dbg(kbdev->dev, "Configuration option '%s' at 0x%x range %u-%u",
-			config->name, config->address,
-			config->min, config->max);
+	dev_dbg(kbdev->dev, "Configuration option '%s' at 0x%x range %u-%u", config->name,
+		config->address, config->min, config->max);
 
 	return 0;
 }
@@ -397,24 +371,6 @@ int kbase_csf_firmware_cfg_fw_wa_enable(struct kbase_device *kbdev)
 	return -ENOENT;
 }
 
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-int kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails(struct kbase_device *kbdev)
-{
-	struct firmware_config *config;
-
-	list_for_each_entry(config, &kbdev->csf.firmware_config, node) {
-		if (strcmp(config->name,
-			   HOST_CONTROLS_SC_RAILS_CFG_ENTRY_NAME))
-			continue;
-
-		kbase_csf_update_firmware_memory(kbdev, config->address, 1);
-		return 0;
-	}
-
-	return -ENOENT;
-}
-#endif
-
 int kbase_csf_firmware_cfg_fw_wa_init(struct kbase_device *kbdev)
 {
 	int ret;
@@ -432,17 +388,17 @@ int kbase_csf_firmware_cfg_fw_wa_init(struct kbase_device *kbdev)
 	if (entry_count == -EINVAL || entry_count == -ENODATA)
 		return 0;
 
-	entry_bytes = entry_count * sizeof(u32);
+	entry_bytes = (size_t)entry_count * sizeof(u32);
 	kbdev->csf.quirks_ext = kzalloc(entry_bytes, GFP_KERNEL);
 	if (!kbdev->csf.quirks_ext)
 		return -ENOMEM;
 
 	ret = of_property_read_u32_array(kbdev->dev->of_node, "quirks-ext", kbdev->csf.quirks_ext,
-					 entry_count);
+					 (size_t)entry_count);
 
 	if (ret == -EINVAL)
 		ret = of_property_read_u32_array(kbdev->dev->of_node, "quirks_ext",
-						 kbdev->csf.quirks_ext, entry_count);
+						 kbdev->csf.quirks_ext, (size_t)entry_count);
 
 	if (ret == -EINVAL || ret == -ENODATA) {
 		/* This is unexpected since the property is already accessed for counting the number
@@ -481,13 +437,6 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 {
 	return 0;
 }
-
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-int kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails(struct kbase_device *kbdev)
-{
-	return 0;
-}
-#endif
 
 int kbase_csf_firmware_cfg_fw_wa_enable(struct kbase_device *kbdev)
 {

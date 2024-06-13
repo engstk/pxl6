@@ -29,6 +29,8 @@
 
 #include "mali_kbase_js_defs.h"
 
+#include <linux/version_compat_defs.h>
+
 /* Dump Job slot trace on error (only active if KBASE_KTRACE_ENABLE != 0) */
 #define KBASE_KTRACE_DUMP_ON_JOB_SLOT_ERROR 1
 
@@ -39,7 +41,7 @@
  * the GPU actually being reset to give other contexts time for their jobs
  * to be soft-stopped and removed from the hardware before resetting.
  */
-#define ZAP_TIMEOUT             1000
+#define ZAP_TIMEOUT 1000
 
 /*
  * Prevent soft-stops from occurring in scheduling situations
@@ -70,37 +72,37 @@
 #define KBASE_DISABLE_SCHEDULING_HARD_STOPS 0
 
 /* Atom has been previously soft-stopped */
-#define KBASE_KATOM_FLAG_BEEN_SOFT_STOPPED (1<<1)
+#define KBASE_KATOM_FLAG_BEEN_SOFT_STOPPED (1U << 1)
 /* Atom has been previously retried to execute */
-#define KBASE_KATOM_FLAGS_RERUN (1<<2)
+#define KBASE_KATOM_FLAGS_RERUN (1U << 2)
 /* Atom submitted with JOB_CHAIN_FLAG bit set in JS_CONFIG_NEXT register, helps
  * to disambiguate short-running job chains during soft/hard stopping of jobs
  */
-#define KBASE_KATOM_FLAGS_JOBCHAIN (1<<3)
+#define KBASE_KATOM_FLAGS_JOBCHAIN (1U << 3)
 /* Atom has been previously hard-stopped. */
-#define KBASE_KATOM_FLAG_BEEN_HARD_STOPPED (1<<4)
+#define KBASE_KATOM_FLAG_BEEN_HARD_STOPPED (1U << 4)
 /* Atom has caused us to enter disjoint state */
-#define KBASE_KATOM_FLAG_IN_DISJOINT (1<<5)
+#define KBASE_KATOM_FLAG_IN_DISJOINT (1U << 5)
 /* Atom blocked on cross-slot dependency */
-#define KBASE_KATOM_FLAG_X_DEP_BLOCKED (1<<7)
+#define KBASE_KATOM_FLAG_X_DEP_BLOCKED (1U << 7)
 /* Atom has fail dependency on cross-slot dependency */
-#define KBASE_KATOM_FLAG_FAIL_BLOCKER (1<<8)
+#define KBASE_KATOM_FLAG_FAIL_BLOCKER (1U << 8)
 /* Atom is currently in the list of atoms blocked on cross-slot dependencies */
-#define KBASE_KATOM_FLAG_JSCTX_IN_X_DEP_LIST (1<<9)
+#define KBASE_KATOM_FLAG_JSCTX_IN_X_DEP_LIST (1U << 9)
 /* Atom requires GPU to be in protected mode */
-#define KBASE_KATOM_FLAG_PROTECTED (1<<11)
+#define KBASE_KATOM_FLAG_PROTECTED (1U << 11)
 /* Atom has been stored in runnable_tree */
-#define KBASE_KATOM_FLAG_JSCTX_IN_TREE (1<<12)
+#define KBASE_KATOM_FLAG_JSCTX_IN_TREE (1U << 12)
 /* Atom is waiting for L2 caches to power up in order to enter protected mode */
-#define KBASE_KATOM_FLAG_HOLDING_L2_REF_PROT (1<<13)
+#define KBASE_KATOM_FLAG_HOLDING_L2_REF_PROT (1U << 13)
 /* Atom is part of a simple graphics frame. Only applies to fragment atoms.
  * See &jd_mark_simple_gfx_frame_atoms for more info.
  */
-#define KBASE_KATOM_FLAG_SIMPLE_FRAME_FRAGMENT (1 << 14)
+#define KBASE_KATOM_FLAG_SIMPLE_FRAME_FRAGMENT (1U << 14)
 /* Atom can be deferred until the GPU is powered on by another event. Only
  * applies to vertex atoms. See &jd_mark_simple_gfx_frame_atoms for more info.
  */
-#define KBASE_KATOM_FLAG_DEFER_WHILE_POWEROFF (1 << 15)
+#define KBASE_KATOM_FLAG_DEFER_WHILE_POWEROFF (1U << 15)
 
 /* SW related flags about types of JS_COMMAND action
  * NOTE: These must be masked off by JS_COMMAND_MASK
@@ -110,7 +112,7 @@
 #define JS_COMMAND_SW_CAUSES_DISJOINT 0x100
 
 /* Bitmask of all SW related flags */
-#define JS_COMMAND_SW_BITS  (JS_COMMAND_SW_CAUSES_DISJOINT)
+#define JS_COMMAND_SW_BITS (JS_COMMAND_SW_CAUSES_DISJOINT)
 
 #if (JS_COMMAND_SW_BITS & JS_COMMAND_MASK)
 #error "JS_COMMAND_SW_BITS not masked off by JS_COMMAND_MASK." \
@@ -120,8 +122,7 @@
 /* Soft-stop command that causes a Disjoint event. This of course isn't
  * entirely masked off by JS_COMMAND_MASK
  */
-#define JS_COMMAND_SOFT_STOP_WITH_SW_DISJOINT \
-		(JS_COMMAND_SW_CAUSES_DISJOINT | JS_COMMAND_SOFT_STOP)
+#define JS_COMMAND_SOFT_STOP_WITH_SW_DISJOINT (JS_COMMAND_SW_CAUSES_DISJOINT | JS_COMMAND_SOFT_STOP)
 
 #define KBASEP_ATOM_ID_INVALID BASE_JD_ATOM_COUNT
 
@@ -140,6 +141,9 @@
  * @JM_DEFAULT_JS_FREE_TIMEOUT: Maximum timeout to wait for JS_COMMAND_NEXT
  *                              to be updated on HW side so a Job Slot is
  *                              considered free.
+ * @KBASE_PRFCNT_ACTIVE_TIMEOUT: Waiting time for prfcnt to be ready.
+ * @KBASE_CLEAN_CACHE_TIMEOUT: Waiting time for cache flush to complete.
+ * @KBASE_AS_INACTIVE_TIMEOUT: Waiting time for MCU address space to become inactive.
  * @KBASE_TIMEOUT_SELECTOR_COUNT: Number of timeout selectors.
  * @KBASE_DEFAULT_TIMEOUT: Fallthrough in case an invalid timeout is
  *                         passed.
@@ -147,7 +151,9 @@
 enum kbase_timeout_selector {
 	MMU_AS_INACTIVE_WAIT_TIMEOUT,
 	JM_DEFAULT_JS_FREE_TIMEOUT,
-
+	KBASE_PRFCNT_ACTIVE_TIMEOUT,
+	KBASE_CLEAN_CACHE_TIMEOUT,
+	KBASE_AS_INACTIVE_TIMEOUT,
 	/* Must be the last in the enum */
 	KBASE_TIMEOUT_SELECTOR_COUNT,
 	KBASE_DEFAULT_TIMEOUT = JM_DEFAULT_JS_FREE_TIMEOUT
@@ -173,7 +179,6 @@ enum kbase_timeout_selector {
  *                  for the faulty atom.
  */
 struct base_job_fault_event {
-
 	u32 event_code;
 	struct kbase_jd_atom *katom;
 	struct work_struct job_fault_work;
@@ -213,8 +218,7 @@ kbase_jd_katom_dep_atom(const struct kbase_jd_atom_dependency *dep)
  *
  * Return: the type of dependency there is on the dependee atom.
  */
-static inline u8 kbase_jd_katom_dep_type(
-		const struct kbase_jd_atom_dependency *dep)
+static inline u8 kbase_jd_katom_dep_type(const struct kbase_jd_atom_dependency *dep)
 {
 	return dep->dep_type;
 }
@@ -226,9 +230,8 @@ static inline u8 kbase_jd_katom_dep_type(
  * @a:            pointer to the dependee atom.
  * @type:         type of dependency there is on the dependee atom.
  */
-static inline void kbase_jd_katom_dep_set(
-		const struct kbase_jd_atom_dependency *const_dep,
-		struct kbase_jd_atom *a, u8 type)
+static inline void kbase_jd_katom_dep_set(const struct kbase_jd_atom_dependency *const_dep,
+					  struct kbase_jd_atom *a, u8 type)
 {
 	struct kbase_jd_atom_dependency *dep;
 
@@ -243,8 +246,7 @@ static inline void kbase_jd_katom_dep_set(
  *
  * @const_dep:    pointer to the dependency info structure to be setup.
  */
-static inline void kbase_jd_katom_dep_clear(
-		const struct kbase_jd_atom_dependency *const_dep)
+static inline void kbase_jd_katom_dep_clear(const struct kbase_jd_atom_dependency *const_dep)
 {
 	struct kbase_jd_atom_dependency *dep;
 
@@ -539,13 +541,7 @@ struct kbase_jd_atom {
 		/* Use the functions/API defined in mali_kbase_fence.h to
 		 * when working with this sub struct
 		 */
-#if IS_ENABLED(CONFIG_SYNC_FILE)
-#if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
-		struct fence *fence_in;
-#else
 		struct dma_fence *fence_in;
-#endif
-#endif
 		/* This points to the dma-buf output fence for this atom. If
 		 * this is NULL then there is no fence for this atom and the
 		 * following fields related to dma_fence may have invalid data.
@@ -557,20 +553,12 @@ struct kbase_jd_atom {
 		 * regardless of the event_code of the katom (signal also on
 		 * failure).
 		 */
-#if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
-		struct fence *fence;
-#else
 		struct dma_fence *fence;
-#endif
 
 		/* This is the callback object that is registered for the fence_in.
 		 * The callback is invoked when the fence_in is signaled.
 		 */
-#if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
-		struct fence_cb fence_cb;
-#else
 		struct dma_fence_cb fence_cb;
-#endif
 		bool fence_cb_added;
 
 		unsigned int context;
@@ -635,8 +623,7 @@ struct kbase_jd_atom {
 	u32 age;
 };
 
-static inline bool kbase_jd_katom_is_protected(
-		const struct kbase_jd_atom *katom)
+static inline bool kbase_jd_katom_is_protected(const struct kbase_jd_atom *katom)
 {
 	return (bool)(katom->atom_flags & KBASE_KATOM_FLAG_PROTECTED);
 }
@@ -866,7 +853,7 @@ struct jsctx_queue {
  * @current_setup:     Stores the MMU configuration for this address space.
  */
 struct kbase_as {
-	int number;
+	unsigned int number;
 	struct workqueue_struct *pf_wq;
 	struct work_struct work_pagefault;
 	struct work_struct work_busfault;

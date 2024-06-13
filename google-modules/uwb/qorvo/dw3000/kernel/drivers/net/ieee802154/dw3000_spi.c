@@ -116,7 +116,7 @@ static int dw3000_spi_probe(struct spi_device *spi)
 	hrtimer_init(&dw->idle_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	dw->idle_timer.function = dw3000_idle_timeout;
 
-	dev_info(dw->dev, "Loading driver...06202023");
+	dev_info(dw->dev, "Loading driver...02162024");
 	dw3000_sysfs_init(dw);
 
 	/* Setup SPI parameters */

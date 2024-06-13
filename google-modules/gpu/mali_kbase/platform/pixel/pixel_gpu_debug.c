@@ -12,7 +12,6 @@
 /* Pixel integration includes */
 #include "pixel_gpu_debug.h"
 
-#define GPU_DBG_LO               0x00000FE8
 #define PIXEL_STACK_PDC_ADDR     0x000770DB
 #define PIXEL_CG_PDC_ADDR        0x000760DB
 #define PIXEL_SC_PDC_ADDR        0x000740DB
@@ -30,7 +29,7 @@ static bool gpu_debug_check_dbg_active(struct kbase_device *kbdev)
 
 	/* Wait for the active bit to drop, indicating the DBG command completed */
 	do {
-		val = kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_STATUS));
+		val = kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_STATUS));
 	} while ((val & GPU_DBG_ACTIVE_BIT) && i++ < GPU_DBG_ACTIVE_MAX_LOOPS);
 
 	if (val & GPU_DBG_ACTIVE_BIT) {
@@ -48,13 +47,13 @@ static u32 gpu_debug_read_pdc(struct kbase_device *kbdev, u32 pdc_offset)
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
 	/* Write the debug command */
-	kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_COMMAND), pdc_offset);
+	kbase_reg_write32(kbdev, GPU_CONTROL_ENUM(GPU_COMMAND), pdc_offset);
 	/* Wait for the debug command to complete */
 	if (!gpu_debug_check_dbg_active(kbdev))
 		return GPU_DBG_INVALID;
 
 	/* Read the result */
-	return kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_DBG_LO));
+	return kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_DBG));
 }
 
 static void gpu_debug_read_sparse_pdcs(struct kbase_device *kbdev, u32 *out, u64 available,
@@ -76,8 +75,7 @@ static void gpu_debug_read_sparse_pdcs(struct kbase_device *kbdev, u32 *out, u64
 
 void gpu_debug_read_pdc_status(struct kbase_device *kbdev, struct pixel_gpu_pdc_status *status)
 {
-	struct gpu_raw_gpu_props *raw_props;
-
+	struct kbase_gpu_props *raw_props;
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
 	status->meta = (struct pixel_gpu_pdc_status_metadata) {
@@ -93,7 +91,7 @@ void gpu_debug_read_pdc_status(struct kbase_device *kbdev, struct pixel_gpu_pdc_
 		return;
 	}
 
-	raw_props = &kbdev->gpu_props.props.raw_props;
+	raw_props = &kbdev->gpu_props;
 
 	status->state.core_group = gpu_debug_read_pdc(kbdev, PIXEL_CG_PDC_ADDR);
 	gpu_debug_read_sparse_pdcs(kbdev, status->state.shader_cores, raw_props->shader_present,

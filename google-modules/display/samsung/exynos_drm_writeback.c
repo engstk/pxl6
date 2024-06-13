@@ -25,6 +25,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_modeset_helper_vtables.h>
@@ -539,7 +540,11 @@ static int writeback_bind(struct device *dev, struct device *master, void *data)
 static void
 writeback_unbind(struct device *dev, struct device *master, void *data)
 {
+	struct writeback_device *wb = dev_get_drvdata(dev);
+	struct drm_connector *connector = &wb->writeback.base;
+
 	pr_debug("%s +\n", __func__);
+	drm_connector_cleanup(connector);
 	pr_debug("%s -\n", __func__);
 }
 

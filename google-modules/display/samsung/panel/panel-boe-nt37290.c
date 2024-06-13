@@ -730,9 +730,8 @@ static bool nt37290_change_frequency(struct exynos_panel *ctx,
 	ctx->panel_idle_vrefresh = ctx->self_refresh_active ? spanel->hw_idle_vrefresh : 0;
 
 	if (updated) {
-		backlight_state_changed(ctx->bl);
+		notify_panel_mode_changed(ctx, false);
 		te2_state_changed(ctx->bl);
-
 		dev_dbg(ctx->dev, "change to %dHz, idle %s, was_lp_mode %d\n",
 			vrefresh, idle_active ? "active" : "deactive", was_lp_mode);
 	}
@@ -772,7 +771,7 @@ static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
 	if (pmode->exynos_mode.is_lp_mode) {
 		/* set 10Hz while self refresh is active, otherwise clear it */
 		ctx->panel_idle_vrefresh = enable ? 10 : 0;
-		backlight_state_changed(ctx->bl);
+		notify_panel_mode_changed(ctx, true);
 		return false;
 	}
 
@@ -1583,6 +1582,14 @@ static const u32 nt37290_bl_range[] = {
 	94, 180, 270, 360, 3584
 };
 
+static const int nt37290_vrefresh_range[] = {
+	10, 30, 60, 120
+};
+
+static const int nt37290_lp_vrefresh_range[] = {
+	10, 30
+};
+
 /* Truncate 8-bit signed value to 6-bit signed value */
 #define TO_6BIT_SIGNED(v) (v & 0x3F)
 
@@ -1900,9 +1907,13 @@ const struct exynos_panel_desc boe_nt37290 = {
 	.bl_num_ranges = ARRAY_SIZE(nt37290_bl_range),
 	.modes = nt37290_modes,
 	.num_modes = ARRAY_SIZE(nt37290_modes),
+	.vrefresh_range = nt37290_vrefresh_range,
+	.vrefresh_range_count = ARRAY_SIZE(nt37290_vrefresh_range),
 	.off_cmd_set = &nt37290_off_cmd_set,
 	.lp_mode = nt37290_lp_modes,
 	.lp_mode_count = ARRAY_SIZE(nt37290_lp_modes),
+	.lp_vrefresh_range = nt37290_lp_vrefresh_range,
+	.lp_vrefresh_range_count = ARRAY_SIZE(nt37290_lp_vrefresh_range),
 	.lp_cmd_set = &nt37290_lp_cmd_set,
 	.binned_lp = nt37290_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(nt37290_binned_lp),

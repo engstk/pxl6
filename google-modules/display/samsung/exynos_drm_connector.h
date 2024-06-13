@@ -202,6 +202,7 @@ struct exynos_drm_connector_funcs {
 				   const struct exynos_drm_connector_state *exynos_state,
 				   struct drm_property *property,
 				   uint64_t *val);
+	int (*late_register)(struct exynos_drm_connector *exynos_connector);
 };
 
 struct exynos_drm_connector_helper_funcs {

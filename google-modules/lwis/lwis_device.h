@@ -55,10 +55,7 @@
  * Once the flush is complete, the client will transition back
  * to NOT_FLUSHING state.
  */
-enum lwis_client_flush_state {
-	NOT_FLUSHING = 0,
-	FLUSHING
-};
+enum lwis_client_flush_state { NOT_FLUSHING, FLUSHING };
 
 /* Forward declaration for lwis_device. This is needed for the declaration for
    lwis_device_subclass_operations data struct. */
@@ -450,5 +447,19 @@ void lwis_save_register_io_info(struct lwis_device *lwis_dev, struct lwis_io_ent
  * periodic io queue on the transaction thread
  */
 void lwis_process_worker_queue(struct lwis_client *client);
+
+/*
+ * lwis_queue_device_worker:
+ * Function to queue periodic or transaction work on the device
+ * worker.
+ */
+void lwis_queue_device_worker(struct lwis_client *client);
+
+/*
+ * lwis_flush_device_worker:
+ * Function to flush periodic or transaction work from the device
+ * worker.
+ */
+void lwis_flush_device_worker(struct lwis_client *client);
 
 #endif /* LWIS_DEVICE_H_ */

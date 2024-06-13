@@ -67,6 +67,17 @@ enum max17x0x_reg_tags {
 	MAX17X0X_TAG_BCEA,
 	MAX17X0X_TAG_rset,
 	MAX17X0X_TAG_BRES,
+
+	MAXFG_TAG_fcnom,
+	MAXFG_TAG_dpacc,
+	MAXFG_TAG_dqacc,
+	MAXFG_TAG_fcrep,
+	MAXFG_TAG_repsoc,
+	MAXFG_TAG_msoc,
+	MAXFG_TAG_learn,
+	MAXFG_TAG_rcomp0,
+	MAXFG_TAG_tempco,
+	MAXFG_TAG_fstat,
 };
 
 enum max17x0x_reg_types {
@@ -138,6 +149,41 @@ struct max17x0x_regmap {
 	struct max17x0x_regtags regtags;
 	struct max17x0x_reglog *reglog;
 };
+
+static inline const struct max17x0x_reg *max17x0x_find_by_index(struct max17x0x_regtags *tags,
+							  int index)
+{
+	if (index < 0 || !tags || index >= tags->max)
+		return NULL;
+
+	return &tags->map[index];
+}
+
+static inline const struct max17x0x_reg *max17x0x_find_by_tag(struct max17x0x_regmap *map,
+								enum max17x0x_reg_tags tag)
+{
+	return max17x0x_find_by_index(&map->regtags, tag);
+}
+
+static inline int max17x0x_reg_read(struct max17x0x_regmap *map,
+				    enum max17x0x_reg_tags tag,
+				    u16 *val)
+{
+	const struct max17x0x_reg *reg;
+	unsigned int tmp;
+	int rtn;
+
+	reg = max17x0x_find_by_tag(map, tag);
+	if (!reg)
+		return -EINVAL;
+
+	rtn = regmap_read(map->regmap, reg->reg, &tmp);
+	if (rtn == 0)
+		*val = tmp;
+
+	return rtn;
+}
+
 
 int max1720x_get_capacity(struct i2c_client *client, int *iic_raw);
 int max1720x_get_voltage_now(struct i2c_client *client, int *iic_raw);

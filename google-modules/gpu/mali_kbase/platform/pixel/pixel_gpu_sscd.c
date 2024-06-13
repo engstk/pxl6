@@ -332,7 +332,7 @@ static int get_and_init_contexts(struct kbase_device *kbdev,
 
 	context_snapshot->meta = (struct pixel_context_metadata) {
 		.magic = "c@tx",
-		.platform = kbdev->gpu_props.props.raw_props.gpu_id,
+		.platform = kbdev->gpu_props.gpu_id.product_id,
 		.version = 1,
 	};
 
