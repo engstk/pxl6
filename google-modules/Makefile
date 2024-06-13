@@ -21,6 +21,6 @@ obj-y += power/reset/
 obj-y += touch/common/
 obj-y += touch/fts/ftm5/
 obj-y += touch/sec/
-obj-y += uwb/kernel/
+obj-y += uwb/qorvo/dw3000/kernel/
 obj-y += video/gchips/
 obj-y += wlan/bcmdhd4389/
