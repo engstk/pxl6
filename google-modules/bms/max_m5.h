@@ -42,10 +42,17 @@
 #define MAX_M5_TCURVE	0xB9
 #define MAX_M5_VFSOC	0xFF
 
+#define MAX_M5_COMMAND	0x60
+#define MAX_M5_COMMAND_HARDWARE_RESET 0x000F
+
 /* model version */
 #define MAX_M5_INVALID_VERSION	-1
 
+#define MAX_M5_RECAL_MAX_ROUNDS	3
+
 #define MAX_M5_RETRY_TIMES 	3
+
+#define MAX_M5_COTRIM	0xEB
 
 /** ------------------------------------------------------------------------ */
 
@@ -103,6 +110,14 @@ struct model_state_save {
 	u8 crc;
 } __attribute__((packed));
 
+struct max_m5_recalibration_data {
+	int state;
+	int rounds;
+	int base_cycle_reg;
+	u16 target_cap;
+	struct mutex lock;
+};
+
 struct max_m5_data {
 	struct device *dev;
 	struct max17x0x_regmap *regmap;
@@ -122,6 +137,20 @@ struct max_m5_data {
 
 	/* to/from GMSR */
 	struct model_state_save model_save;
+
+	/* recalibration */
+	struct max_m5_recalibration_data recal;
+};
+
+enum max_m5_re_cal_state {
+	RE_CAL_STATE_IDLE = 0,
+	RE_CAL_STATE_FG_RESET = 1,
+	RE_CAL_STATE_LEARNING = 2,
+};
+
+enum max_m5_re_cal_algo {
+	RE_CAL_ALGO_0 = 0,
+	RE_CAL_ALGO_1 = 1,
 };
 
 /** ------------------------------------------------------------------------ */
@@ -130,7 +159,14 @@ int max_m5_model_read_version(const struct max_m5_data *m5_data);
 int max_m5_model_get_cap_lsb(const struct max_m5_data *m5_data);
 int max_m5_reset_state_data(struct max_m5_data *m5_data);
 int max_m5_needs_reset_model_data(const struct max_m5_data *m5_data);
+int max_m5_recal_state(const struct max_m5_data *m5_data);
+int max_m5_recal_cycle(const struct max_m5_data *m5_data);
+int max_m5_recalibration(struct max_m5_data *m5_data, int algo, u16 cap);
+int max_m5_check_recal_state(struct max_m5_data *m5_data, int algo, u16 eeprom_cycle);
+int m5_init_custom_parameters(struct device *dev, struct max_m5_data *m5_data,
+			      struct device_node *node);
 int max_m5_get_designcap(const struct max_m5_data *m5_data);
+int max_m5_model_lock(struct regmap *regmap, bool enabled);
 
 /*
  * max_m5 might use the low 8 bits of devname to keep the model version number
@@ -175,7 +211,7 @@ int max_m5_regmap_init(struct max17x0x_regmap *regmap,
 
 void *max_m5_init_data(struct device *dev, struct device_node *batt_node,
 		       struct max17x0x_regmap *regmap);
-void max_m5_free_data(void *data);
+void max_m5_free_data(struct max_m5_data *m5_data);
 
 int max_m5_load_state_data(struct max_m5_data *m5_data);
 int max_m5_save_state_data(struct max_m5_data *m5_data);

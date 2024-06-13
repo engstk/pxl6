@@ -25,6 +25,7 @@
 
 #include <linux/clk.h>
 #include <linux/console.h>
+#include <linux/errno.h>
 #include <linux/gpio/consumer.h>
 #include <linux/irq.h>
 #include <linux/of_address.h>
@@ -548,32 +549,20 @@ static void dsim_encoder_disable(struct drm_encoder *encoder, struct drm_atomic_
 	DPU_ATRACE_END(__func__);
 }
 
-static void dsim_modes_release(struct dsim_pll_params *pll_params)
-{
-	if (pll_params->params) {
-		unsigned int i;
-
-		for (i = 0; i < pll_params->num_modes; i++)
-			kfree(pll_params->params[i]);
-		kfree(pll_params->params);
-	}
-	kfree(pll_params->features);
-
-	kfree(pll_params);
-}
-
 static struct dsim_pll_param *
 dsim_get_clock_mode(const struct dsim_device *dsim,
 		    const struct drm_display_mode *mode)
 {
 	int i;
-	const struct dsim_pll_params *pll_params = dsim->pll_params;
 	const size_t mlen = strnlen(mode->name, DRM_DISPLAY_MODE_LEN);
 	struct dsim_pll_param *ret = NULL;
 	size_t plen;
 
-	for (i = 0; i < pll_params->num_modes; i++) {
-		struct dsim_pll_param *p = pll_params->params[i];
+	if (!dsim->pll_params || !dsim->pll_params->num_modes)
+		return NULL;
+
+	for (i = 0; i < dsim->pll_params->num_modes; i++) {
+		struct dsim_pll_param *p = dsim->pll_params->params[i];
 
 		plen = strnlen(p->name, DRM_DISPLAY_MODE_LEN);
 
@@ -704,7 +693,7 @@ static struct dsim_pll_features *dsim_of_get_pll_features(
 	u32 range32[2];
 	struct dsim_pll_features *pll_features;
 
-	pll_features = kzalloc(sizeof(*pll_features), GFP_KERNEL);
+	pll_features = devm_kzalloc(dsim->dev, sizeof(*pll_features), GFP_KERNEL);
 	if (!pll_features)
 		return NULL;
 
@@ -793,38 +782,38 @@ static struct dsim_pll_params *dsim_of_get_clock_mode(struct dsim_device *dsim)
 	mode_np = of_get_child_by_name(np, "dsim-modes");
 	if (!mode_np) {
 		dsim_err(dsim, "%pOF: could not find dsim-modes node\n", np);
-		goto getnode_fail;
+		goto err_put_np;
 	}
 
-	pll_params = kzalloc(sizeof(*pll_params), GFP_KERNEL);
+	pll_params = devm_kzalloc(dsim->dev, sizeof(*pll_params), GFP_KERNEL);
 	if (!pll_params)
-		goto getmode_fail;
+		goto err_put_mode_np;
 
 	entry = of_get_next_child(mode_np, NULL);
 	if (!entry) {
 		dsim_err(dsim, "could not find child node of dsim-modes");
-		goto getchild_fail;
+		goto err_put_mode_np;
 	}
 
 	pll_params->num_modes = of_get_child_count(mode_np);
 	if (pll_params->num_modes == 0) {
 		dsim_err(dsim, "%pOF: no modes specified\n", np);
-		goto getchild_fail;
+		goto err_put_mode_np;
 	}
 
-	pll_params->params = kzalloc(sizeof(struct dsim_pll_param *) *
+	pll_params->params = devm_kcalloc(dsim->dev, sizeof(struct dsim_pll_param *),
 				pll_params->num_modes, GFP_KERNEL);
 	if (!pll_params->params)
-		goto getchild_fail;
+		goto err_put_mode_np;
 
 	pll_params->num_modes = 0;
 
 	for_each_child_of_node(mode_np, entry) {
 		struct dsim_pll_param *pll_param;
 
-		pll_param = kzalloc(sizeof(*pll_param), GFP_KERNEL);
+		pll_param = devm_kzalloc(dsim->dev, sizeof(*pll_param), GFP_KERNEL);
 		if (!pll_param)
-			goto getpll_fail;
+			goto err_put_entry;
 
 		if (dsim_of_parse_modes(entry, pll_param) < 0) {
 			kfree(pll_param);
@@ -843,13 +832,11 @@ static struct dsim_pll_params *dsim_of_get_clock_mode(struct dsim_device *dsim)
 
 	return pll_params;
 
-getpll_fail:
+err_put_entry:
 	of_node_put(entry);
-getchild_fail:
-	dsim_modes_release(pll_params);
-getmode_fail:
+err_put_mode_np:
 	of_node_put(mode_np);
-getnode_fail:
+err_put_np:
 	of_node_put(np);
 	return NULL;
 }
@@ -1099,7 +1086,7 @@ static void dsim_set_display_mode(struct dsim_device *dsim,
 {
 	struct dsim_device *sec_dsi;
 
-	if (!dsim->dsi_device)
+	if (IS_ERR_OR_NULL(dsim->dsi_device))
 		return;
 
 	mutex_lock(&dsim->state_lock);
@@ -1389,6 +1376,42 @@ static int dsim_parse_panel_name(struct dsim_device *dsim)
 	return -ENODEV;
 }
 
+static int dsim_attach_bridge(struct dsim_device *dsim)
+{
+	struct drm_bridge *bridge;
+	struct device_node *np;
+	int ret;
+
+	np = dsim->dsi_device->dev.of_node;
+	if (!np)
+		return -ENOENT;
+
+	bridge = of_drm_find_bridge(np);
+	if (!bridge) {
+		struct drm_panel *panel;
+
+		panel = of_drm_find_panel(np);
+		if (IS_ERR(panel)) {
+			dsim_err(dsim, "failed to find panel\n");
+			return PTR_ERR(panel);
+		}
+
+		bridge = devm_drm_panel_bridge_add_typed(dsim->dev, panel, DRM_MODE_CONNECTOR_DSI);
+		if (IS_ERR(bridge)) {
+			dsim_err(dsim, "failed to create panel bridge\n");
+			return PTR_ERR(bridge);
+		}
+	}
+
+	ret = drm_bridge_attach(&dsim->encoder, bridge, NULL, 0);
+	if (ret)
+		dsim_err(dsim, "Unable to attach panel bridge\n");
+	else
+		dsim->panel_bridge = bridge;
+
+	return ret;
+}
+
 static int dsim_bind(struct device *dev, struct device *master, void *data)
 {
 	struct drm_encoder *encoder = dev_get_drvdata(dev);
@@ -1398,8 +1421,18 @@ static int dsim_bind(struct device *dev, struct device *master, void *data)
 
 	dsim_debug(dsim, "%s +\n", __func__);
 
+	/* ignore bind calls for dual dsi */
 	if (dsim->dual_dsi == DSIM_DUAL_DSI_SEC)
 		return 0;
+
+	if (!dsim->dsi_device) {
+		return -EPROBE_DEFER;
+	} else if (IS_ERR(dsim->dsi_device)) {
+		int ret = PTR_ERR(dsim->dsi_device);
+
+		/* ignore cases where there's no dsi device to be attached */
+		return ret == -ENODEV ? 0 : ret;
+	}
 
 	drm_encoder_init(drm_dev, encoder, &dsim_encoder_funcs,
 			 DRM_MODE_ENCODER_DSI, NULL);
@@ -1413,7 +1446,7 @@ static int dsim_bind(struct device *dev, struct device *master, void *data)
 		return -ENOTSUPP;
 	}
 
-	ret = mipi_dsi_host_register(&dsim->dsi_host);
+	ret = dsim_attach_bridge(dsim);
 
 	dsim_debug(dsim, "%s -\n", __func__);
 
@@ -1427,13 +1460,9 @@ static void dsim_unbind(struct device *dev, struct device *master,
 	struct dsim_device *dsim = encoder_to_dsim(encoder);
 
 	dsim_debug(dsim, "%s +\n", __func__);
-	if (dsim->pll_params)
-		dsim_modes_release(dsim->pll_params);
 
 	if (dsim->dual_dsi == DSIM_DUAL_DSI_SEC)
 		return;
-
-	mipi_dsi_host_unregister(&dsim->dsi_host);
 }
 
 static const struct component_ops dsim_component_ops = {
@@ -1780,41 +1809,11 @@ static int dsim_host_attach(struct mipi_dsi_host *host,
 				  struct mipi_dsi_device *device)
 {
 	struct dsim_device *dsim = host_to_dsi(host);
-	struct drm_bridge *bridge;
 	int ret;
 
 	dsim_debug(dsim, "%s +\n", __func__);
 
-	bridge = of_drm_find_bridge(device->dev.of_node);
-	if (!bridge) {
-		struct drm_panel *panel;
-
-		panel = of_drm_find_panel(device->dev.of_node);
-		if (IS_ERR(panel)) {
-			dsim_err(dsim, "failed to find panel\n");
-			return PTR_ERR(panel);
-		}
-
-		bridge = devm_drm_panel_bridge_add_typed(host->dev, panel,
-						   DRM_MODE_CONNECTOR_DSI);
-		if (IS_ERR(bridge)) {
-			dsim_err(dsim, "failed to create panel bridge\n");
-			return PTR_ERR(bridge);
-		}
-	}
-
-	if (IS_ERR_OR_NULL(dsim->encoder.dev)) {
-		dsim_err(dsim, "encoder is not initialized\n");
-		return PTR_ERR(dsim->encoder.dev);
-	}
-
-	ret = drm_bridge_attach(&dsim->encoder, bridge, NULL, 0);
-	if (ret) {
-		dsim_err(dsim, "Unable to attach panel bridge\n");
-	} else {
-		dsim->panel_bridge = bridge;
-		dsim->dsi_device = device;
-	}
+	dsim->dsi_device = device;
 
 	ret = sysfs_create_link(&device->dev.kobj, &host->dev->kobj, "dsim");
 	if (ret)
@@ -1822,7 +1821,7 @@ static int dsim_host_attach(struct mipi_dsi_host *host,
 
 	dsim_debug(dsim, "%s -\n", __func__);
 
-	return ret;
+	return component_add(dsim->dev, &dsim_component_ops);
 }
 
 static int dsim_host_detach(struct mipi_dsi_host *host,
@@ -1832,7 +1831,9 @@ static int dsim_host_detach(struct mipi_dsi_host *host,
 
 	dsim_info(dsim, "%s +\n", __func__);
 
-	_dsim_disable(dsim);
+	if (dsim->state != DSIM_STATE_HANDOVER)
+		_dsim_disable(dsim);
+
 	if (dsim->panel_bridge) {
 		struct drm_bridge *bridge = dsim->panel_bridge;
 
@@ -2733,25 +2734,45 @@ static int dsim_probe(struct platform_device *pdev)
 		dsim_warn(dsim, "idle ip index is not provided\n");
 	exynos_update_ip_idle_status(dsim->idle_ip_index, 1);
 #endif
-	dsim->state = DSIM_STATE_HANDOVER;
 
 	/* parse the panel name to select the dsi device for the detected panel */
-	dsim_parse_panel_name(dsim);
+	ret = dsim_parse_panel_name(dsim);
+	if (ret) {
+		dsim->state = DSIM_STATE_MISSING;
+	} else {
+		dsim->state = DSIM_STATE_HANDOVER;
 
-	// TODO: get which panel is active from bootloader?
+		// TODO: get which panel is active from bootloader?
 
-	pm_runtime_use_autosuspend(dsim->dev);
-	pm_runtime_set_autosuspend_delay(dsim->dev, 20);
-	pm_runtime_enable(dsim->dev);
+		pm_runtime_use_autosuspend(dsim->dev);
+		pm_runtime_set_autosuspend_delay(dsim->dev, 20);
+		pm_runtime_enable(dsim->dev);
 
-	if (!IS_ENABLED(CONFIG_BOARD_EMULATOR)) {
-		phy_init(dsim->res.phy);
-		if (dsim->res.phy_ex)
-			phy_init(dsim->res.phy_ex);
+		if (!IS_ENABLED(CONFIG_BOARD_EMULATOR)) {
+			phy_init(dsim->res.phy);
+			if (dsim->res.phy_ex)
+				phy_init(dsim->res.phy_ex);
+		}
+	}
+
+	if (dsim->state == DSIM_STATE_MISSING || dsim->dual_dsi == DSIM_DUAL_DSI_SEC) {
+		dsim->dsi_device = ERR_PTR(-ENODEV);
+
+		ret = component_add(dsim->dev, &dsim_component_ops);
+		if (ret < 0) {
+			dsim_err(dsim, "unable to add dsim component\n");
+			goto err;
+		}
+	} else {
+		ret = mipi_dsi_host_register(&dsim->dsi_host);
+		if (ret) {
+			dsim_err(dsim, "unable to register dsi host\n");
+			goto err;
+		}
 	}
 
 	dsim_info(dsim, "driver has been probed.\n");
-	return component_add(dsim->dev, &dsim_component_ops);
+	return 0;
 
 err:
 	dsim_err(dsim, "failed to probe exynos dsim driver\n");
@@ -2766,7 +2787,13 @@ static int dsim_remove(struct platform_device *pdev)
 	device_remove_file(dsim->dev, &dev_attr_hs_clock);
 	pm_runtime_disable(&pdev->dev);
 
-	component_del(&pdev->dev, &dsim_component_ops);
+	if (dsim->state == DSIM_STATE_MISSING || dsim->dual_dsi == DSIM_DUAL_DSI_SEC) {
+		component_del(&pdev->dev, &dsim_component_ops);
+	} else {
+		if (!IS_ERR_OR_NULL(dsim->dsi_device))
+			component_del(&pdev->dev, &dsim_component_ops);
+		mipi_dsi_host_unregister(&dsim->dsi_host);
+	}
 
 	iounmap(dsim->res.ss_reg_base);
 	iounmap(dsim->res.phy_regs_ex);

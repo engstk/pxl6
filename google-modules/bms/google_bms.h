@@ -456,6 +456,10 @@ __printf(5,6)
 void gbms_logbuffer_prlog(struct logbuffer *log, int level, int debug_no_logbuffer,
 			  int debug_printk_prlog, const char *f, ...);
 
+void gbms_logbuffer_devlog(struct logbuffer *log, struct device *dev, int level,
+			   int debug_no_logbuffer, int debug_printk_prlog,
+			   const char *f, ...);
+
 /* debug/print */
 const char *gbms_chg_type_s(int chg_type);
 const char *gbms_chg_status_s(int chg_status);
@@ -645,6 +649,18 @@ struct bhi_weight {
 	int w_sd;
 };
 
+enum bhi_fg_recalibration_mode {
+	REC_MODE_RESET = 0,
+	REC_MODE_BEST_TIME,
+	REC_MODE_IMMEDIATE,
+	REC_MODE_RESTART,
+};
+
+enum bhi_fg_recalibration_state {
+	REC_STATE_OK = 0,
+	REC_STATE_SCHEDULED,
+};
+
 /* Charging Speed */
 enum csi_type {
 	CSI_TYPE_UNKNOWN = -1,
@@ -743,5 +759,12 @@ static const struct file_operations name ## _fops = {	\
 	.write	= name ## _store,			\
 }
 
+
+/* trend point types */
+#define GBMS_TP_TRENDPOINTS   'T'
+#define GBMS_TP_LOWER_BOUND   'L'
+#define GBMS_TP_UPPER_BOUND   'U'
+#define GBMS_TP_LOWER_TRIGGER 'F'
+#define GBMS_TP_UPPER_TRIGGER 'C'
 
 #endif  /* __GOOGLE_BMS_H_ */

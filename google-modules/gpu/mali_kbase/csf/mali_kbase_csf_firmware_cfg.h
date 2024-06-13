@@ -70,22 +70,6 @@ int kbase_csf_firmware_cfg_option_entry_parse(struct kbase_device *kbdev,
 					      const struct kbase_csf_mcu_fw *const fw,
 					      const u32 *entry, unsigned int size, bool updatable);
 
-#ifdef CONFIG_MALI_HOST_CONTROLS_SC_RAILS
-/**
- * kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails() - Enable the config in FW to support
- *                                                      Host based control of SC power rails
- *
- * Look for the config entry that enables support in FW for the Host based
- * control of shader core power rails and set it before the intial boot
- * or reload of firmware.
- *
- * @kbdev:     Kbase device structure
- *
- * Return: 0 if successful, negative error code on failure
- */
-int kbase_csf_firmware_cfg_enable_host_ctrl_sc_rails(struct kbase_device *kbdev);
-#endif
-
 /**
  * kbase_csf_firmware_cfg_find_config_address() - Get a FW config option address
  *

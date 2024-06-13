@@ -56,8 +56,8 @@ enum kbase_mmu_fault_type {
 
 /**
  * struct kbase_mmu_hw_op_param  - parameters for kbase_mmu_hw_do_* functions
- * @vpfn:           MMU Virtual Page Frame Number to start the operation on.
- * @nr:             Number of pages to work on.
+ * @vpfn:           MMU Virtual Page Frame Number (in PAGE_SIZE units) to start the operation on.
+ * @nr:             Number of pages (in PAGE_SIZE units) to work on.
  * @op:             Operation type (written to AS_COMMAND).
  * @kctx_id:        Kernel context ID for MMU command tracepoint.
  * @mmu_sync_info:  Indicates whether this call is synchronous wrt MMU ops.
@@ -81,8 +81,7 @@ struct kbase_mmu_hw_op_param {
  * Configure the MMU using the address space details setup in the
  * kbase_context structure.
  */
-void kbase_mmu_hw_configure(struct kbase_device *kbdev,
-		struct kbase_as *as);
+void kbase_mmu_hw_configure(struct kbase_device *kbdev, struct kbase_as *as);
 
 /**
  * kbase_mmu_hw_do_lock - Issue LOCK command to the MMU and program
@@ -157,31 +156,12 @@ int kbase_mmu_hw_do_lock(struct kbase_device *kbdev, struct kbase_as *as,
  * Issue a flush operation on the address space as per the information
  * specified inside @op_param. This function should not be called for
  * GPUs where MMU command to flush the cache(s) is deprecated.
- * mmu_hw_mutex needs to be held when calling this function.
+ * hwaccess_lock needs to be held when calling this function.
  *
  * Return: 0 if the operation was successful, non-zero otherwise.
  */
 int kbase_mmu_hw_do_flush(struct kbase_device *kbdev, struct kbase_as *as,
 			  const struct kbase_mmu_hw_op_param *op_param);
-
-/**
- * kbase_mmu_hw_do_flush_locked - Issue a flush operation to the MMU.
- *
- * @kbdev:      Kbase device to issue the MMU operation on.
- * @as:         Address space to issue the MMU operation on.
- * @op_param:   Pointer to struct containing information about the MMU
- *              operation to perform.
- *
- * Issue a flush operation on the address space as per the information
- * specified inside @op_param. This function should not be called for
- * GPUs where MMU command to flush the cache(s) is deprecated.
- * Both mmu_hw_mutex and hwaccess_lock need to be held when calling this
- * function.
- *
- * Return: 0 if the operation was successful, non-zero otherwise.
- */
-int kbase_mmu_hw_do_flush_locked(struct kbase_device *kbdev, struct kbase_as *as,
-				 const struct kbase_mmu_hw_op_param *op_param);
 
 /**
  * kbase_mmu_hw_do_flush_on_gpu_ctrl - Issue a flush operation to the MMU.
@@ -210,7 +190,7 @@ int kbase_mmu_hw_do_flush_on_gpu_ctrl(struct kbase_device *kbdev, struct kbase_a
  * Clear a bus error or page fault that has been reported by the MMU.
  */
 void kbase_mmu_hw_clear_fault(struct kbase_device *kbdev, struct kbase_as *as,
-		enum kbase_mmu_fault_type type);
+			      enum kbase_mmu_fault_type type);
 
 /**
  * kbase_mmu_hw_enable_fault - Enable fault that has been previously reported by
@@ -224,6 +204,6 @@ void kbase_mmu_hw_clear_fault(struct kbase_device *kbdev, struct kbase_as *as,
  * called to enable the page fault or bus error fault again.
  */
 void kbase_mmu_hw_enable_fault(struct kbase_device *kbdev, struct kbase_as *as,
-		enum kbase_mmu_fault_type type);
+			       enum kbase_mmu_fault_type type);
 
-#endif	/* _KBASE_MMU_HW_H_ */
+#endif /* _KBASE_MMU_HW_H_ */

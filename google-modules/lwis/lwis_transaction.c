@@ -13,11 +13,9 @@
 #include "lwis_transaction.h"
 
 #include <linux/delay.h>
-#include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/preempt.h>
 #include <linux/slab.h>
-#include <linux/workqueue.h>
 
 #include "lwis_allocator.h"
 #include "lwis_commands.h"
@@ -114,16 +112,16 @@ static void save_transaction_to_history(struct lwis_client *client,
 	}
 }
 
-void lwis_transaction_free(struct lwis_device *lwis_dev, struct lwis_transaction **ptransaction)
+void lwis_transaction_free(struct lwis_device *lwis_dev, struct lwis_transaction **lwis_tx)
 {
 	int i;
 	struct lwis_fence_pending_signal *pending_fence;
 	struct list_head *it_fence, *it_fence_tmp;
-	struct lwis_transaction *transaction =  *ptransaction;
+	struct lwis_transaction *transaction = *lwis_tx;
 
 	if (transaction->is_weak_transaction) {
+		*lwis_tx = NULL;
 		kfree(transaction);
-		transaction = NULL;
 		return;
 	}
 
@@ -155,11 +153,11 @@ void lwis_transaction_free(struct lwis_device *lwis_dev, struct lwis_transaction
 	if (transaction->resp) {
 		kfree(transaction->resp);
 	}
+	*lwis_tx = NULL;
 	kfree(transaction);
-	*ptransaction = NULL;
 }
 
-static int process_transaction(struct lwis_client *client, struct lwis_transaction **ptransaction,
+static int process_transaction(struct lwis_client *client, struct lwis_transaction **lwis_tx,
 			       struct list_head *pending_events, struct list_head *pending_fences,
 			       bool skip_err, bool check_transaction_limit)
 {
@@ -168,7 +166,7 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 	int pending_status;
 	struct lwis_io_entry *entry = NULL;
 	struct lwis_device *lwis_dev = client->lwis_dev;
-	struct lwis_transaction *transaction = *ptransaction;
+	struct lwis_transaction *transaction = *lwis_tx;
 	struct lwis_transaction_info_v2 *info = &transaction->info;
 	struct lwis_transaction_response_header *resp = transaction->resp;
 	size_t resp_size;
@@ -179,35 +177,32 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 	int64_t process_timestamp = -1;
 	unsigned long flags;
 
-	int total_number_of_entries = info->num_io_entries;
-	int max_transaction_entry_limit = lwis_dev->transaction_process_limit;
-	int remaining_entries_to_be_processed = transaction->remaining_entries_to_process;
-	int number_of_entries_to_process_in_current_run = 0;
-	int processing_start_index = 0;
-	int processing_end_index = 0;
+	const int total_entries = info->num_io_entries;
+	int max_limit = lwis_dev->transaction_process_limit;
+	int remaining_entries = transaction->remaining_entries_to_process;
+	int current_run_entries;
+	int start_idx;
+	int end_idx;
 
 	/*
 	 * Process all the transactions at once if:
-	 * 1. the processing device has no limitation on the number of entries to process per transaction
-	 * 2. the transaction is running in event context
-	 * 3. the transaction is being called as a part of cleanup
-	 * Note: For #2 and #3, this transaction will not be queued for further processing by any worker thread
-	 * later and therefore all entries need to be processed in the same run
-	*/
+	 * 1. the processing device has no limitation on the number of entries
+	 * to process per transaction.
+	 * 2. the transaction is running in event context.
+	 * 3. the transaction is being called as a part of cleanup.
+	 * Note: For #2 and #3, this transaction will not be queued for further
+	 * processing by any worker thread later and therefore all entries need
+	 * to be processed in the same run.
+	 */
 	if ((lwis_dev->transaction_process_limit <= 0) ||
-	    (transaction->info.run_in_event_context) || (skip_err == true) ||
-	    (check_transaction_limit == false)) {
-		max_transaction_entry_limit = total_number_of_entries;
+	    (transaction->info.run_in_event_context || skip_err || !check_transaction_limit)) {
+		max_limit = total_entries;
 	}
 
-	number_of_entries_to_process_in_current_run =
-		(remaining_entries_to_be_processed > max_transaction_entry_limit) ?
-			max_transaction_entry_limit :
-			remaining_entries_to_be_processed;
-	processing_start_index = total_number_of_entries - remaining_entries_to_be_processed;
-	processing_end_index = processing_start_index + number_of_entries_to_process_in_current_run;
-	remaining_entries_to_be_processed =
-		remaining_entries_to_be_processed - number_of_entries_to_process_in_current_run;
+	current_run_entries = (remaining_entries > max_limit) ? max_limit : remaining_entries;
+	start_idx = total_entries - remaining_entries;
+	end_idx = start_idx + current_run_entries;
+	remaining_entries = remaining_entries - current_run_entries;
 
 	if (lwis_transaction_debug) {
 		process_timestamp = ktime_to_ns(lwis_get_time());
@@ -219,22 +214,25 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 	resp->completion_index = -1;
 
 	/*
-	 * If the starting read buffer pointer is not null then use this cached location to correctly
+	 * If the starting read buffer pointer is not null then
+	 * use this cached location to correctly
 	 * set the read buffer for the current transaction processing run.
 	 */
 	if (transaction->starting_read_buf) {
 		read_buf = transaction->starting_read_buf;
 	}
 
-	/* Use write memory barrier at the beginning of I/O entries if the access protocol
-	 * allows it */
+	/*
+	 * Use write memory barrier at the beginning of I/O entries if the access protocol
+	 * allows it.
+	 */
 	if (lwis_dev->vops.register_io_barrier != NULL) {
 		lwis_dev->vops.register_io_barrier(lwis_dev,
 						   /*use_read_barrier=*/false,
 						   /*use_write_barrier=*/true);
 	}
 	lwis_i2c_bus_manager_lock_i2c_bus(lwis_dev);
-	for (i = processing_start_index; i < processing_end_index; ++i) {
+	for (i = start_idx; i < end_idx; i++) {
 		entry = &info->io_entries[i];
 		if (entry->type == LWIS_IO_ENTRY_WRITE ||
 		    entry->type == LWIS_IO_ENTRY_WRITE_BATCH ||
@@ -364,14 +362,16 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 		process_duration_ns = ktime_to_ns(lwis_get_time() - process_timestamp);
 	}
 
-	/* Use read memory barrier at the end of I/O entries if the access protocol
-	 * allows it */
+	/*
+	 * Use read memory barrier at the end of I/O entries if the access protocol
+	 * allows it.
+	 */
 	if (lwis_dev->vops.register_io_barrier != NULL) {
 		lwis_dev->vops.register_io_barrier(lwis_dev, /*use_read_barrier=*/true,
 						   /*use_write_barrier=*/false);
 	}
 
-	if ((remaining_entries_to_be_processed > 0) && (ret == 0)) {
+	if (remaining_entries > 0 && ret == 0) {
 		/*
 		 * If there are remaining entries to be processed in this transaction,
 		 * don't delete this transaction and update the current remaining
@@ -381,7 +381,7 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 		 */
 		spin_lock_irqsave(&client->transaction_lock, flags);
 		transaction->starting_read_buf = read_buf;
-		transaction->remaining_entries_to_process = remaining_entries_to_be_processed;
+		transaction->remaining_entries_to_process = remaining_entries;
 		spin_unlock_irqrestore(&client->transaction_lock, flags);
 		return ret;
 	}
@@ -401,10 +401,10 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 	}
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
-	transaction->remaining_entries_to_process = remaining_entries_to_be_processed;
+	transaction->remaining_entries_to_process = remaining_entries;
 
 	if (pending_fences) {
-		/* Convert -ECANCELED error code to userspace Cancellation error code */
+		/* Convert -ECANCELED error code to userspace Cancellation error code. */
 		pending_status = resp->error_code == -ECANCELED ? 1 : resp->error_code;
 		lwis_pending_fences_move_all(lwis_dev, transaction, pending_fences, pending_status);
 	}
@@ -412,42 +412,43 @@ static int process_transaction(struct lwis_client *client, struct lwis_transacti
 
 	/*
 	 * This check needs to be handled only for cases where we are processing
-	 * the transaction based on the limit specified in the dts
+	 * the transaction based on the limit specified in the dts.
 	 * When the transactions are cancelled or executed in event context
-	 * the limit doesn't dictate the number of entries that will be processed
+	 * the limit doesn't dictate the number of entries that will be processed.
 	 */
 	if (check_transaction_limit) {
-		/* 1. If all of the entries are processed for a given transaction then
+		/*
+		 *  1. If all of the entries are processed for a given transaction then
 		 *     delete the transaction from the queue and enable emit signals for
-		 *     pending events and fences
+		 *     pending events and fences.
 		 *  2. Delete transaction from the process queue after the limit is fulfilled
-		 *     or there is an error while processing
+		 *     or there is an error while processing.
 		 */
 		list_del(&transaction->process_queue_node);
 	}
 
 	if (info->trigger_event_counter == LWIS_EVENT_COUNTER_EVERY_TIME) {
 		/*
-		 *Only clean the transaction struct for this iteration. The
+		 * Only clean the transaction struct for this iteration. The
 		 * I/O entries are not being freed.
 		 */
 		kfree(transaction->resp);
+		*lwis_tx = NULL;
 		kfree(transaction);
-		transaction = NULL;
 	} else {
-		lwis_transaction_free(lwis_dev, ptransaction);
+		lwis_transaction_free(lwis_dev, lwis_tx);
 	}
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
 
 	return ret;
 }
 
-static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transaction **ptransaction,
+static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transaction **lwis_tx,
 			       int error_code, struct list_head *pending_events,
 			       struct list_head *pending_fences, bool delete_pending_map_node)
 {
 	int pending_status;
-	struct lwis_transaction *transaction = *ptransaction;
+	struct lwis_transaction *transaction = *lwis_tx;
 	struct lwis_transaction_info_v2 *info = &transaction->info;
 	struct lwis_transaction_response_header resp;
 	resp.id = info->id;
@@ -457,7 +458,7 @@ static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transac
 	resp.completion_index = -1;
 
 	if (transaction->is_weak_transaction) {
-		lwis_transaction_free(lwis_dev, ptransaction);
+		lwis_transaction_free(lwis_dev, lwis_tx);
 		return;
 	}
 
@@ -466,7 +467,9 @@ static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transac
 					sizeof(resp));
 	}
 	if (pending_fences) {
-		/* Convert -ECANCELED error code to userspace Cancellation error code */
+		/*
+		 * Convert -ECANCELED error code to userspace Cancellation error code.
+		 */
 		pending_status = error_code == -ECANCELED ? 1 : error_code;
 		lwis_pending_fences_move_all(lwis_dev, transaction, pending_fences, pending_status);
 	}
@@ -475,7 +478,61 @@ static void cancel_transaction(struct lwis_device *lwis_dev, struct lwis_transac
 		hash_del(&transaction->pending_map_node);
 	}
 
-	lwis_transaction_free(lwis_dev, ptransaction);
+	lwis_transaction_free(lwis_dev, lwis_tx);
+}
+
+static bool process_broken_transaction(struct lwis_client *client, struct list_head *pending_events,
+				       struct list_head *pending_fences,
+				       struct lwis_transaction *transaction)
+{
+	unsigned long flush_flags;
+	struct device *dev = client->lwis_dev->dev;
+
+	/*
+	 * Continue the loop if the transaction is complete and deleted or
+	 * if the transaction exists but all the entries are processed
+	 */
+	if (transaction && transaction->remaining_entries_to_process > 0) {
+		/*
+		 * If the transaction exists and there are entries
+		 * remaning to be processed, that would indicate the
+		 * transaction processing limit has reached for this
+		 * device and we stop processing its queue further.
+		 */
+		if (lwis_transaction_debug) {
+			dev_info(
+				dev,
+				"Transaction processing limit reached, remaining entries to process %d\n",
+				transaction->remaining_entries_to_process);
+		}
+
+		/*
+		 * Queue the remaining transaction again on the transaction
+		 * worker/bus manager worker to be processed again later if
+		 * the client is not flushing.
+		 * If the client is flushing, cancel the remaining transaction
+		 * and delete from the process queue node.
+		 */
+		spin_lock_irqsave(&client->flush_lock, flush_flags);
+		if (client->flush_state == NOT_FLUSHING) {
+			if (lwis_transaction_debug) {
+				dev_info(dev, "Client: NOT_FLUSHING, schedule remaining work");
+			}
+
+			lwis_queue_device_worker(client);
+		} else {
+			if (lwis_transaction_debug) {
+				dev_info(dev, "Client: FLUSHING, abort remaining transaction");
+			}
+			list_del(&transaction->process_queue_node);
+			cancel_transaction(client->lwis_dev, &transaction,
+					   transaction->resp->error_code, pending_events,
+					   pending_fences, false);
+		}
+		spin_unlock_irqrestore(&client->flush_lock, flush_flags);
+		return true;
+	}
+	return false;
 }
 
 void lwis_process_transactions_in_queue(struct lwis_client *client)
@@ -486,20 +543,19 @@ void lwis_process_transactions_in_queue(struct lwis_client *client)
 	struct list_head pending_events;
 	struct list_head pending_fences;
 	struct lwis_transaction *transaction;
-	struct lwis_device *lwis_dev = client->lwis_dev;
-	struct lwis_i2c_bus_manager *i2c_bus_manager = lwis_i2c_bus_manager_get_manager(lwis_dev);
 
 	INIT_LIST_HEAD(&pending_events);
 	INIT_LIST_HEAD(&pending_fences);
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
 	list_for_each_safe (it_tran, it_tran_tmp, &client->transaction_process_queue) {
-		if (!client->is_enabled) {
+		if (!client->is_enabled && client->lwis_dev->type != DEVICE_TYPE_TOP) {
 			/*
 			 * If client is not enabled, then we just need to requeue
 			 * the transaction until the client is enabled. This will
 			 * ensure that we don't loose the submitted transactions.
-			*/
+			 * Top device does not require enabling.
+			 */
 			if (lwis_transaction_debug) {
 				dev_info(client->lwis_dev->dev,
 					 "Client is not ready to process transactions");
@@ -507,13 +563,7 @@ void lwis_process_transactions_in_queue(struct lwis_client *client)
 			spin_unlock_irqrestore(&client->transaction_lock, flags);
 			spin_lock_irqsave(&client->flush_lock, flush_flags);
 			if (client->flush_state == NOT_FLUSHING) {
-				if (i2c_bus_manager) {
-					kthread_queue_work(&i2c_bus_manager->i2c_bus_worker,
-							   &client->i2c_work);
-				} else {
-					kthread_queue_work(&client->lwis_dev->transaction_worker,
-							   &client->transaction_work);
-				}
+				lwis_queue_device_worker(client);
 			}
 			spin_unlock_irqrestore(&client->flush_lock, flush_flags);
 			return;
@@ -532,56 +582,12 @@ void lwis_process_transactions_in_queue(struct lwis_client *client)
 			spin_lock_irqsave(&client->transaction_lock, flags);
 
 			/*
-			 * Continue the loop if the transaction is complete and deleted or
-			 * if the transaction exists but all the entries are processed
-			*/
-			if ((transaction != NULL) &&
-			    (transaction->remaining_entries_to_process > 0)) {
-				/*
-				 * If the transaction exists and there are entries remaning to be processed,
-				 * that would indicate the transaction processing limit has reached for this
-				 * device and we stop processing its queue further
-				 */
-				if (lwis_transaction_debug) {
-					dev_info(
-						client->lwis_dev->dev,
-						"Transaction processing limit reached, remaining entries to process %d\n",
-						transaction->remaining_entries_to_process);
-				}
-
-				/*
-				 * Queue the remaining transaction again on the transaction worker/bus maanger worker
-				 * to be processed again later if the client is not flushing
-				 * If the client is flushing, cancel the remaining transaction
-				 * and delete from the process queue node.
-				 */
-				spin_lock_irqsave(&client->flush_lock, flush_flags);
-				if (client->flush_state == NOT_FLUSHING) {
-					if (lwis_transaction_debug) {
-						dev_info(
-								client->lwis_dev->dev,
-								"Client is not flushing, schedule the remaining work");
-					}
-
-					if (i2c_bus_manager) {
-						kthread_queue_work(&i2c_bus_manager->i2c_bus_worker,
-							   &client->i2c_work);
-					} else {
-						kthread_queue_work(&client->lwis_dev->transaction_worker,
-							   &client->transaction_work);
-					}
-				} else {
-					if (lwis_transaction_debug) {
-						dev_info(
-								client->lwis_dev->dev,
-								"Client is flushing, aborting the remaining transaction");
-					}
-					list_del(&transaction->process_queue_node);
-					cancel_transaction(client->lwis_dev, &transaction,
-					   transaction->resp->error_code, &pending_events,
-					   &pending_fences, false);
-				}
-				spin_unlock_irqrestore(&client->flush_lock, flush_flags);
+			 * If LWIS is processing a broken transaction,
+			 * then it needs to stop processing the client's transaction queue further
+			 * until the broken transaction is completely processed.
+			 */
+			if (process_broken_transaction(client, &pending_events, &pending_fences,
+						       transaction)) {
 				break;
 			}
 		}
@@ -640,16 +646,11 @@ int lwis_transaction_client_flush(struct lwis_client *client)
 	int i;
 	struct hlist_node *tmp;
 	struct lwis_transaction_event_list *it_evt_list;
-	struct lwis_device *lwis_dev = NULL;
-	struct lwis_i2c_bus_manager *i2c_bus_manager = NULL;
 
 	if (!client) {
 		pr_err("Client pointer cannot be NULL while flushing transactions.\n");
 		return -ENODEV;
 	}
-
-	lwis_dev = client->lwis_dev;
-	i2c_bus_manager = lwis_i2c_bus_manager_get_manager(lwis_dev);
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
 	hash_for_each_safe (client->transaction_list, i, tmp, it_evt_list, node) {
@@ -675,21 +676,17 @@ int lwis_transaction_client_flush(struct lwis_client *client)
 	client->flush_state = FLUSHING;
 	spin_unlock_irqrestore(&client->flush_lock, flags);
 
-	if (i2c_bus_manager) {
-		lwis_i2c_bus_manager_flush_i2c_worker(lwis_dev);
-	} else {
-		if (client->lwis_dev->transaction_worker_thread) {
-			kthread_flush_worker(&client->lwis_dev->transaction_worker);
-		}
-	}
+	lwis_flush_device_worker(client);
 
 	spin_lock_irqsave(&client->flush_lock, flags);
 	client->flush_state = NOT_FLUSHING;
 	spin_unlock_irqrestore(&client->flush_lock, flags);
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
-	/* The transaction queue should be empty after canceling all transactions,
-	 * but check anyway. */
+	/*
+	 * The transaction queue should be empty after canceling all transactions,
+	 * but check anyway.
+	 */
 	cancel_all_transactions_in_queue_locked(client, &client->transaction_process_queue);
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
 
@@ -704,7 +701,6 @@ int lwis_transaction_client_cleanup(struct lwis_client *client)
 	struct lwis_transaction_event_list *it_evt_list;
 
 	spin_lock_irqsave(&client->transaction_lock, flags);
-	/* Perform client defined clean-up routine. */
 	it_evt_list = event_list_find(client, LWIS_EVENT_ID_CLIENT_CLEANUP |
 						      (int64_t)client->lwis_dev->id
 							      << LWIS_EVENT_ID_EVENT_CODE_LEN);
@@ -800,35 +796,32 @@ static int check_transaction_param_locked(struct lwis_client *client,
 		return -ENODEV;
 	}
 
-	/* Assign the transaction id and increment transaction counter */
 	info->id = client->transaction_counter++;
-	/* Initialize event counter return value  */
+
 	info->current_trigger_event_counter = -1LL;
 
-	/* Look for the trigger event state, if specified */
+	/* Look for the trigger event state, if specified. */
 	if (info->trigger_event_id != LWIS_EVENT_ID_NONE) {
 		event_state = lwis_device_event_state_find(lwis_dev, info->trigger_event_id);
 		if (event_state == NULL) {
-			/* Event has not been encountered, setting event counter
-			 * to zero */
+			/* Event has not been encountered, setting event counter to zero. */
 			info->current_trigger_event_counter = 0;
 		} else {
-			/* Event found, return current counter to userspace */
+			/* Event found, return current counter to userspace. */
 			info->current_trigger_event_counter = event_state->event_counter;
 		}
 	} else if (!lwis_triggered_by_condition(transaction)) {
-		/* Otherwise it's an immediate transaction */
+		/* Otherwise it's an immediate transaction. */
 		transaction->queue_immediately = true;
 	}
 
-	/* Both trigger event ID and counter are defined */
+	/* Both trigger event ID and counter are defined. */
 	if (info->trigger_event_id != LWIS_EVENT_ID_NONE &&
 	    EXPLICIT_EVENT_COUNTER(info->trigger_event_counter)) {
-		/* Check if event has happened already */
+		/* Check if event has happened already. */
 		if (info->trigger_event_counter == info->current_trigger_event_counter) {
 			if (is_level_triggered) {
-				/* Convert this transaction into an immediate
-				 * one */
+				/* Convert this transaction into an immediate one. */
 				transaction->queue_immediately = true;
 			} else {
 				return -ENOENT;
@@ -838,7 +831,7 @@ static int check_transaction_param_locked(struct lwis_client *client,
 		}
 	}
 
-	/* Make sure sw events exist in event table */
+	/* Make sure sw events exist in event table. */
 	if (IS_ERR_OR_NULL(lwis_device_event_state_find_or_create(lwis_dev,
 								  info->emit_success_event_id)) ||
 	    IS_ERR_OR_NULL(
@@ -859,7 +852,6 @@ static int prepare_transaction_fences_locked(struct lwis_client *client,
 {
 	int ret = 0;
 
-	/* If triggered by trigger_condition */
 	if (lwis_triggered_by_condition(transaction)) {
 		ret = lwis_parse_trigger_condition(client, transaction);
 		if (ret) {
@@ -867,7 +859,7 @@ static int prepare_transaction_fences_locked(struct lwis_client *client,
 		}
 	}
 
-	/* If transaction contains completion fences, add them to the transaction */
+	/* If transaction contains completion fences, add them to the transaction. */
 	ret = lwis_add_completion_fence(client, transaction);
 
 	return ret;
@@ -893,13 +885,23 @@ static int prepare_response_locked(struct lwis_client *client, struct lwis_trans
 		}
 	}
 
-	// Event response payload consists of header, and address and
-	// offset pairs.
+	/* Event response payload consists of header, and address and offset pairs. */
 	resp_size = sizeof(struct lwis_transaction_response_header) +
 		    read_entries * sizeof(struct lwis_io_result) + read_buf_size;
-	/* Revisit the use of GFP_ATOMIC here. Reason for this to be atomic is
+
+	if (read_entries > INT_MAX / sizeof(struct lwis_io_result)) {
+		return -EOVERFLOW;
+	}
+
+	if (read_buf_size > INT_MAX - sizeof(struct lwis_transaction_response_header) -
+				    read_entries * sizeof(struct lwis_io_result)) {
+		return -EOVERFLOW;
+	}
+	/*
+	 * Revisit the use of GFP_ATOMIC here. Reason for this to be atomic is
 	 * because this function can be called by transaction_replace while
-	 * holding onto a spinlock. */
+	 * holding onto a spinlock.
+	 */
 	transaction->resp = kmalloc(resp_size, GFP_ATOMIC);
 	if (!transaction->resp) {
 		dev_err(client->lwis_dev->dev, "Cannot allocate transaction response\n");
@@ -914,29 +916,21 @@ static int prepare_response_locked(struct lwis_client *client, struct lwis_trans
 	return 0;
 }
 
-/* Calling this function requires holding the client's transaction_lock. */
+/*
+ * Calling this function requires holding the client's transaction_lock.
+ */
 static int queue_transaction_locked(struct lwis_client *client,
 				    struct lwis_transaction *transaction)
 {
 	struct lwis_transaction_event_list *event_list;
 	struct lwis_transaction_info_v2 *info = &transaction->info;
-	struct lwis_device *lwis_dev = client->lwis_dev;
-	struct lwis_i2c_bus_manager *i2c_bus_manager = lwis_i2c_bus_manager_get_manager(lwis_dev);
 
 	if (transaction->queue_immediately) {
-		/* Immediate trigger. */
 		list_add_tail(&transaction->process_queue_node, &client->transaction_process_queue);
-		if (i2c_bus_manager) {
-			kthread_queue_work(&i2c_bus_manager->i2c_bus_worker, &client->i2c_work);
-		} else {
-			kthread_queue_work(&client->lwis_dev->transaction_worker,
-					   &client->transaction_work);
-		}
+		lwis_queue_device_worker(client);
 	} else if (lwis_triggered_by_condition(transaction)) {
-		/* Trigger by trigger conditions. */
 		add_pending_transaction(client, transaction);
 	} else {
-		/* Trigger by event. */
 		event_list = event_list_find_or_create(client, info->trigger_event_id);
 		if (!event_list) {
 			dev_err(client->lwis_dev->dev, "Cannot create transaction event list\n");
@@ -981,7 +975,6 @@ new_repeating_transaction_iteration(struct lwis_client *client,
 	struct lwis_transaction *new_instance;
 	uint8_t *resp_buf;
 
-	/* Construct a new instance for repeating transactions */
 	new_instance = kmalloc(sizeof(struct lwis_transaction), GFP_ATOMIC);
 	if (!new_instance) {
 		dev_err(client->lwis_dev->dev,
@@ -990,7 +983,6 @@ new_repeating_transaction_iteration(struct lwis_client *client,
 	}
 	memcpy(&new_instance->info, &transaction->info, sizeof(transaction->info));
 
-	/* Allocate response buffer */
 	resp_buf = kmalloc(sizeof(struct lwis_transaction_response_header) +
 				   transaction->resp->results_size_bytes,
 			   GFP_ATOMIC);
@@ -1018,7 +1010,7 @@ static void defer_transaction_locked(struct lwis_client *client,
 				     struct lwis_transaction *transaction,
 				     struct list_head *pending_events,
 				     struct list_head *pending_fences, bool del_event_list_node,
-				     unsigned long* flags)
+				     unsigned long *flags)
 {
 	if (del_event_list_node) {
 		list_del(&transaction->event_list_node);
@@ -1051,8 +1043,6 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 	struct lwis_transaction *new_instance;
 	int64_t trigger_counter = 0;
 	struct list_head pending_fences;
-	struct lwis_device *lwis_dev = client->lwis_dev;
-	struct lwis_i2c_bus_manager *i2c_bus_manager = lwis_i2c_bus_manager_get_manager(lwis_dev);
 
 	INIT_LIST_HEAD(&pending_fences);
 
@@ -1062,20 +1052,18 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 		event_id = event_id ^ LWIS_OVERFLOW_IRQ_EVENT_FLAG;
 	}
 	event_list = event_list_find(client, event_id);
-	/* No event found, just return. */
 	if (event_list == NULL || list_empty(&event_list->list)) {
 		spin_unlock_irqrestore(&client->transaction_lock, flags);
 		return 0;
 	}
 
-	/* Go through all transactions under the chosen event list. */
 	list_for_each_safe (it_tran, it_tran_tmp, &event_list->list) {
 		transaction = list_entry(it_tran, struct lwis_transaction, event_list_node);
 		if (transaction->is_weak_transaction) {
 			weak_transaction = transaction;
 			transaction = pending_transaction_peek(client, weak_transaction->id);
 			if (transaction == NULL) {
-				/* It means the transaction is already executed or is canceled */
+				/* It means the transaction is already executed or is canceled. */
 				list_del(&weak_transaction->event_list_node);
 				kfree(weak_transaction);
 				continue;
@@ -1092,8 +1080,7 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 				hash_del(&transaction->pending_map_node);
 				defer_transaction_locked(client, transaction, pending_events,
 							 &pending_fences,
-							 /* del_event_list_node */ false,
-							 &flags);
+							 /* del_event_list_node */ false, &flags);
 			}
 			continue;
 		}
@@ -1105,8 +1092,10 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 			continue;
 		}
 
-		/* Compare current event with trigger event counter to make
-		 * sure this transaction needs to be executed now. */
+		/*
+		 * Compare current event with trigger event counter to make
+		 * sure this transaction needs to be executed now.
+		 */
 		trigger_counter = transaction->info.trigger_event_counter;
 		if (trigger_counter == LWIS_EVENT_COUNTER_ON_NEXT_OCCURRENCE ||
 		    trigger_counter == event_counter) {
@@ -1128,14 +1117,8 @@ int lwis_transaction_event_trigger(struct lwis_client *client, int64_t event_id,
 		}
 	}
 
-	/* Schedule deferred transactions */
 	if (!list_empty(&client->transaction_process_queue)) {
-		if (i2c_bus_manager) {
-			kthread_queue_work(&i2c_bus_manager->i2c_bus_worker, &client->i2c_work);
-		} else {
-			kthread_queue_work(&client->lwis_dev->transaction_worker,
-					   &client->transaction_work);
-		}
+		lwis_queue_device_worker(client);
 	}
 
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
@@ -1154,8 +1137,6 @@ void lwis_transaction_fence_trigger(struct lwis_client *client, struct lwis_fenc
 	struct list_head *it_tran, *it_tran_tmp;
 	struct list_head pending_events;
 	struct list_head pending_fences;
-	struct lwis_device *lwis_dev = client->lwis_dev;
-	struct lwis_i2c_bus_manager *i2c_bus_manager = lwis_i2c_bus_manager_get_manager(lwis_dev);
 
 	if (list_empty(transaction_list)) {
 		return;
@@ -1171,7 +1152,7 @@ void lwis_transaction_fence_trigger(struct lwis_client *client, struct lwis_fenc
 
 		transaction = pending_transaction_peek(client, transaction_id->id);
 		if (transaction == NULL) {
-			/* It means the transaction is already executed or is canceled */
+			/* It means the transaction is already executed or is canceled. */
 			if (lwis_fence_debug) {
 				dev_info(
 					client->lwis_dev->dev,
@@ -1201,14 +1182,8 @@ void lwis_transaction_fence_trigger(struct lwis_client *client, struct lwis_fenc
 		kfree(transaction_id);
 	}
 
-	/* Schedule deferred transactions */
 	if (!list_empty(&client->transaction_process_queue)) {
-		if (i2c_bus_manager) {
-			kthread_queue_work(&i2c_bus_manager->i2c_bus_worker, &client->i2c_work);
-		} else {
-			kthread_queue_work(&client->lwis_dev->transaction_worker,
-					   &client->transaction_work);
-		}
+		lwis_queue_device_worker(client);
 	}
 
 	spin_unlock_irqrestore(&client->transaction_lock, flags);
@@ -1217,7 +1192,9 @@ void lwis_transaction_fence_trigger(struct lwis_client *client, struct lwis_fenc
 	lwis_fences_pending_signal_emit(client->lwis_dev, &pending_fences);
 }
 
-/* Calling this function requires holding the client's transaction_lock. */
+/*
+ * Calling this function requires holding the client's transaction_lock.
+ */
 static int cancel_waiting_transaction_locked(struct lwis_client *client, int64_t id)
 {
 	int i;
@@ -1226,7 +1203,7 @@ static int cancel_waiting_transaction_locked(struct lwis_client *client, int64_t
 	struct lwis_transaction_event_list *it_evt_list;
 	struct lwis_transaction *transaction;
 
-	/* Search transactions triggered by events */
+	/* Search transactions triggered by events. */
 	hash_for_each_safe (client->transaction_list, i, tmp, it_evt_list, node) {
 		list_for_each_safe (it_tran, it_tran_tmp, &it_evt_list->list) {
 			transaction = list_entry(it_tran, struct lwis_transaction, event_list_node);
@@ -1237,7 +1214,7 @@ static int cancel_waiting_transaction_locked(struct lwis_client *client, int64_t
 		}
 	}
 
-	/* Search transactions triggered by trigger_condition */
+	/* Search transactions triggered by trigger_condition. */
 	hash_for_each_possible_safe (client->pending_transactions, transaction, tmp,
 				     pending_map_node, id) {
 		if (transaction->info.id == id) {

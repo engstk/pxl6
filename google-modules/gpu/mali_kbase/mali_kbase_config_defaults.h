@@ -126,7 +126,7 @@ enum {
 
 /* Default scheduling tick granuality (can be overridden by platform header) */
 #ifndef DEFAULT_JS_SCHEDULING_PERIOD_NS
-#define DEFAULT_JS_SCHEDULING_PERIOD_NS    (100000000u) /* 100ms */
+#define DEFAULT_JS_SCHEDULING_PERIOD_NS (100000000u) /* 100ms */
 #endif
 
 /* Default minimum number of scheduling ticks before jobs are soft-stopped.
@@ -134,21 +134,21 @@ enum {
  * This defines the time-slice for a job (which may be different from that of a
  * context)
  */
-#define DEFAULT_JS_SOFT_STOP_TICKS       (1) /* 100ms-200ms */
+#define DEFAULT_JS_SOFT_STOP_TICKS (1) /* 100ms-200ms */
 
 /* Default minimum number of scheduling ticks before CL jobs are soft-stopped. */
-#define DEFAULT_JS_SOFT_STOP_TICKS_CL    (1) /* 100ms-200ms */
+#define DEFAULT_JS_SOFT_STOP_TICKS_CL (1) /* 100ms-200ms */
 
 /* Default minimum number of scheduling ticks before jobs are hard-stopped */
-#define DEFAULT_JS_HARD_STOP_TICKS_SS    (50 * TICK_MULTIPLIER) /* Default: 5s */
+#define DEFAULT_JS_HARD_STOP_TICKS_SS (50 * TICK_MULTIPLIER) /* Default: 5s */
 
 /* Default minimum number of scheduling ticks before CL jobs are hard-stopped. */
-#define DEFAULT_JS_HARD_STOP_TICKS_CL    (50) /* 5s */
+#define DEFAULT_JS_HARD_STOP_TICKS_CL (50) /* 5s */
 
 /* Default minimum number of scheduling ticks before jobs are hard-stopped
  * during dumping
  */
-#define DEFAULT_JS_HARD_STOP_TICKS_DUMPING   (15000) /* 1500s */
+#define DEFAULT_JS_HARD_STOP_TICKS_DUMPING (15000) /* 1500s */
 
 /* Default timeout for some software jobs, after which the software event wait
  * jobs will be cancelled.
@@ -158,17 +158,17 @@ enum {
 /* Default minimum number of scheduling ticks before the GPU is reset to clear a
  * "stuck" job
  */
-#define DEFAULT_JS_RESET_TICKS_SS           (55 * TICK_MULTIPLIER) /* Default: 5.5s */
+#define DEFAULT_JS_RESET_TICKS_SS (55 * TICK_MULTIPLIER) /* Default: 5.5s */
 
 /* Default minimum number of scheduling ticks before the GPU is reset to clear a
  * "stuck" CL job.
  */
-#define DEFAULT_JS_RESET_TICKS_CL        (55) /* 5.5s */
+#define DEFAULT_JS_RESET_TICKS_CL (55) /* 5.5s */
 
 /* Default minimum number of scheduling ticks before the GPU is reset to clear a
  * "stuck" job during dumping.
  */
-#define DEFAULT_JS_RESET_TICKS_DUMPING   (15020) /* 1502s */
+#define DEFAULT_JS_RESET_TICKS_DUMPING (15020) /* 1502s */
 
 /* Nominal reference frequency that was used to obtain all following
  * <...>_TIMEOUT_CYCLES macros, in kHz.
@@ -203,7 +203,8 @@ enum {
  * More cycles (1s @ 100Mhz = 100000000) are added up to ensure that
  * host timeout is always bigger than FW timeout.
  */
-#define CSF_CSG_SUSPEND_TIMEOUT_CYCLES (3100000000ull)
+/* pixel: b/319408928 - CSF_CSG_SUSPEND_TIMEOUT_CYCLES is set to 2s@100MHz. */
+#define CSF_CSG_SUSPEND_TIMEOUT_CYCLES (200000000ull)
 
 /* Waiting timeout in clock cycles for GPU reset to complete. */
 #define CSF_GPU_RESET_TIMEOUT_CYCLES (CSF_CSG_SUSPEND_TIMEOUT_CYCLES * 2)
@@ -224,7 +225,24 @@ enum {
  *
  * Based on 10s timeout at 100MHz, scaled from a 50MHz GPU system.
  */
+#if IS_ENABLED(CONFIG_MALI_IS_FPGA)
+#define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (2500000000ull)
+#else
 #define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (1000000000ull)
+#endif
+
+/* Timeout for polling the GPU in clock cycles.
+ *
+ * Based on 10s timeout based on original MAX_LOOPS value.
+ */
+#define IPA_INACTIVE_TIMEOUT_CYCLES (1000000000ull)
+
+/* Timeout for polling the GPU for the MCU status in clock cycles.
+ *
+ * Based on 120s timeout based on original MAX_LOOPS value.
+ */
+#define CSF_FIRMWARE_STOP_TIMEOUT_CYCLES (12000000000ull)
+
 
 /* Waiting timeout for task execution on an endpoint. Based on the
  * DEFAULT_PROGRESS_TIMEOUT.
@@ -257,6 +275,24 @@ enum {
 
 #endif /* !MALI_USE_CSF */
 
+/* Timeout for polling the GPU PRFCNT_ACTIVE bit in clock cycles.
+ *
+ * Based on 120s timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_PRFCNT_ACTIVE_TIMEOUT_CYCLES (12000000000ull)
+
+/* Timeout for polling the GPU for a cache flush in clock cycles.
+ *
+ * Based on 120ms timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_CLEAN_CACHE_TIMEOUT_CYCLES (12000000ull)
+
+/* Timeout for polling the GPU for an AS command to complete in clock cycles.
+ *
+ * Based on 120s timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_AS_INACTIVE_TIMEOUT_CYCLES (12000000000ull)
+
 /* Default timeslice that a context is scheduled in for, in nanoseconds.
  *
  * When a context has used up this amount of time across its jobs, it is
@@ -272,7 +308,11 @@ enum {
  * is enabled the value will be read from there, otherwise this should be
  * overridden by defining GPU_FREQ_KHZ_MAX in the platform file.
  */
+#ifdef GPU_FREQ_KHZ_MAX
+#define DEFAULT_GPU_FREQ_KHZ_MAX GPU_FREQ_KHZ_MAX
+#else
 #define DEFAULT_GPU_FREQ_KHZ_MAX (5000)
+#endif /* GPU_FREQ_KHZ_MAX */
 
 /* Default timeout for task execution on an endpoint
  *

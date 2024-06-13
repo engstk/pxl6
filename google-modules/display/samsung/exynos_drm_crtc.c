@@ -1145,7 +1145,6 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 	return exynos_crtc;
 
 err_crtc:
-	plane->funcs->destroy(plane);
 	kfree(exynos_crtc);
 	return ERR_PTR(ret);
 }

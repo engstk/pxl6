@@ -29,6 +29,7 @@
 #include "dw3000_core.h"
 
 #define DW3000_NFCC_COEX_WATCHDOG_DEFAULT_DURATION_MS 24000
+#define DW3000_MARGIN_TO_ENTER_IDLE 2
 
 static int dw3000_nfcc_coex_wakeup_and_send(struct dw3000 *dw,
 					    s32 idle_duration_dtu,
@@ -40,7 +41,13 @@ static int dw3000_nfcc_coex_wakeup_and_send(struct dw3000 *dw,
 	trace_dw3000_nfcc_coex_wakeup_and_send(
 		dw, nfcc_coex->send, idle_duration_dtu, send_timestamp_dtu);
 
-	if (idle_duration_dtu > dw->llhw->anticip_dtu) {
+	if (idle_duration_dtu >
+	    DW3000_MARGIN_TO_ENTER_IDLE * dw->llhw->anticip_dtu) {
+		/* If idle_duration_dtu is too close to anticip_dtu, the
+		 * idle_delay computed in dw3000_idle might end up negative
+		 * and fail with -ETIME. A DW3000_MARGIN_TO_ENTER_IDLE
+		 * multiplicator is used to avoid this.
+		 */
 		r = dw3000_idle(dw, true, send_timestamp_dtu,
 				dw3000_nfcc_coex_idle_timeout,
 				DW3000_OP_STATE_MAX);

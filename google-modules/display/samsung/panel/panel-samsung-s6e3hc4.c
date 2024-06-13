@@ -549,7 +549,7 @@ static void s6e3hc4_update_refresh_mode(struct exynos_panel *ctx,
 	ctx->panel_idle_vrefresh = idle_vrefresh;
 	s6e3hc4_update_panel_feat(ctx, vrefresh, false);
 	te2_state_changed(ctx->bl);
-	backlight_state_changed(ctx->bl);
+	notify_panel_mode_changed(ctx, false);
 }
 
 static void s6e3hc4_change_frequency(struct exynos_panel *ctx,
@@ -605,7 +605,7 @@ static bool s6e3hc4_set_self_refresh(struct exynos_panel *ctx, bool enable)
 	if (pmode->exynos_mode.is_lp_mode) {
 		/* set 10Hz while self refresh is active, otherwise clear it */
 		ctx->panel_idle_vrefresh = enable ? 10 : 0;
-		backlight_state_changed(ctx->bl);
+		notify_panel_mode_changed(ctx, true);
 		return false;
 	}
 
@@ -1324,6 +1324,14 @@ static const u32 s6e3hc4_bl_range[] = {
 	94, 180, 270, 360, 2047
 };
 
+static const int s6e3hc4_vrefresh_range[] = {
+	10, 30, 60, 120
+};
+
+static const int s6e3hc4_lp_vrefresh_range[] = {
+	10, 30
+};
+
 static const struct exynos_panel_mode s6e3hc4_modes[] = {
 	{
 		/* 1440x3120 @ 60Hz */
@@ -1643,8 +1651,12 @@ const struct exynos_panel_desc samsung_s6e3hc4 = {
 	.bl_num_ranges = ARRAY_SIZE(s6e3hc4_bl_range),
 	.modes = s6e3hc4_modes,
 	.num_modes = ARRAY_SIZE(s6e3hc4_modes),
+	.vrefresh_range = s6e3hc4_vrefresh_range,
+	.vrefresh_range_count = ARRAY_SIZE(s6e3hc4_vrefresh_range),
 	.lp_mode = s6e3hc4_lp_modes,
 	.lp_mode_count = ARRAY_SIZE(s6e3hc4_lp_modes),
+	.lp_vrefresh_range = s6e3hc4_lp_vrefresh_range,
+	.lp_vrefresh_range_count = ARRAY_SIZE(s6e3hc4_lp_vrefresh_range),
 	.binned_lp = s6e3hc4_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(s6e3hc4_binned_lp),
 	.is_panel_idle_supported = true,

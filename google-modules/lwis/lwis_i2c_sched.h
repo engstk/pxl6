@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Google LWIS I2C Bus Manager
+ * Google LWIS I2C Bus Manager Scheduler
  *
- * Copyright (c) 2023 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright 2023 Google LLC.
  */
 
 #ifndef LWIS_I2C_SCHED_H_
@@ -13,7 +10,6 @@
 
 #include "lwis_device.h"
 
-// Forward declaration
 struct lwis_i2c_process_queue;
 
 /* lwis_i2c_process_request:

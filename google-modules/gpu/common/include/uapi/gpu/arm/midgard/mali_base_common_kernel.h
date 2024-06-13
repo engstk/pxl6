@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2022-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -162,7 +162,7 @@ struct base_mem_handle {
 
 /* A mask for all input bits, including IN/OUT bits.
  */
-#define BASE_MEM_FLAGS_INPUT_MASK                                                                  \
+#define BASE_MEM_FLAGS_INPUT_MASK \
 	(((1 << BASE_MEM_FLAGS_NR_BITS) - 1) & ~BASE_MEM_FLAGS_OUTPUT_MASK)
 
 /* Special base mem handles.
@@ -206,13 +206,13 @@ typedef __u32 base_context_create_flags;
 
 /* Bitmask used to encode a memory group ID in base_context_create_flags
  */
-#define BASEP_CONTEXT_MMU_GROUP_ID_MASK                                                            \
+#define BASEP_CONTEXT_MMU_GROUP_ID_MASK \
 	((base_context_create_flags)0xF << BASEP_CONTEXT_MMU_GROUP_ID_SHIFT)
 
 /* Bitpattern describing the base_context_create_flags that can be
  * passed to the kernel
  */
-#define BASEP_CONTEXT_CREATE_KERNEL_FLAGS                                                          \
+#define BASEP_CONTEXT_CREATE_KERNEL_FLAGS \
 	(BASE_CONTEXT_SYSTEM_MONITOR_SUBMIT_DISABLED | BASEP_CONTEXT_MMU_GROUP_ID_MASK)
 
 /* Flags for base tracepoint
@@ -221,11 +221,11 @@ typedef __u32 base_context_create_flags;
 /* Enable additional tracepoints for latency measurements (TL_ATOM_READY,
  * TL_ATOM_DONE, TL_ATOM_PRIO_CHANGE, TL_ATOM_EVENT_POST)
  */
-#define BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS (1 << 0)
+#define BASE_TLSTREAM_ENABLE_LATENCY_TRACEPOINTS (1U << 0)
 
 /* Indicate that job dumping is enabled. This could affect certain timers
  * to account for the performance impact.
  */
-#define BASE_TLSTREAM_JOB_DUMPING_ENABLED (1 << 1)
+#define BASE_TLSTREAM_JOB_DUMPING_ENABLED (1U << 1)
 
 #endif /* _UAPI_BASE_COMMON_KERNEL_H_ */

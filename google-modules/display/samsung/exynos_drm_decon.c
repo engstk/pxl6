@@ -1634,16 +1634,24 @@ static void decon_unbind(struct device *dev, struct device *master,
 	struct decon_device *decon = dev_get_drvdata(dev);
 	decon_debug(decon, "%s +\n", __func__);
 
+	if (decon_is_effectively_active(decon))
+		decon_disable(decon->crtc);
+
+	device_remove_file(dev, &dev_attr_early_wakeup);
+
 	/* Remove symlink to decon device */
 	snprintf(symlink_name_buffer, 7, "decon%d", decon->id);
 	sysfs_remove_link(&decon->drm_dev->dev->kobj,
 			  (const char *) symlink_name_buffer);
 
-	device_remove_file(dev, &dev_attr_early_wakeup);
 	if (IS_ENABLED(CONFIG_EXYNOS_BTS))
 		decon->bts.ops->deinit(decon);
 
-	decon_disable(decon->crtc);
+#if IS_ENABLED(CONFIG_EXYNOS_ITMON)
+	itmon_notifier_chain_unregister(&decon->itmon_nb);
+#endif
+	iommu_unregister_device_fault_handler(dev);
+
 	decon_debug(decon, "%s -\n", __func__);
 }
 

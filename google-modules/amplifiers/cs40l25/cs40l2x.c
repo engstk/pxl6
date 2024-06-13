@@ -11516,6 +11516,7 @@ static int cs40l2x_i2c_probe(struct i2c_client *i2c_client,
 		return -ENOMEM;
 
 	cs40l2x->dev = dev;
+	cs40l2x->dev->init_name = "i2c-c240l2x";
 	dev_set_drvdata(dev, cs40l2x);
 	i2c_set_clientdata(i2c_client, cs40l2x);
 

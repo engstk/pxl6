@@ -1,0 +1,27 @@
+What:		/sys/devices/platform/exynos-drm/<panel>/time_in_state
+Date:		December 2023
+KernelVersion:	5.10
+Contact:	"Midas Chien" <midaschieh@google.com>
+Description:
+		The file provides the time (msec) spent in various display states.
+
+		Valid panels are 'primary-panel' or 'secondary-panel'.
+
+What:		/sys/devices/platform/exynos-drm/<panel>/available_disp_stats
+Date:		December 2023
+KernelVersion:	5.10
+Contact:	"Midas Chien" <midaschieh@google.com>
+Description:
+		The file provides the available display stats state.
+
+		Valid panels are 'primary-panel' or 'secondary-panel'.
+
+What:		/sys/class/backlight/<panel>-backlight/allow_wakeup_by_state_change
+Date:		January 2024
+KernelVersion:	5.10
+Contact:	"Midas Chien" <midaschieh@google.com>
+Description:
+		The file specifies whether the system can be awakened to receive
+		notifications regarding backlight state changes.
+
+		Valid panels are 'panel0' or 'panel1'.

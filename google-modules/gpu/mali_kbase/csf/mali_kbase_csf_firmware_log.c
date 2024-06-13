@@ -30,24 +30,24 @@
 /*
  * ARMv7 instruction: Branch with Link calls a subroutine at a PC-relative address.
  */
-#define ARMV7_T1_BL_IMM_INSTR		0xd800f000
+#define ARMV7_T1_BL_IMM_INSTR 0xd800f000
 
 /*
  * ARMv7 instruction: Branch with Link calls a subroutine at a PC-relative address, maximum
  * negative jump offset.
  */
-#define ARMV7_T1_BL_IMM_RANGE_MIN	-16777216
+#define ARMV7_T1_BL_IMM_RANGE_MIN -16777216
 
 /*
  * ARMv7 instruction: Branch with Link calls a subroutine at a PC-relative address, maximum
  * positive jump offset.
  */
-#define ARMV7_T1_BL_IMM_RANGE_MAX	16777214
+#define ARMV7_T1_BL_IMM_RANGE_MAX 16777214
 
 /*
  * ARMv7 instruction: Double NOP instructions.
  */
-#define ARMV7_DOUBLE_NOP_INSTR		0xbf00bf00
+#define ARMV7_DOUBLE_NOP_INSTR 0xbf00bf00
 
 #if defined(CONFIG_DEBUG_FS)
 
@@ -127,7 +127,7 @@ static ssize_t kbasep_csf_firmware_log_debugfs_read(struct file *file, char __us
 
 	/* Reading from userspace is only allowed in manual mode or auto-discard mode */
 	if (fw_log->mode != KBASE_CSF_FIRMWARE_LOG_MODE_MANUAL &&
-			fw_log->mode != KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_DISCARD) {
+	    fw_log->mode != KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_DISCARD) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -144,7 +144,7 @@ static ssize_t kbasep_csf_firmware_log_debugfs_read(struct file *file, char __us
 	}
 
 	*ppos += n_read;
-	ret = n_read;
+	ret = (int)n_read;
 
 out:
 	atomic_set(&fw_log->busy, 0);
@@ -178,8 +178,9 @@ static int kbase_csf_firmware_log_mode_write(void *data, u64 val)
 		break;
 	case KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_PRINT:
 	case KBASE_CSF_FIRMWARE_LOG_MODE_AUTO_DISCARD:
-		schedule_delayed_work(&fw_log->poll_work,
-				      msecs_to_jiffies(atomic_read(&fw_log->poll_period_ms)));
+		schedule_delayed_work(
+			&fw_log->poll_work,
+			msecs_to_jiffies((unsigned int)atomic_read(&fw_log->poll_period_ms)));
 		break;
 	default:
 		ret = -EINVAL;
@@ -198,7 +199,7 @@ static int kbase_csf_firmware_log_poll_period_read(void *data, u64 *val)
 	struct kbase_device *kbdev = (struct kbase_device *)data;
 	struct kbase_csf_firmware_log *fw_log = &kbdev->csf.fw_log;
 
-	*val = atomic_read(&fw_log->poll_period_ms);
+	*val = (u64)atomic_read(&fw_log->poll_period_ms);
 	return 0;
 }
 
@@ -263,7 +264,7 @@ static void kbase_csf_firmware_log_poll(struct work_struct *work)
 		return;
 
 	schedule_delayed_work(&fw_log->poll_work,
-			      msecs_to_jiffies(atomic_read(&fw_log->poll_period_ms)));
+			      msecs_to_jiffies((unsigned int)atomic_read(&fw_log->poll_period_ms)));
 }
 
 int kbase_csf_firmware_log_init(struct kbase_device *kbdev)
@@ -382,7 +383,7 @@ void kbase_csf_firmware_log_dump_buffer(struct kbase_device *kbdev)
 		pend = p + read_size;
 		p = buf;
 
-		while (p < pend && (pnewline = memchr(p, '\n', pend - p))) {
+		while (p < pend && (pnewline = memchr(p, '\n', (size_t)(pend - p)))) {
 			/* Null-terminate the string */
 			*pnewline = 0;
 
@@ -445,14 +446,14 @@ static void toggle_logging_calls_in_loaded_image(struct kbase_device *kbdev, boo
 			kbase_csf_read_firmware_memory(kbdev, list_entry, &calling_address);
 			/* Read callee address */
 			kbase_csf_read_firmware_memory(kbdev, list_entry + sizeof(uint32_t),
-					&callee_address);
+						       &callee_address);
 
 			diff = callee_address - calling_address - 4;
 			sign = !!(diff & 0x80000000);
 			if (ARMV7_T1_BL_IMM_RANGE_MIN > (int32_t)diff ||
-					ARMV7_T1_BL_IMM_RANGE_MAX < (int32_t)diff) {
+			    ARMV7_T1_BL_IMM_RANGE_MAX < (int32_t)diff) {
 				dev_warn(kbdev->dev, "FW log patch 0x%x out of range, skipping",
-						calling_address);
+					 calling_address);
 				continue;
 			}
 
@@ -473,9 +474,9 @@ static void toggle_logging_calls_in_loaded_image(struct kbase_device *kbdev, boo
 
 			/* Patch logging func calls in their load location */
 			dev_dbg(kbdev->dev, "FW log patch 0x%x: 0x%x\n", calling_address,
-					bl_instruction);
+				bl_instruction);
 			kbase_csf_update_firmware_memory_exe(kbdev, calling_address,
-					bl_instruction);
+							     bl_instruction);
 		}
 	} else {
 		for (; list_entry < list_va_end; list_entry += 2 * sizeof(uint32_t)) {
@@ -484,7 +485,7 @@ static void toggle_logging_calls_in_loaded_image(struct kbase_device *kbdev, boo
 
 			/* Overwrite logging func calls with 2 NOP instructions */
 			kbase_csf_update_firmware_memory_exe(kbdev, calling_address,
-					ARMV7_DOUBLE_NOP_INSTR);
+							     ARMV7_DOUBLE_NOP_INSTR);
 		}
 	}
 }
@@ -516,15 +517,13 @@ int kbase_csf_firmware_log_toggle_logging_calls(struct kbase_device *kbdev, u32 
 	dev_info(kbdev->dev, "Wait for the MCU to get disabled");
 	ret = kbase_pm_killable_wait_for_desired_state(kbdev);
 	if (ret) {
-		dev_err(kbdev->dev,
-			"wait for PM state failed when toggling FW logging calls");
+		dev_err(kbdev->dev, "wait for PM state failed when toggling FW logging calls");
 		ret = -EAGAIN;
 		goto out;
 	}
 
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
-	mcu_inactive =
-		kbase_pm_is_mcu_inactive(kbdev, kbdev->pm.backend.mcu_state);
+	mcu_inactive = kbase_pm_is_mcu_inactive(kbdev, kbdev->pm.backend.mcu_state);
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 	if (!mcu_inactive) {
 		dev_err(kbdev->dev,
