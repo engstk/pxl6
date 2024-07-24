@@ -11,7 +11,7 @@
 #include "maxfg_logging.h"
 
 /* learning parameters */
-#define MAX_FG_LEARNING_CONFIG_NORMAL_REGS 8
+#define MAX_FG_LEARNING_CONFIG_NORMAL_REGS 14
 #define MAX_FG_LEARNING_CONFIG_DEBUG_REGS 2
 
 /* see maxfg_ce_relaxed() */
@@ -25,6 +25,12 @@ static const enum max17x0x_reg_tags fg_learning_param[] = {
 	MAXFG_TAG_msoc,
 	MAX17X0X_TAG_vfsoc,
 	MAXFG_TAG_fstat,
+	MAXFG_TAG_avgt,
+	MAXFG_TAG_temp,
+	MAXFG_TAG_qh,
+	MAXFG_TAG_vcel,
+	MAXFG_TAG_avgv,
+	MAXFG_TAG_vfocv,
 
 	/* from debug_regmap */
 	MAXFG_TAG_rcomp0,

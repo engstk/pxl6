@@ -1558,6 +1558,11 @@ static void bat_log_ttf_change(ktime_t estimate, int max_ratio, struct batt_drv 
 	batt_drv->ttf_est = estimate;
 }
 
+static bool batt_charge_to_limit_enable(const struct batt_chg_health *chg_health)
+{
+	return chg_health->rest_rate == 0 && chg_health->always_on_soc > 0;
+}
+
 /*
  * msc_logic_health() sync ce_data->ce_health to batt_drv->chg_health
  * . return -EINVAL when the device is not connected to power -ERANGE when
@@ -1573,7 +1578,7 @@ static int batt_ttf_estimate(ktime_t *res, struct batt_drv *batt_drv)
 	qnum_t raw_full = ssoc_point_full - qnum_rconst(SOC_ROUND_BASE);
 	qnum_t soc_raw = ssoc_get_real_raw(&batt_drv->ssoc_state);
 	ktime_t estimate = 0;
-	int rc = 0, max_ratio = 0;
+	int rc = 0, max_ratio = 0, ssoc_full = SSOC_FULL;
 
 	if (batt_drv->ssoc_state.buck_enabled != 1)
 		return -EINVAL;
@@ -1583,8 +1588,14 @@ static int batt_ttf_estimate(ktime_t *res, struct batt_drv *batt_drv)
 		goto done;
 	}
 
-	/* TTF is 0 when UI shows 100% */
-	if (ssoc_get_capacity(&batt_drv->ssoc_state) == SSOC_FULL) {
+	/* charge to limit enable */
+	if (batt_charge_to_limit_enable(&batt_drv->chg_health)) {
+		ssoc_full = batt_drv->chg_health.always_on_soc;
+		raw_full = qnum_fromint(ssoc_full) - qnum_rconst(SOC_ROUND_BASE);
+	}
+
+	/* TTF is 0 when over ssoc_full */
+	if (ssoc_get_capacity(&batt_drv->ssoc_state) >= ssoc_full) {
 		estimate = 0;
 		goto done;
 	}
@@ -6520,6 +6531,38 @@ static ssize_t chg_health_charge_limit_set(struct device *dev,
 static DEVICE_ATTR(charge_limit, 0660, chg_health_charge_limit_get,
 		   chg_health_charge_limit_set);
 
+static void batt_init_chg_health(struct batt_drv *batt_drv)
+{
+	int ret;
+
+	ret = of_property_read_u32(batt_drv->device->of_node,
+				   "google,chg-rest-soc",
+				   &batt_drv->chg_health.rest_soc);
+	if (ret < 0)
+		batt_drv->chg_health.rest_soc = -1;
+
+	ret = of_property_read_u32(batt_drv->device->of_node,
+				   "google,chg-rest-rate",
+				   &batt_drv->chg_health.rest_rate);
+	if (ret < 0)
+		batt_drv->chg_health.rest_rate = 0;
+
+	ret = of_property_read_u32(batt_drv->device->of_node,
+				   "google,chg-rest-rate-before-trigger",
+				   &batt_drv->chg_health.rest_rate_before_trigger);
+	if (ret < 0)
+		batt_drv->chg_health.rest_rate_before_trigger = HEALTH_CHG_RATE_BEFORE_TRIGGER;
+
+	batt_set_health_charge_limit(batt_drv, -1);
+
+	gbms_logbuffer_prlog(batt_drv->ttf_stats.ttf_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
+			     "MSC_HEALTH: %s: rest_soc=%d, aon_soc=%d, rest_rate/before=%d/%d",
+			     __func__, batt_drv->chg_health.rest_soc,
+			     batt_drv->chg_health.always_on_soc,
+			     batt_drv->chg_health.rest_rate,
+			     batt_drv->chg_health.rest_rate_before_trigger);
+}
+
 static ssize_t batt_show_chg_deadline(struct device *dev,
 				      struct device_attribute *attr, char *buf)
 {
@@ -6906,6 +6949,63 @@ static ssize_t batt_show_ac_soc(struct device *dev,
 
 static const DEVICE_ATTR(ac_soc, 0444, batt_show_ac_soc, NULL);
 
+static ssize_t charge_to_limit_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count) {
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	bool is_enable = batt_drv->chg_health.rest_rate == 0 &&
+			 batt_drv->chg_health.always_on_soc > 0;
+	int charge_to_limit;
+	int ret = 0;
+
+	ret = kstrtoint(buf, 0, &charge_to_limit);
+	if (ret < 0)
+		return ret;
+
+	/* disable charge to limit, restore original setting */
+	if (is_enable && charge_to_limit == 0) {
+		batt_init_chg_health(batt_drv);
+		return count;
+	}
+
+	/* invalid value, do nothing */
+	if (charge_to_limit <= 0 || charge_to_limit > 99)
+		return count;
+
+
+	if (batt_drv->chg_health.rest_rate == 0 &&
+	    batt_drv->chg_health.always_on_soc == charge_to_limit)
+		return count;
+
+	gbms_logbuffer_prlog(batt_drv->ttf_stats.ttf_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
+			     "MSC_HEALTH: %s: set aon_soc=%d->%d", __func__,
+			     batt_drv->chg_health.always_on_soc, charge_to_limit);
+
+	/* will set cc_max = 0 */
+	batt_drv->chg_health.rest_rate = 0;
+	batt_set_health_charge_limit(batt_drv, charge_to_limit);
+
+	return count;
+}
+
+static ssize_t charge_to_limit_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	const bool is_enable = batt_charge_to_limit_enable(&batt_drv->chg_health);
+	int result = 0;
+
+	if (is_enable)
+		result = batt_drv->chg_health.always_on_soc;
+	else
+		result = 0;
+
+	return sysfs_emit(buf, "%d\n", result);
+}
+
+static const DEVICE_ATTR_RW(charge_to_limit);
 
 static ssize_t batt_show_charger_state(struct device *dev,
 				       struct device_attribute *attr, char *buf)
@@ -8233,6 +8333,10 @@ static int batt_init_fs(struct batt_drv *batt_drv)
 	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_deadline_dryrun);
 	if (ret != 0)
 		dev_err(&batt_drv->psy->dev, "Failed to create chg_deadline_dryrun\n");
+
+	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_to_limit);
+	if (ret != 0)
+		dev_err(&batt_drv->psy->dev, "Failed to create charge_to_limit\n");
 
 	/* time to full */
 	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ttf_stats);
@@ -10165,7 +10269,6 @@ static struct gbms_storage_desc batt_prop_dsc = {
 	.read = batt_prop_read,
 };
 
-
 static void google_battery_init_work(struct work_struct *work)
 {
 	struct batt_drv *batt_drv = container_of(work, struct batt_drv,
@@ -10374,25 +10477,7 @@ static void google_battery_init_work(struct work_struct *work)
 	batt_res_dump_logs(&batt_drv->health_data.bhi_data.res_state);
 
 	/* health based charging, triggers */
-	batt_drv->chg_health.always_on_soc = -1;
-
-	ret = of_property_read_u32(batt_drv->device->of_node,
-				   "google,chg-rest-soc",
-				   &batt_drv->chg_health.rest_soc);
-	if (ret < 0)
-		batt_drv->chg_health.rest_soc = -1;
-
-	ret = of_property_read_u32(batt_drv->device->of_node,
-				   "google,chg-rest-rate",
-				   &batt_drv->chg_health.rest_rate);
-	if (ret < 0)
-		batt_drv->chg_health.rest_rate = 0;
-
-	ret = of_property_read_u32(batt_drv->device->of_node,
-				   "google,chg-rest-rate-before-trigger",
-				   &batt_drv->chg_health.rest_rate_before_trigger);
-	if (ret < 0)
-		batt_drv->chg_health.rest_rate_before_trigger = HEALTH_CHG_RATE_BEFORE_TRIGGER;
+	batt_init_chg_health(batt_drv);
 
 	/* override setting google,battery-roundtrip = 0 in device tree */
 	batt_drv->disable_votes =

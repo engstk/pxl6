@@ -1500,6 +1500,67 @@ static void max1720x_handle_update_filtercfg(struct max1720x_chip *chip,
 
 #define EEPROM_CC_OVERFLOW_BIT	BIT(15)
 #define MAXIM_CYCLE_COUNT_RESET 655
+#define OVERFLOW_START_ENTRY	65
+#define EEPROM_DELTA_CYCLE	10
+#define CYCLE_LSB_UNIT		100 /* LSB: 1% */
+static int max1720x_history_empty(struct max17x0x_eeprom_history *entry)
+{
+	return entry->tempco == 0xffff && entry->rcomp0 == 0xffff;
+}
+
+/* find the first empty entry starting from a position */
+static int max1720x_find_empty(int offset)
+{
+	struct max17x0x_eeprom_history temp = { 0 };
+	int ret, index;
+
+	/* recover (last - OVERFLOW_START_ENTRY + 1) entries */
+	for (index = offset; index < BATT_MAX_HIST_CNT; index++) {
+		ret = gbms_storage_read_data(GBMS_TAG_HIST, &temp,
+					     sizeof(temp), index);
+		if (ret < 0)
+			return -EIO;
+
+		if (max1720x_history_empty(&temp))
+			break;
+	}
+
+	return index == BATT_MAX_HIST_CNT ? -1 : index - offset;
+}
+
+static int max1720x_check_history(struct max1720x_chip *chip)
+{
+	struct max17x0x_eeprom_history temp = { 0 };
+	int ret, misplaced_count, first_empty, est_cycle;
+
+	/* when the entry before the overflow is non empty we are good */
+	ret = gbms_storage_read_data(GBMS_TAG_HIST, &temp, sizeof(temp),
+				     OVERFLOW_START_ENTRY - 1);
+	if (ret < 0 || !max1720x_history_empty(&temp))
+		return ret;
+
+	/* # entries that need to be moved from OVERFLOW_START_ENTRY */
+	misplaced_count = max1720x_find_empty(OVERFLOW_START_ENTRY);
+
+	if (misplaced_count <= 0)
+		return misplaced_count;
+
+	/* where entries will be moved to */
+	first_empty = max1720x_find_empty(0);
+
+	if (first_empty < 0)
+		return -EINVAL;
+
+	est_cycle = (first_empty + misplaced_count) * EEPROM_DELTA_CYCLE;
+
+	gbms_logbuffer_devlog(chip->monitor_log, chip->dev,
+			      LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+			      "0x4856 %d %d %d %d",
+			      first_empty, misplaced_count, chip->cycle_count, est_cycle);
+
+	return 0;
+}
+
 static int max1720x_restore_battery_cycle(struct max1720x_chip *chip)
 {
 	int ret;
@@ -1550,6 +1611,7 @@ static int max1720x_restore_battery_cycle(struct max1720x_chip *chip)
 
 	chip->cycle_reg_ok = true;
 	max1720x_update_cycle_count(chip);
+	max1720x_check_history(chip);
 
 	return 0;
 }
@@ -4071,6 +4133,24 @@ static int debug_sync_model(void *data, u64 val)
 
 DEFINE_SIMPLE_ATTRIBUTE(debug_sync_model_fops, NULL, debug_sync_model, "%llu\n");
 
+static int debug_model_version_get(void *data, u64 *val)
+{
+	struct max1720x_chip *chip = (struct max1720x_chip *)data;
+
+	*val = max_m5_model_read_version(chip->model_data);
+
+	return 0;
+}
+
+static int debug_model_version_set(void *data, u64 val)
+{
+	struct max1720x_chip *chip = (struct max1720x_chip *)data;
+
+	return max_m5_model_write_version(chip->model_data, val);
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(debug_model_version_fops, debug_model_version_get,
+			debug_model_version_set, "%llu\n");
 
 static ssize_t max1720x_show_debug_data(struct file *filp, char __user *buf,
 					size_t count, loff_t *ppos)
@@ -4340,8 +4420,8 @@ static int max17x0x_init_sysfs(struct max1720x_chip *chip)
 				    &debug_model_reg_fops);
 	}
 	debugfs_create_bool("model_ok", 0444, de, &chip->model_ok);
-	debugfs_create_file("sync_model", 0400, de, chip,
-			    &debug_sync_model_fops);
+	debugfs_create_file("sync_model", 0400, de, chip, &debug_sync_model_fops);
+	debugfs_create_file("model_version", 0600, de, chip, &debug_model_version_fops);
 
 	/* capacity drift fixup, one of MAX1720X_DA_VER_* */
 	debugfs_create_u32("algo_ver", 0644, de, &chip->drift_data.algo_ver);

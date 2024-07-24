@@ -1383,8 +1383,13 @@ void kbase_jd_done_worker(struct kthread_work *data)
 
 	if ((katom->event_code != BASE_JD_EVENT_DONE) && !kbase_ctx_flag(katom->kctx, KCTX_DYING) &&
 	    !kbase_ctx_flag(katom->kctx, KCTX_PAGE_FAULT_REPORT_SKIP))
-		dev_err(kbdev->dev, "t6xx: GPU fault 0x%02lx from job slot %d\n",
-			(unsigned long)katom->event_code, katom->slot_nr);
+		dev_err(kbdev->dev,
+			"Atom %d (age %x core_req %x) of kctx %d_%d"
+			" completed with event_code %x on job slot %d",
+			kbase_jd_atom_id(kctx, katom),
+			katom->age, katom->core_req,
+			kctx->tgid, kctx->id,
+			katom->event_code, katom->slot_nr);
 
 	/* Retain state before the katom disappears */
 	kbasep_js_atom_retained_state_copy(&katom_retained_state, katom);

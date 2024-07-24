@@ -72,7 +72,6 @@ config MALI_NO_MALI_DEFAULT_GPU
 	help
 	  This option sets the default GPU to identify as for No Mali builds.
 
-
 endchoice
 
 menu "Platform specific options"
@@ -216,16 +215,6 @@ config MALI_CORESTACK
 	  This feature is currently only supported on t-Six and t-HEx GPUs.
 
 	  If unsure, say N.
-
-comment "Platform options"
-	depends on MALI_MIDGARD && MALI_EXPERT
-
-config MALI_ERROR_INJECT
-	bool "Enable No Mali error injection"
-	depends on MALI_MIDGARD && MALI_EXPERT && MALI_NO_MALI
-	default n
-	help
-	  Enables insertion of errors to test module failure and recovery mechanisms.
 
 comment "Debug options"
 	depends on MALI_MIDGARD && MALI_EXPERT

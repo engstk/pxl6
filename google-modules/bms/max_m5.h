@@ -40,6 +40,7 @@
 #define MAX_M5_MODEL_ACCESS_LOCK_OK	0xFFFF
 
 #define MAX_M5_TCURVE	0xB9
+#define MAX_M5_VFOCV	0xFB
 #define MAX_M5_VFSOC	0xFF
 
 #define MAX_M5_COMMAND	0x60
@@ -156,6 +157,7 @@ enum max_m5_re_cal_algo {
 /** ------------------------------------------------------------------------ */
 
 int max_m5_model_read_version(const struct max_m5_data *m5_data);
+int max_m5_model_write_version(const struct max_m5_data *m5_data, int version);
 int max_m5_model_get_cap_lsb(const struct max_m5_data *m5_data);
 int max_m5_reset_state_data(struct max_m5_data *m5_data);
 int max_m5_needs_reset_model_data(const struct max_m5_data *m5_data);

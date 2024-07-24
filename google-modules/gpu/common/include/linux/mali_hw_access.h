@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2023-2024 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -19,17 +19,20 @@
  *
  */
 
-#ifndef _KUTF_KPROBE_H_
-#define _KUTF_KPROBE_H_
+#ifndef _MALI_HW_ACCESS_H_
+#define _MALI_HW_ACCESS_H_
 
-struct dentry;
+#include <asm/arch_timer.h>
+#include <linux/io.h>
 
-int kutf_kprobe_init(struct dentry *base_dir);
-void kutf_kprobe_exit(void);
 
-typedef void (*kutf_kp_handler)(int argc, char **argv);
+#define mali_readl(addr) readl(addr)
+#define mali_readq(addr) readq(addr)
+#define mali_writel(val, addr) writel(val, addr)
+#define mali_writeq(val, addr) writeq(val, addr)
+#define mali_ioremap(addr, size) ioremap(addr, size)
+#define mali_iounmap(addr) iounmap(addr)
+#define mali_arch_timer_get_cntfrq() arch_timer_get_cntfrq()
 
-void kutf_kp_sample_handler(int argc, char **argv);
-void kutf_kp_sample_kernel_function(void);
 
-#endif /* _KUTF_KPROBE_H_ */
+#endif /* _MALI_HW_ACCESS_H_ */
