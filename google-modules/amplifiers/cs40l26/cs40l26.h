@@ -1588,6 +1588,7 @@ struct cs40l26_private {
 	struct cl_dsp_debugfs *cl_dsp_db;
 #endif
 #if IS_ENABLED(CONFIG_GOOG_CUST)
+	struct mutex cl_dsp_lock;
 	struct work_struct reset_work;
 	enum cs40l26_reset_event reset_event;
 	u8 reset_count;

@@ -327,7 +327,9 @@ void kbase_context_common_term(struct kbase_context *kctx)
 
 	pages = atomic_read(&kctx->used_pages);
 	if (pages != 0)
-		dev_warn(kctx->kbdev->dev, "%s: %d pages in use!\n", __func__, pages);
+		dev_warn(kctx->kbdev->dev, "%s: %d pages (pgd cnt %u) in use for kctx %d_%d",
+			 __func__, pages,
+			 kctx->pgd_cnt, kctx->tgid, kctx->id);
 
 	WARN_ON(atomic_read(&kctx->nonmapped_pages) != 0);
 

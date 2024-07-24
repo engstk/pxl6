@@ -275,7 +275,7 @@ int gbms_aacr_fade10(const struct gbms_chg_profile *profile, int cycles)
 	if (profile->aacr_nb_limits == 0 || cycles < 0)
 		return -EINVAL;
 
-	for (idx = 0; idx < profile->aacr_nb_limits; idx++)
+	for (idx = 0; idx < profile->aacr_nb_limits - 1; idx++)
 		if (cycles < profile->reference_cycles[idx])
 			break;
 

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2011-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -565,7 +565,7 @@ struct kbase_mem_pool {
 	u8 group_id;
 	spinlock_t pool_lock;
 	struct list_head page_list;
-	struct shrinker reclaim;
+	DEFINE_KBASE_SHRINKER reclaim;
 	atomic_t isolation_in_progress_cnt;
 
 	struct kbase_mem_pool *next_pool;
@@ -864,8 +864,6 @@ struct kbase_mem_migrate {
  * @as_free:               Bitpattern of free/available GPU address spaces.
  * @mmu_mask_change:       Lock to serialize the access to MMU interrupt mask
  *                         register used in the handling of Bus & Page faults.
- * @pagesize_2mb:          Boolean to determine whether 2MiB page sizes are
- *                         supported and used where possible.
  * @gpu_props:             Object containing complete information about the
  *                         configuration/properties of GPU HW device in use.
  * @hw_issues_mask:        List of SW workarounds for HW issues
@@ -1176,8 +1174,6 @@ struct kbase_device {
 	u16 as_free;
 
 	spinlock_t mmu_mask_change;
-
-	bool pagesize_2mb;
 
 	struct kbase_gpu_props gpu_props;
 
@@ -2032,10 +2028,12 @@ struct kbase_context {
 	atomic_t used_pages;
 	atomic_t nonmapped_pages;
 	atomic_t permanent_mapped_pages;
+	u32 pgd_cnt;
 
 	struct kbase_mem_pool_group mem_pools;
 
-	struct shrinker reclaim;
+	DEFINE_KBASE_SHRINKER reclaim;
+
 	struct list_head evict_list;
 	atomic_t evict_nents;
 

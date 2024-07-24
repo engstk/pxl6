@@ -378,8 +378,7 @@ int max_m5_model_read_version(const struct max_m5_data *m5_data)
 	return (version >> MODEL_VERSION_SHIFT) & MODEL_VERSION_MASK;
 }
 
-static int max_m5_model_write_version(const struct max_m5_data *m5_data,
-				      int version)
+int max_m5_model_write_version(const struct max_m5_data *m5_data, int version)
 {
 	u16 temp;
 	int ret;
@@ -1605,6 +1604,9 @@ const struct max17x0x_reg max_m5[] = {
 	[MAXFG_TAG_fstat] = { ATOM_INIT_REG16(MAX_M5_FSTAT)},
 	[MAXFG_TAG_dqacc] = { ATOM_INIT_REG16(MAX_M5_DQACC)},
 	[MAXFG_TAG_dpacc] = { ATOM_INIT_REG16(MAX_M5_DPACC)},
+	[MAXFG_TAG_avgt] = { ATOM_INIT_REG16(MAX_M5_AVGTA)},
+	[MAXFG_TAG_avgv] = { ATOM_INIT_REG16(MAX_M5_AVGVCELL)},
+	[MAXFG_TAG_vfocv] = { ATOM_INIT_REG16(MAX_M5_VFOCV)},
 };
 
 int max_m5_regmap_init(struct max17x0x_regmap *regmap, struct i2c_client *clnt)

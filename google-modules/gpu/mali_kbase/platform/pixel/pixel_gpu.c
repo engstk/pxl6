@@ -150,6 +150,7 @@ static int gpu_fw_cfg_init(struct kbase_device *kbdev) {
 static int gpu_pixel_kctx_init(struct kbase_context *kctx)
 {
 	struct kbase_device* kbdev = kctx->kbdev;
+	struct pixel_platform_data *platform_data;
 	int err;
 
 	kctx->platform_data = kzalloc(sizeof(struct pixel_platform_data), GFP_KERNEL);
@@ -158,6 +159,9 @@ static int gpu_pixel_kctx_init(struct kbase_context *kctx)
 		err = -ENOMEM;
 		goto done;
 	}
+
+	platform_data = kctx->platform_data;
+	platform_data->kctx = kctx;
 
 	err = gpu_dvfs_kctx_init(kctx);
 	if (err) {
@@ -276,6 +280,9 @@ struct kbase_platform_funcs_conf platform_funcs = {
 	.platform_handler_context_term_func = &gpu_pixel_kctx_term,
 	.platform_handler_work_begin_func = &gpu_dvfs_metrics_work_begin,
 	.platform_handler_work_end_func = &gpu_dvfs_metrics_work_end,
+	.platform_handler_context_active = &gpu_slc_kctx_active,
+	.platform_handler_context_idle = &gpu_slc_kctx_idle,
+	.platform_handler_tick_tock = &gpu_slc_tick_tock,
 	.platform_fw_cfg_init_func = &gpu_fw_cfg_init,
 	.platform_handler_core_dump_func = &gpu_sscd_dump,
 };

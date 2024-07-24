@@ -71,18 +71,6 @@ bob_defaults {
     mali_real_hw: {
         kbuild_options: ["CONFIG_MALI_REAL_HW=y"],
     },
-    mali_error_inject_none: {
-        kbuild_options: ["CONFIG_MALI_ERROR_INJECT_NONE=y"],
-    },
-    mali_error_inject_track_list: {
-        kbuild_options: ["CONFIG_MALI_ERROR_INJECT_TRACK_LIST=y"],
-    },
-    mali_error_inject_random: {
-        kbuild_options: ["CONFIG_MALI_ERROR_INJECT_RANDOM=y"],
-    },
-    mali_error_inject: {
-        kbuild_options: ["CONFIG_MALI_ERROR_INJECT=y"],
-    },
     mali_debug: {
         kbuild_options: [
             "CONFIG_MALI_DEBUG=y",

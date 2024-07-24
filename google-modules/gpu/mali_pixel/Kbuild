@@ -25,7 +25,7 @@ CONFIG_MALI_MEMORY_GROUP_MANAGER ?= m
 CONFIG_MALI_PRIORITY_CONTROL_MANAGER ?= m
 CONFIG_MALI_PROTECTED_MEMORY_ALLOCATOR ?= m
 CONFIG_MALI_PIXEL_STATS ?= m
-CONFIG_MALI_PIXEL_GPU_SLC=y
+CONFIG_MALI_PIXEL_GPU_SLC ?= y
 
 mali_pixel-objs :=
 
@@ -37,6 +37,7 @@ endif
 ifeq ($(CONFIG_MALI_MEMORY_GROUP_MANAGER),m)
 	DEFINES += -DCONFIG_MALI_MEMORY_GROUP_MANAGER
 	mali_pixel-objs += memory_group_manager.o
+	mali_pixel-objs += pixel_slc.o
 endif
 ifeq ($(CONFIG_MALI_PRIORITY_CONTROL_MANAGER),m)
 	DEFINES += -DCONFIG_MALI_PRIORITY_CONTROL_MANAGER
@@ -48,6 +49,9 @@ ifeq ($(CONFIG_MALI_PROTECTED_MEMORY_ALLOCATOR),m)
 endif
 ifeq ($(CONFIG_MALI_PIXEL_GPU_SLC),y)
 	DEFINES += -DCONFIG_MALI_PIXEL_GPU_SLC
+	ifeq ($(CONFIG_SOC_ZUMA),y)
+		DEFINES += -DPIXEL_GPU_SLC_ACPM_SIGNAL
+	endif
 endif
 
 # Use our defines when compiling, and include mali platform module headers

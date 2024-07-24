@@ -2162,9 +2162,15 @@ int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves)
 	int ret;
 	u32 reg, nwaves, nowt;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_lock(&cs40l26->cl_dsp_lock);
+#endif
 	ret = cl_dsp_get_reg(cs40l26->dsp, "NUM_OF_WAVES",
 			CL_DSP_XM_UNPACKED_TYPE,
 			CS40L26_VIBEGEN_ALGO_ID, &reg);
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_unlock(&cs40l26->cl_dsp_lock);
+#endif
 	if (ret)
 		return ret;
 
@@ -2172,8 +2178,14 @@ int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves)
 	if (ret)
 		return ret;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_lock(&cs40l26->cl_dsp_lock);
+#endif
 	ret = cl_dsp_get_reg(cs40l26->dsp, "OWT_NUM_OF_WAVES_XM",
 			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_unlock(&cs40l26->cl_dsp_lock);
+#endif
 	if (ret)
 		return ret;
 
@@ -4410,10 +4422,16 @@ static int cs40l26_cl_dsp_reinit(struct cs40l26_private *cs40l26)
 {
 	int ret;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_lock(&cs40l26->cl_dsp_lock);
+#endif
 	if (cs40l26->dsp) {
 		ret = cl_dsp_destroy(cs40l26->dsp);
 		if (ret) {
 			dev_err(cs40l26->dev, "Failed to destroy DSP struct\n");
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+			mutex_unlock(&cs40l26->cl_dsp_lock);
+#endif
 			return ret;
 		}
 
@@ -4421,6 +4439,9 @@ static int cs40l26_cl_dsp_reinit(struct cs40l26_private *cs40l26)
 	}
 
 	cs40l26->dsp = cl_dsp_create(cs40l26->dev, cs40l26->regmap);
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_unlock(&cs40l26->cl_dsp_lock);
+#endif
 	if (IS_ERR(cs40l26->dsp))
 		return PTR_ERR(cs40l26->dsp);
 
@@ -5077,6 +5098,9 @@ void cs40l26_make_reset_decision(struct cs40l26_private *cs40l26, const char *fu
 	if (trigger) {
 		dev_info(dev, "Queue reset work after %s", func);
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->reset_work);
+
+		/* Wait for reset to finish */
+		flush_work(&cs40l26->reset_work);
 	} else
 		dev_info(dev, "Reset event: %d. Skip this trigger from %s.", cs40l26->reset_event,
 			 func);
@@ -5090,6 +5114,9 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	int ret;
 
 	mutex_init(&cs40l26->lock);
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_init(&cs40l26->cl_dsp_lock);
+#endif
 
 	cs40l26->vibe_workqueue = alloc_ordered_workqueue("vibe_workqueue",
 			WQ_HIGHPRI);
@@ -5239,7 +5266,9 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 
 	disable_irq(cs40l26->irq);
 	mutex_destroy(&cs40l26->lock);
-
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	mutex_destroy(&cs40l26->cl_dsp_lock);
+#endif
 
 	if (cs40l26->pm_ready)
 		cs40l26_pm_runtime_teardown(cs40l26);

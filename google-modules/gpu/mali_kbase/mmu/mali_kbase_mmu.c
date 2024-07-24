@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2010-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -334,6 +334,7 @@ static void kbase_mmu_account_freed_pgd(struct kbase_device *kbdev, struct kbase
 	if (mmut->kctx) {
 		kbase_process_page_usage_dec(mmut->kctx, 1);
 		atomic_sub(1, &mmut->kctx->used_pages);
+		mmut->kctx->pgd_cnt--;
 	}
 
 	kbase_trace_gpu_mem_usage_dec(kbdev, mmut->kctx, 1);
@@ -773,7 +774,7 @@ static bool page_fault_try_alloc(struct kbase_context *kctx, struct kbase_va_reg
 		return false;
 	}
 
-	if (kctx->kbdev->pagesize_2mb && new_pages >= NUM_PAGES_IN_2MB_LARGE_PAGE) {
+	if (kbase_is_large_pages_enabled() && new_pages >= NUM_PAGES_IN_2MB_LARGE_PAGE) {
 		root_pool = &kctx->mem_pools.large[region->gpu_alloc->group_id];
 		*grow_2mb_pool = true;
 	} else {
@@ -920,7 +921,7 @@ void kbase_mmu_page_fault_worker(struct work_struct *data)
 	int err;
 	bool grown = false;
 	size_t pages_to_grow;
-	bool grow_2mb_pool;
+	bool grow_2mb_pool = false;
 	struct kbase_sub_alloc *prealloc_sas[2] = { NULL, NULL };
 	int i;
 	size_t current_backed_size;
@@ -1090,7 +1091,7 @@ void kbase_mmu_page_fault_worker(struct work_struct *data)
 	}
 
 page_fault_retry:
-	if (kbdev->pagesize_2mb) {
+	if (kbase_is_large_pages_enabled()) {
 		/* Preallocate (or re-allocate) memory for the sub-allocation structs if necessary */
 		for (i = 0; i != ARRAY_SIZE(prealloc_sas); ++i) {
 			if (!prealloc_sas[i]) {
@@ -1162,9 +1163,12 @@ page_fault_retry:
 	if (fault_rel_pfn < current_backed_size) {
 		struct kbase_mmu_hw_op_param op_param;
 
-		dev_dbg(kbdev->dev,
-			"Page fault @ VA 0x%llx in allocated region 0x%llx-0x%llx of growable TMEM: Ignoring",
-			fault->addr, region->start_pfn, region->start_pfn + current_backed_size);
+		dev_warn_ratelimited(kbdev->dev,
+			"Page fault @VA 0x%llx in allocated region 0x%llx-0x%llx"
+			" (status %x) of kctx %d_%d (as %d)",
+			fault->addr, region->start_pfn << PAGE_SHIFT,
+			(region->start_pfn + current_backed_size) << PAGE_SHIFT,
+			fault_status, kctx->tgid, kctx->id, as_no);
 
 		kbase_mmu_hw_clear_fault(kbdev, faulting_as, KBASE_MMU_FAULT_TYPE_PAGE);
 		/* [1] in case another page fault occurred while we were
@@ -1177,10 +1181,14 @@ page_fault_retry:
 		 */
 		op_param.mmu_sync_info = mmu_sync_info;
 		op_param.kctx_id = kctx->id;
-		/* Can safely skip the invalidate for all levels in case
-		 * of duplicate page faults.
+		/* Usually it is safe to skip the MMU cache invalidate for all levels
+		 * in case of duplicate page faults. But for the pathological scenario
+		 * where the faulty VA gets mapped by the time page fault worker runs it
+		 * becomes imperative to invalidate MMU cache for all levels, otherwise
+		 * there is a possibility of repeated page faults on GPUs which supports
+		 * fine grained MMU cache invalidation.
 		 */
-		op_param.flush_skip_levels = 0xF;
+		op_param.flush_skip_levels = 0x0;
 		op_param.vpfn = fault_pfn;
 		op_param.nr = 1;
 		spin_lock_irqsave(&kbdev->hwaccess_lock, hwaccess_flags);
@@ -1214,10 +1222,14 @@ page_fault_retry:
 		/* See comment [1] about UNLOCK usage */
 		op_param.mmu_sync_info = mmu_sync_info;
 		op_param.kctx_id = kctx->id;
-		/* Can safely skip the invalidate for all levels in case
-		 * of duplicate page faults.
+		/* Usually it is safe to skip the MMU cache invalidate for all levels
+		 * in case of duplicate page faults. But for the pathological scenario
+		 * where the faulty VA gets mapped by the time page fault worker runs it
+		 * becomes imperative to invalidate MMU cache for all levels, otherwise
+		 * there is a possibility of repeated page faults on GPUs which supports
+		 * fine grained MMU cache invalidation.
 		 */
-		op_param.flush_skip_levels = 0xF;
+		op_param.flush_skip_levels = 0x0;
 		op_param.vpfn = fault_pfn;
 		op_param.nr = 1;
 		spin_lock_irqsave(&kbdev->hwaccess_lock, hwaccess_flags);
@@ -1379,7 +1391,7 @@ page_fault_retry:
 		 * Otherwise fail the allocation.
 		 */
 		if (pages_to_grow > 0) {
-			if (kbdev->pagesize_2mb && grow_2mb_pool) {
+			if (kbase_is_large_pages_enabled() && grow_2mb_pool) {
 				/* Round page requirement up to nearest 2 MB */
 				struct kbase_mem_pool *const lp_mem_pool =
 					&kctx->mem_pools.large[group_id];
@@ -1460,6 +1472,7 @@ static phys_addr_t kbase_mmu_alloc_pgd(struct kbase_device *kbdev, struct kbase_
 		new_page_count = atomic_add_return(1, &mmut->kctx->used_pages);
 		KBASE_TLSTREAM_AUX_PAGESALLOC(kbdev, mmut->kctx->id, (u64)new_page_count);
 		kbase_process_page_usage_inc(mmut->kctx, 1);
+		mmut->kctx->pgd_cnt++;
 	}
 
 	atomic_add(1, &kbdev->memdev.used_pages);
@@ -1592,6 +1605,7 @@ static int mmu_get_lowest_valid_pgd(struct kbase_device *kbdev, struct kbase_mmu
 
 	return err;
 }
+KBASE_ALLOW_ERROR_INJECTION_TEST_API(mmu_get_lowest_valid_pgd, ERRNO);
 
 /*
  * On success, sets out_pgd to the PGD for the specified level of translation
@@ -1697,7 +1711,15 @@ static void mmu_insert_pages_failure_recovery(struct kbase_device *kbdev,
 		mmu_mode->entries_invalidate(&page[idx], pcount);
 
 		if (!num_of_valid_entries) {
+			mmu_mode->set_num_valid_entries(page, 0);
+
 			kbase_kunmap(p, page);
+
+			/* No CPU and GPU cache maintenance is done here as caller would do the
+			 * complete flush of GPU cache and invalidation of TLB before the PGD
+			 * page is freed. CPU cache flush would be done when the PGD page is
+			 * returned to the memory pool.
+			 */
 
 			kbase_mmu_add_to_free_pgds_list(mmut, p);
 
@@ -1725,7 +1747,8 @@ next:
 	 * going to happen to these pages at this stage. They might return
 	 * movable once they are returned to a memory pool.
 	 */
-	if (kbase_is_page_migration_enabled() && !ignore_page_migration && phys) {
+	if (kbase_is_page_migration_enabled() && !ignore_page_migration && phys &&
+	    !is_huge(*phys) && !is_partial(*phys)) {
 		const u64 num_pages = (to_vpfn - from_vpfn) / GPU_PAGES_PER_CPU_PAGE;
 		u64 i;
 
@@ -1782,6 +1805,77 @@ static void mmu_flush_invalidate_insert_pages(struct kbase_device *kbdev,
 		mmu_flush_invalidate(kbdev, mmut->kctx, as_nr, &op_param);
 }
 
+static void dump_region_info(struct kbase_device *kbdev, struct kbase_va_region *reg)
+{
+	if (!reg)
+		return;
+
+#if MALI_JIT_PRESSURE_LIMIT_BASE
+	dev_err(kbdev->dev,
+		"Region info: GPU VA %llx, nr_pages %zu, used_pages %zu,"
+		" commit_pages %zu, flags %lx, type %d",
+		reg->start_pfn << PAGE_SHIFT,
+		reg->nr_pages, reg->used_pages, reg->gpu_alloc->nents,
+		reg->flags, reg->gpu_alloc->type);
+#else
+	dev_err(kbdev->dev,
+		"Region info: GPU VA %llx, nr_pages %zu,"
+		" commit_pages %zu, flags %lx, type %d",
+		reg->start_pfn << PAGE_SHIFT,
+		reg->nr_pages, reg->gpu_alloc->nents,
+		reg->flags, reg->gpu_alloc->type);
+#endif
+}
+
+static void dump_zones_info(struct kbase_context *const kctx)
+{
+	enum kbase_memory_zone zone_idx;
+
+	if (!kctx)
+		return;
+
+	for (zone_idx = 0; zone_idx < CONTEXT_ZONE_MAX; zone_idx++) {
+		struct kbase_reg_zone *reg_zone = &kctx->reg_zone[zone_idx];
+
+		if (!reg_zone->base_pfn)
+			continue;
+		dev_warn(
+			kctx->kbdev->dev,
+			"%15s %u 0x%.16llx 0x%.16llx",
+			kbase_reg_zone_get_name(zone_idx), zone_idx, reg_zone->base_pfn,
+			reg_zone->va_size_pages);
+	}
+}
+
+static void dump_custom_va_zone_regions_info(struct kbase_context *const kctx, u64 insert_vpfn)
+{
+	struct kbase_reg_zone *reg_zone;
+
+	if (!kctx)
+		return;
+
+	reg_zone = &kctx->reg_zone[CUSTOM_VA_ZONE];
+
+	if (reg_zone->base_pfn &&
+	    (insert_vpfn >= reg_zone->base_pfn) &&
+	    (insert_vpfn < kbase_reg_zone_end_pfn(reg_zone))) {
+		struct rb_root *rbtree = &reg_zone->reg_rbtree;
+		struct rb_node *p;
+
+		dev_err(kctx->kbdev->dev, "Dumping CUSTOM_VA regions info");
+
+		for (p = rb_first(rbtree); p; p = rb_next(p)) {
+			struct kbase_va_region *reg = rb_entry(p, struct kbase_va_region, rblink);
+
+			/* Empty region - ignore */
+			if (reg->gpu_alloc == NULL)
+				continue;
+
+			dump_region_info(kctx->kbdev, reg);
+		}
+	}
+}
+
 /**
  * update_parent_pgds() - Updates the page table from bottom level towards
  *                        the top level to insert a new ATE
@@ -1797,6 +1891,7 @@ static void mmu_flush_invalidate_insert_pages(struct kbase_device *kbdev,
  *                  the physical addresses of newly allocated PGDs from index
  *                  insert_level+1 to cur_level, and an existing PGD at index
  *                  insert_level.
+ * @reg:            Pointer to the VA region that needs to be mapped.
  *
  * The newly allocated PGDs are linked from the bottom level up and inserted into the PGD
  * at insert_level which already exists in the MMU Page Tables. Migration status is also
@@ -1809,7 +1904,8 @@ static void mmu_flush_invalidate_insert_pages(struct kbase_device *kbdev,
  */
 static int update_parent_pgds(struct kbase_device *kbdev, struct kbase_mmu_table *mmut,
 			      int cur_level, int insert_level, u64 insert_vpfn,
-			      phys_addr_t *pgds_to_insert)
+			      phys_addr_t *pgds_to_insert,
+			      struct kbase_va_region *reg)
 {
 	int pgd_index;
 	int err = 0;
@@ -1827,6 +1923,8 @@ static int update_parent_pgds(struct kbase_device *kbdev, struct kbase_mmu_table
 		u64 parent_vpfn = (insert_vpfn >> ((3 - parent_index) * 9)) & 0x1FF;
 		struct page *parent_page = pfn_to_page(PFN_DOWN(parent_pgd));
 		u64 *parent_page_va;
+		u32 mmut_kctx_tgid = mmut->kctx ? mmut->kctx->tgid : 0;
+		u32 mmut_kctx_id = mmut->kctx ? mmut->kctx->id : 0;
 
 		if (WARN_ON_ONCE(target_pgd == KBASE_INVALID_PHYSICAL_ADDRESS)) {
 			err = -EFAULT;
@@ -1844,8 +1942,32 @@ static int update_parent_pgds(struct kbase_device *kbdev, struct kbase_mmu_table
 		current_valid_entries = kbdev->mmu_mode->get_num_valid_entries(parent_page_va);
 
 		kbdev->mmu_mode->entry_set_pte(&pte, target_pgd);
+		if (WARN_ON_ONCE((parent_page_va[parent_vpfn] & 1UL) != 0)) {
+			dev_err(kbdev->dev,
+				"Valid PTE found at index %lld of"
+				" Level %d table page for VA %llx of kctx %d_%d",
+				parent_vpfn, parent_index, insert_vpfn << 12,
+				mmut_kctx_tgid, mmut_kctx_id);
+			dump_region_info(kbdev, reg);
+			dev_err(kbdev->dev, "cur_level %d insert_level %d current_valid_entries %u",
+				cur_level, insert_level, current_valid_entries);
+			dump_zones_info(mmut->kctx);
+			dump_custom_va_zone_regions_info(mmut->kctx, insert_vpfn);
+		}
 		parent_page_va[parent_vpfn] = kbdev->mgm_dev->ops.mgm_update_gpu_pte(
 			kbdev->mgm_dev, MGM_DEFAULT_PTE_GROUP, parent_index, pte);
+		if (unlikely((current_valid_entries + 1) > KBASE_MMU_PAGE_ENTRIES)) {
+			dev_err(kbdev->dev,
+				"Unexpected valid entry count after updating entry at index %lld of"
+				" Level %d table page for VA %llx of kctx %d_%d",
+				parent_vpfn, parent_index, insert_vpfn << 12,
+				mmut_kctx_tgid, mmut_kctx_id);
+			dump_region_info(kbdev, reg);
+			dev_err(kbdev->dev, "cur_level %d insert_level %d current_valid_entries %u",
+				cur_level, insert_level, current_valid_entries);
+			dump_zones_info(mmut->kctx);
+			dump_custom_va_zone_regions_info(mmut->kctx, insert_vpfn);
+		}
 		kbdev->mmu_mode->set_num_valid_entries(parent_page_va, current_valid_entries + 1);
 		kbase_kunmap(parent_page, parent_page_va);
 
@@ -2111,7 +2233,7 @@ static int kbase_mmu_insert_single_page(struct kbase_context *kctx, u64 start_vp
 
 		if (newly_created_pgd) {
 			err = update_parent_pgds(kbdev, mmut, cur_level, insert_level, insert_vpfn,
-						 new_pgds);
+						 new_pgds, NULL);
 			if (err) {
 				dev_err(kbdev->dev, "%s: update_parent_pgds() failed (%d)",
 					__func__, err);
@@ -2395,7 +2517,11 @@ static int mmu_insert_pages_no_flush(struct kbase_device *kbdev, struct kbase_mm
 					 * should be performed with
 					 * kbase_mmu_update_pages()
 					 */
-					WARN_ON_ONCE((*target & 1UL) != 0);
+					if (WARN_ON_ONCE((*target & 1UL) != 0))
+						dev_err(kbdev->dev,
+							"valid ATE found at entry %u of"
+							" Level 3 table page for VA %llx",
+							ofs, insert_vpfn << 12);
 
 					*target = kbase_mmu_create_ate(kbdev,
 								       as_tagged(page_address),
@@ -2413,6 +2539,21 @@ static int mmu_insert_pages_no_flush(struct kbase_device *kbdev, struct kbase_mm
 			num_of_valid_entries += count;
 		}
 
+		if (unlikely(num_of_valid_entries > KBASE_MMU_PAGE_ENTRIES)) {
+			u32 mmut_kctx_tgid = mmut->kctx ? mmut->kctx->tgid : 0;
+			u32 mmut_kctx_id = mmut->kctx ? mmut->kctx->id : 0;
+			dev_err(kbdev->dev,
+				"Unexpected valid entry count after updating %u entries"
+				" at index %d of Level %d table page for VA %llx of kctx %d_%d",
+				count, vindex, cur_level, insert_vpfn << 12, mmut_kctx_tgid,
+				mmut_kctx_id);
+			dump_region_info(kbdev, reg);
+			dev_err(kbdev->dev,
+				"newly_created_pgd %d insert_level %d num_of_valid_entries %u",
+				newly_created_pgd, insert_level, num_of_valid_entries);
+			dump_zones_info(mmut->kctx);
+			dump_custom_va_zone_regions_info(mmut->kctx, insert_vpfn);
+		}
 		mmu_mode->set_num_valid_entries(pgd_page, num_of_valid_entries);
 
 		if (dirty_pgds)
@@ -2433,7 +2574,7 @@ static int mmu_insert_pages_no_flush(struct kbase_device *kbdev, struct kbase_mm
 
 		if (newly_created_pgd) {
 			err = update_parent_pgds(kbdev, mmut, cur_level, insert_level, insert_vpfn,
-						 new_pgds);
+						 new_pgds, reg);
 			if (err) {
 				dev_err(kbdev->dev, "%s: update_parent_pgds() failed (%d)",
 					__func__, err);
@@ -2522,6 +2663,7 @@ int kbase_mmu_insert_pages(struct kbase_device *kbdev, struct kbase_mmu_table *m
 }
 
 KBASE_EXPORT_TEST_API(kbase_mmu_insert_pages);
+KBASE_ALLOW_ERROR_INJECTION_TEST_API(kbase_mmu_insert_pages, ERRNO);
 
 int kbase_mmu_insert_pages_skip_status_update(struct kbase_device *kbdev,
 					      struct kbase_mmu_table *mmut, u64 vpfn,
@@ -2579,6 +2721,7 @@ int kbase_mmu_insert_aliased_pages(struct kbase_device *kbdev, struct kbase_mmu_
 
 	return 0;
 }
+KBASE_ALLOW_ERROR_INJECTION_TEST_API(kbase_mmu_insert_aliased_pages, ERRNO);
 
 #if !MALI_USE_CSF
 /**
@@ -2795,15 +2938,25 @@ static void kbase_mmu_update_and_free_parent_pgds(struct kbase_device *kbdev,
 
 		kbdev->mmu_mode->entries_invalidate(&current_page[index], 1);
 		if (current_valid_entries == 1 && current_level != MIDGARD_MMU_LEVEL(0)) {
+			kbdev->mmu_mode->set_num_valid_entries(current_page, 0);
+
 			kbase_kunmap(p, current_page);
 
-			/* Ensure the cacheline containing the last valid entry
-			 * of PGD is invalidated from the GPU cache, before the
-			 * PGD page is freed.
-			 */
-			kbase_mmu_sync_pgd_gpu(kbdev, mmut->kctx,
-					       current_pgd + (index * sizeof(u64)), sizeof(u64),
-					       flush_op);
+			/* Check if fine grained GPU cache maintenance is being used */
+			if (flush_op == KBASE_MMU_OP_FLUSH_PT) {
+				/* Ensure the invalidated PTE is visible in memory right away */
+				kbase_mmu_sync_pgd_cpu(kbdev,
+						       kbase_dma_addr(p) + (index * sizeof(u64)),
+						       sizeof(u64));
+				/* Invalidate the GPU cache for the whole PGD page and not just for
+				 * the cacheline containing the invalidated PTE, as the PGD page is
+				 * going to be freed. There is an extremely remote possibility that
+				 * other cachelines (containing all invalid PTEs) of PGD page are
+				 * also present in the GPU cache.
+				 */
+				kbase_mmu_sync_pgd_gpu(kbdev, mmut->kctx, current_pgd,
+						       512 * sizeof(u64), KBASE_MMU_OP_FLUSH_PT);
+			}
 
 			kbase_mmu_add_to_free_pgds_list(mmut, p);
 		} else {
@@ -2918,8 +3071,15 @@ static int kbase_mmu_teardown_pgd_pages(struct kbase_device *kbdev, struct kbase
 			if (mmu_mode->ate_is_valid(page[index], level))
 				break; /* keep the mapping */
 			else if (!mmu_mode->pte_is_valid(page[index], level)) {
-				dev_warn(kbdev->dev, "Invalid PTE found @ level %d for VA %llx",
-					 level, vpfn << PAGE_SHIFT);
+				u32 mmut_kctx_tgid = mmut->kctx ? mmut->kctx->tgid : 0;
+				u32 mmut_kctx_id = mmut->kctx ? mmut->kctx->id : 0;
+				dev_warn(kbdev->dev,
+					 "Invalid PTE found @ level %d for VA %llx"
+					 " (nr %zu, valid entries %u) of kctx %d_%d",
+					 level, vpfn << PAGE_SHIFT, nr,
+					 mmu_mode->get_num_valid_entries(page),
+					 mmut_kctx_tgid, mmut_kctx_id);
+				WARN_ON_ONCE(1);
 				/* nothing here, advance to the next PTE of the current level */
 				count = (1 << ((3 - level) * 9));
 				count -= (vpfn & (count - 1));
@@ -2978,14 +3138,25 @@ static int kbase_mmu_teardown_pgd_pages(struct kbase_device *kbdev, struct kbase
 		mmu_mode->entries_invalidate(&page[index], pcount);
 
 		if (!num_of_valid_entries) {
+			mmu_mode->set_num_valid_entries(page, 0);
+
 			kbase_kunmap(p, page);
 
-			/* Ensure the cacheline(s) containing the last valid entries
-			 * of PGD is invalidated from the GPU cache, before the
-			 * PGD page is freed.
-			 */
-			kbase_mmu_sync_pgd_gpu(kbdev, mmut->kctx, pgd + (index * sizeof(u64)),
-					       pcount * sizeof(u64), flush_op);
+			/* Check if fine grained GPU cache maintenance is being used */
+			if (flush_op == KBASE_MMU_OP_FLUSH_PT) {
+				/* Ensure the invalidated ATEs are visible in memory right away */
+				kbase_mmu_sync_pgd_cpu(kbdev,
+						       kbase_dma_addr(p) + (index * sizeof(u64)),
+						       pcount * sizeof(u64));
+				/* Invalidate the GPU cache for the whole PGD page and not just for
+				 * the cachelines containing the invalidated ATEs, as the PGD page
+				 * is going to be freed. There is an extremely remote possibility
+				 * that other cachelines (containing all invalid ATEs) of PGD page
+				 * are also present in the GPU cache.
+				 */
+				kbase_mmu_sync_pgd_gpu(kbdev, mmut->kctx, pgd, 512 * sizeof(u64),
+						       KBASE_MMU_OP_FLUSH_PT);
+			}
 
 			kbase_mmu_add_to_free_pgds_list(mmut, p);
 
@@ -3142,6 +3313,7 @@ int kbase_mmu_teardown_pages(struct kbase_device *kbdev, struct kbase_mmu_table 
 	return mmu_teardown_pages(kbdev, mmut, vpfn, phys, nr_phys_pages, nr_virt_pages, as_nr,
 				  false);
 }
+KBASE_EXPORT_TEST_API(kbase_mmu_teardown_pages);
 
 int kbase_mmu_teardown_imported_pages(struct kbase_device *kbdev, struct kbase_mmu_table *mmut,
 				      u64 vpfn, struct tagged_addr *phys, size_t nr_phys_pages,
