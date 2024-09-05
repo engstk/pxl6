@@ -105,11 +105,9 @@ struct aoc_prvdata {
 	void *sram_virt;
 	void *dram_virt;
 	void *aoc_req_virt;
-	void *aoc_s2mpu_virt;
 	size_t sram_size;
 	size_t dram_size;
 	size_t aoc_req_size;
-	u32 aoc_s2mpu_saved_value;
 
 	struct dma_heap *sensor_heap;
 	struct dma_heap *audio_playback_heap;

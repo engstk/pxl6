@@ -2057,10 +2057,14 @@ int dw3000_forcetrxoff(struct dw3000 *dw)
  * Return: zero on success, else a negative error code.
  */
 static inline int dw3000_setpreambledetecttimeout(struct dw3000 *dw,
-						  u16 timeout)
+						  u32 timeout)
 {
 	struct dw3000_local_data *local = &dw->data;
 	int rc;
+
+	/* disable timeout in the case of longer timeout */
+	timeout = timeout > 0xffff ? 0 : timeout;
+
 	/*
 	 * Compare with the previous value stored if register access
 	 * is necessary.
@@ -2087,6 +2091,10 @@ static inline int dw3000_setrxtimeout(struct dw3000 *dw, u32 timeout_dly)
 {
 	struct dw3000_local_data *local = &dw->data;
 	int rc;
+
+	/* select max value in case of overflow */
+	timeout_dly = timeout_dly > 0xfffff ? 0xfffff : timeout_dly;
+
 	if (local->rx_frame_timeout_dly == timeout_dly)
 		return 0;
 	if (timeout_dly) {
@@ -2652,7 +2660,7 @@ int dw3000_do_rx_enable(struct dw3000 *dw,
 	}
 
 	/* Add the frame timeout if needed. */
-	if (timeout_pac && config->frame_timeout_dtu) {
+	if (timeout_pac > 0xffff || (timeout_pac && config->frame_timeout_dtu)) {
 		frame_timeout_dly =
 			dtu_to_dly(llhw, config->frame_timeout_dtu) +
 			pac_to_dly(llhw, timeout_pac);
@@ -6920,6 +6928,7 @@ static void dw3000_initialise(struct dw3000 *dw)
 	local->spicrc = DW3000_SPI_CRC_MODE_NO;
 	/* Clear all register cache variables */
 	local->rx_timeout_pac = 0;
+	local->rx_frame_timeout_dly = 0;
 	local->w4r_time = 0;
 	local->ack_time = 0;
 	local->tx_fctrl = 0;

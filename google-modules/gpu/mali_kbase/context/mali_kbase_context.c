@@ -203,6 +203,9 @@ int kbase_context_common_init(struct kbase_context *kctx)
 				 */
 				get_task_struct(task);
 				kctx->task = task;
+
+				/* PIXEL: For better visibility, save the comm from the tgid */
+				memcpy(kctx->comm, task->comm, sizeof(task->comm));
 			} else {
 				dev_err(kctx->kbdev->dev, "Failed to get task pointer for %s/%d",
 					current->comm, current->pid);
@@ -327,9 +330,7 @@ void kbase_context_common_term(struct kbase_context *kctx)
 
 	pages = atomic_read(&kctx->used_pages);
 	if (pages != 0)
-		dev_warn(kctx->kbdev->dev, "%s: %d pages (pgd cnt %u) in use for kctx %d_%d",
-			 __func__, pages,
-			 kctx->pgd_cnt, kctx->tgid, kctx->id);
+		dev_warn(kctx->kbdev->dev, "%s: %d pages in use!\n", __func__, pages);
 
 	WARN_ON(atomic_read(&kctx->nonmapped_pages) != 0);
 

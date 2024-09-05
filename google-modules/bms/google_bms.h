@@ -27,6 +27,8 @@
 
 struct device_node;
 
+#define DEFAULT_BATT_FAKE_CAPACITY	50
+
 #define get_boot_sec() div_u64(ktime_to_ns(ktime_get_boottime()), NSEC_PER_SEC)
 #define GBMS_CHG_TEMP_NB_LIMITS_MAX 10
 #define GBMS_CHG_VOLT_NB_LIMITS_MAX 5
@@ -239,6 +241,8 @@ struct batt_ttf_stats {
 	struct ttf_tier_stat tier_stats[GBMS_STATS_TIER_COUNT];
 
 	struct logbuffer *ttf_log;
+
+	int report_max_ratio; /* max ratio to report ttf */
 };
 
 /*
@@ -557,6 +561,9 @@ int ttf_pwr_ibatt(const struct gbms_ce_tier_stats *ts);
 
 void ttf_tier_reset(struct batt_ttf_stats *stats);
 
+int ttf_soc_cstr_combine(char *buff, int size, const struct ttf_soc_stats *soc_ref,
+			 const struct ttf_soc_stats *soc_stats);
+
 int gbms_read_aacr_limits(struct gbms_chg_profile *profile,
 			  struct device_node *node);
 
@@ -687,6 +694,7 @@ enum csi_status {
 	CSI_STATUS_Defender_Dwell = 41,	// DWELL Defend
 	CSI_STATUS_Defender_Trickle = 42,
 	CSI_STATUS_Defender_Dock = 43,	// Dock Defend
+	CSI_STATUS_Defender_Limit = 44,	// Charging Policy Longlife
 	CSI_STATUS_NotCharging = 100,	// There will be a more specific reason
 	CSI_STATUS_Charging = 200,	// All good
 };
@@ -713,6 +721,7 @@ enum csi_status {
 #define CSI_STATUS_MASK_DEFEND_DOCK	(1 << 11)
 #define CSI_STATUS_MASK_NOTCHARGING	(1 << 12)
 #define CSI_STATUS_MASK_CHARGING	(1 << 13)
+#define CSI_STATUS_MASK_DEFEND_LIMIT	(1 << 14)
 
 enum charging_state {
        BATTERY_STATUS_UNKNOWN = -1,
@@ -725,7 +734,7 @@ enum charging_state {
 };
 
 #define LONGLIFE_CHARGE_STOP_LEVEL 80
-#define LONGLIFE_CHARGE_START_LEVEL 70
+#define LONGLIFE_CHARGE_START_LEVEL 79
 #define ADAPTIVE_ALWAYS_ON_SOC 80
 
 enum charging_policy {

@@ -13399,7 +13399,7 @@ dhdpci_bus_read_frames(dhd_bus_t *bus)
 		DHD_RPM(("%s: Bus is in power save state (%d). "
 			"Skip processing rest of ring buffers.\n",
 			__FUNCTION__, bus->bus_low_power_state));
-		return FALSE;
+		return more;
 	}
 
 	/* update the flow ring cpls */

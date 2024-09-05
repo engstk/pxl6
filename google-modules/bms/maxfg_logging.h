@@ -11,6 +11,13 @@
 #define MAX_FG_LEARN_PARAM_MAX_HIST 32
 #define MAX_FG_CAPTURE_CONFIG_NAME_MAX 32
 
+enum monitor_log_tags {
+	MONITOR_TAG_AB = 0x4142, /* registers snapshot by abnormal event */
+	MONITOR_TAG_HV = 0x4856, /* result of EEPROM history validation */
+	MONITOR_TAG_LH = 0x4C48, /* registers snapshot by learning event */
+	MONITOR_TAG_RM = 0x524D, /* registers snapshot by regular monitor */
+};
+
 struct maxfg_capture_regs {
 	struct max17x0x_regmap *regmap;
 	const enum max17x0x_reg_tags *tag;

@@ -3651,6 +3651,9 @@ int kbase_pm_init_hw(struct kbase_device *kbdev, unsigned int flags)
 	kbase_pm_hw_issues_apply(kbdev);
 	kbase_cache_set_coherency_mode(kbdev, kbdev->system_coherency);
 	kbase_amba_set_shareable_cache_support(kbdev);
+#if MALI_USE_CSF
+	kbase_backend_update_gpu_timestamp_offset(kbdev);
+#endif
 
 	/* Sanity check protected mode was left after reset */
 	WARN_ON(kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_STATUS)) &
