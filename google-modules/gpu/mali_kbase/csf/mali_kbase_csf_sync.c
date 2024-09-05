@@ -409,7 +409,7 @@ int kbasep_csf_sync_kcpu_dump_print(struct kbase_context *kctx, struct kbasep_pr
 	kbasep_print(kbpr, "CSF KCPU queues sync info (version: v" __stringify(
 				   MALI_CSF_SYNC_DUMP_VERSION) "):\n");
 
-	kbasep_print(kbpr, "KCPU queues for ctx %d:\n", kctx->id);
+	kbasep_print(kbpr, "KCPU queues for ctx %d_%d (%s):\n", kctx->tgid, kctx->id, kctx->comm);
 
 	queue_idx = find_first_bit(kctx->csf.kcpu_queues.in_use, KBASEP_MAX_KCPU_QUEUES);
 
@@ -798,8 +798,8 @@ static void kbasep_csf_dump_active_group_sync_state(struct kbase_context *kctx,
 {
 	unsigned int i;
 
-	kbasep_print(kbpr, "GPU queues for group %u (slot %d) of ctx %d_%d\n", group->handle,
-		     group->csg_nr, kctx->tgid, kctx->id);
+	kbasep_print(kbpr, "GPU queues for group %u (slot %d) of ctx %d_%d (%s)\n", group->handle,
+		     group->csg_nr, kctx->tgid, kctx->id, kctx->comm);
 
 	for (i = 0; i < MAX_SUPPORTED_STREAMS_PER_GROUP; i++)
 		kbasep_csf_dump_active_queue_sync_info(kbpr, group->bound_queues[i]);
@@ -814,21 +814,26 @@ int kbasep_csf_sync_gpu_dump_print(struct kbase_context *kctx, struct kbasep_pri
 		return -EINVAL;
 
 	kbdev = kctx->kbdev;
+
+	/* PIXEL: Dump *all* CSGs belonging to kctx, not just those currently resident */
+	rt_mutex_lock(&kctx->csf.lock);
 	kbase_csf_scheduler_lock(kbdev);
 	kbase_csf_csg_update_status(kbdev);
 
 	kbasep_print(kbpr, "CSF GPU queues sync info (version: v" __stringify(
 				   MALI_CSF_SYNC_DUMP_VERSION) "):\n");
 
-	for (gr = 0; gr < kbdev->csf.global_iface.group_num; gr++) {
-		struct kbase_queue_group *const group =
-			kbdev->csf.scheduler.csg_slots[gr].resident_group;
-		if (!group || group->kctx != kctx)
+	for (gr = 0; gr < MAX_QUEUE_GROUP_NUM; gr++) {
+		struct kbase_queue_group *const group = kctx->csf.queue_groups[gr];
+
+		if (!group)
 			continue;
+
 		kbasep_csf_dump_active_group_sync_state(kctx, kbpr, group);
 	}
 
 	kbase_csf_scheduler_unlock(kbdev);
+	rt_mutex_unlock(&kctx->csf.lock);
 
 	return 0;
 }

@@ -300,6 +300,7 @@ struct lwis_device {
 
 	/* LWIS allocator block manager */
 	struct lwis_allocator_block_mgr *block_mgr;
+	spinlock_t allocator_lock;
 
 	/* Worker thread */
 	struct kthread_worker transaction_worker;

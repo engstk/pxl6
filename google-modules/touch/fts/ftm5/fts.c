@@ -5055,7 +5055,6 @@ static int fts_fw_update(struct fts_ts_info *info)
 				dev_err(info->dev, "%s: firmware update failed again! ERROR %08X\n",
 					__func__, ret);
 				dev_err(info->dev, "Fw Auto Update Failed!\n");
-				return ret;
 			}
 		}
 		info->reflash_fw = 0;

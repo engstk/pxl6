@@ -2406,7 +2406,7 @@ int kbase_csf_firmware_load_init(struct kbase_device *kbdev)
 	 * that fails, we will open the default one.
 	 * See b/297471843 for more information.
 	 */
-	if (request_firmware(&firmware, fw_name, kbdev->dev) != 0) {
+	if (firmware_request_nowarn(&firmware, fw_name, kbdev->dev) != 0) {
 		/* No warning here, just a silent fallback */
 		ret = request_firmware(&firmware, fallback_fw_name, kbdev->dev);
 	}

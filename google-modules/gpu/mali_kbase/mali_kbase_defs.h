@@ -2028,7 +2028,6 @@ struct kbase_context {
 	atomic_t used_pages;
 	atomic_t nonmapped_pages;
 	atomic_t permanent_mapped_pages;
-	u32 pgd_cnt;
 
 	struct kbase_mem_pool_group mem_pools;
 

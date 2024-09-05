@@ -446,6 +446,11 @@ static const struct exynos_dsi_cmd nt37290_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ(0x6F, 0x1C),
 	EXYNOS_DSI_CMD_SEQ(0xF8, 0x3A),
 
+    /* CMD2 Page 4 */
+    /* b/345736052: Extend DBI Flash Data Update Cycle time */
+    EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x04),
+    EXYNOS_DSI_CMD_SEQ(0xBB, 0xB3, 0x04, 0x19),
+
 	EXYNOS_DSI_CMD_SEQ_DELAY(120, 0x11),
 };
 static DEFINE_EXYNOS_CMD_SET(nt37290_init);

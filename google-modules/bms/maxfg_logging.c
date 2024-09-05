@@ -26,7 +26,7 @@ static const enum max17x0x_reg_tags fg_learning_param[] = {
 	MAX17X0X_TAG_vfsoc,
 	MAXFG_TAG_fstat,
 	MAXFG_TAG_avgt,
-	MAXFG_TAG_temp,
+	MAX17X0X_TAG_temp,
 	MAXFG_TAG_qh,
 	MAXFG_TAG_vcel,
 	MAXFG_TAG_avgv,

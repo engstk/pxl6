@@ -79,6 +79,9 @@ enum {
 /* ROAM stats log ring */
 #define ROAM_STATS_RING_NAME		"roam_stats"
 #define ROAM_STATS_RING_SIZE		(64 * 1024)
+/* Ecounters log ring */
+#define ECNTRS_RING_NAME		"ecntrs_"
+#define ECNTRS_RING_SIZE		(1 * 1024 * 1024)
 
 #define DEBUG_DUMP_RING1_NAME		"debug_dump1_"
 #define DEBUG_DUMP_RING1_SIZE		(2 * 1024 * 1024)

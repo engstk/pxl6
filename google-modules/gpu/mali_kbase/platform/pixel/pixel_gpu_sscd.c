@@ -21,12 +21,7 @@
 #include <linux/platform_data/sscoredump.h>
 #include <linux/platform_device.h>
 
-/***************************************************************************************************
- * This feature is a WIP, and is pending Firmware + core KMD support for:                          *
- *        - Dumping FW private memory                                                              *
- *        - Suspending the MCU                                                                     *
- *        - Dumping MCU registers                                                                  *
- **************************************************************************************************/
+/* Mali SSCD collection is only enabled for CSF GPUs*/
 
 static void sscd_release(struct device *dev)
 {
@@ -43,6 +38,9 @@ const static struct platform_device sscd_dev_init = { .name = "mali",
 						      } };
 static struct platform_device sscd_dev;
 
+/* There are more segments here than what we actually collect, we leave them here
+ * to have backward compatibility with the parser.
+ */
 enum
 {
 	MCU_REGISTERS = 0x1,
@@ -200,7 +198,6 @@ static void get_ktrace(struct kbase_device *kbdev,
 #endif
 }
 
-#if MALI_USE_CSF
 /**
  * enum pixel_context_state - a coarse platform independent state for a context.
  *
@@ -273,39 +270,14 @@ struct pixel_context_snapshot {
 	struct pixel_context_snapshot_entry contexts[];
 } __attribute__((packed));
 
-static int pixel_context_snapshot_init(struct kbase_device *kbdev,
-				       struct sscd_segment* segment,
-				       size_t num_entries) {
-	segment->size = sizeof(struct pixel_context_snapshot) +
-		num_entries * sizeof(struct pixel_context_snapshot_entry);
-	segment->addr = kzalloc(segment->size, GFP_KERNEL);
-	if (segment->addr == NULL) {
-		segment->size = 0;
-		dev_err(kbdev->dev,
-			"pixel: failed to allocate context snapshot buffer");
-		return -ENOMEM;
-	}
-	return 0;
-}
-
-static void pixel_context_snapshot_term(struct sscd_segment* segment) {
-	if (segment && segment->addr) {
-		kfree(segment->addr);
-		segment->size = 0;
-		segment->addr = NULL;
-	}
-}
-
-/* get_and_init_contexts - fill the CONTEXT segment
- *
- * If function returns 0, caller is reponsible for freeing segment->addr.
+/* get_contexts - fill the CONTEXT segment
  *
  * @kbdev: kbase_device
  * @segment: the CONTEXT segment for report
  *
  * \returns: 0 on success.
  */
-static int get_and_init_contexts(struct kbase_device *kbdev,
+static int get_contexts(struct kbase_device *kbdev,
 		 struct sscd_segment *segment)
 {
 	u32 csg_nr;
@@ -314,7 +286,9 @@ static int get_and_init_contexts(struct kbase_device *kbdev,
 	struct kbase_csf_scheduler *const scheduler = &kbdev->csf.scheduler;
 	size_t num_entries;
 	size_t entry_idx;
-	int rc;
+
+	if (segment->addr == NULL)
+		return -ENOMEM;
 
 	if (!rt_mutex_trylock(&kbdev->csf.scheduler.lock)) {
 		dev_warn(kbdev->dev, "could not lock scheduler during dump.");
@@ -322,11 +296,7 @@ static int get_and_init_contexts(struct kbase_device *kbdev,
 	}
 
 	num_entries = bitmap_weight(scheduler->csg_inuse_bitmap, num_csg);
-	rc = pixel_context_snapshot_init(kbdev, segment, num_entries);
-	if (rc) {
-		rt_mutex_unlock(&kbdev->csf.scheduler.lock);
-		return rc;
-	}
+
 	context_snapshot = segment->addr;
 	context_snapshot->num_contexts = num_entries;
 
@@ -357,7 +327,6 @@ static int get_and_init_contexts(struct kbase_device *kbdev,
 	rt_mutex_unlock(&kbdev->csf.scheduler.lock);
 	return 0;
 }
-#endif
 
 struct pixel_fw_core_dump {
 	char magic[4];
@@ -384,11 +353,10 @@ static void get_and_init_fw_core_dump(struct kbase_device *kbdev, struct sscd_se
 	}
 
 	seg->size = sizeof(struct pixel_fw_core_dump) + core_dump_size;
-	seg->addr = kzalloc(seg->size, GFP_KERNEL);
+	seg->addr = vzalloc(seg->size);
 
 	if (seg->addr == NULL) {
 		seg->size = 0;
-		dev_err(kbdev->dev, "pixel: failed to allocate for firmware core dump buffer");
 		return;
 	}
 
@@ -434,61 +402,13 @@ static void get_and_init_fw_core_dump(struct kbase_device *kbdev, struct sscd_se
 	if (unlikely(size != core_dump_size))
 	{
 		dev_err(kbdev->dev, "firmware core dump size and buffer size are different");
-		kfree(seg->addr);
+		vfree(seg->addr);
 		seg->addr = NULL;
 		seg->size = 0;
 	}
 
 	return;
 }
-/*
- * Stub pending FW support
- */
-static void get_fw_private_memory(struct kbase_device *kbdev, struct sscd_segment *seg)
-{
-	(void)kbdev;
-	(void)seg;
-}
-/*
- * Stub pending FW support
- */
-static void get_fw_shared_memory(struct kbase_device *kbdev, struct sscd_segment *seg)
-{
-	(void)kbdev;
-	(void)seg;
-}
-/*
- * Stub pending FW support
- */
-static void get_fw_registers(struct kbase_device *kbdev, struct sscd_segment *seg)
-{
-	(void)kbdev;
-	(void)seg;
-}
-
-/*
- * Stub pending FW support
- */
-static void get_gpu_registers(struct kbase_device *kbdev, struct sscd_segment *seg)
-{
-	(void)kbdev;
-	(void)seg;
-}
-/*
- * Stub pending FW support
- */
-static void flush_caches(struct kbase_device *kbdev)
-{
-	(void)kbdev;
-}
-/*
- * Stub pending FW support
- */
-static void suspend_mcu(struct kbase_device *kbdev)
-{
-	(void)kbdev;
-}
-
 static void get_rail_state_log(struct kbase_device *kbdev, struct sscd_segment *seg)
 {
 	lockdep_assert_held(&((struct pixel_context*)kbdev->platform_context)->pm.lock);
@@ -521,7 +441,6 @@ static int segments_init(struct kbase_device *kbdev, struct sscd_segment* segmen
 
 	if (!segments[PM_EVENT_LOG].addr) {
 		segments[PM_EVENT_LOG].size = 0;
-		dev_err(kbdev->dev, "pixel: failed to allocate for PM event log");
 		return -ENOMEM;
 	}
 
@@ -530,7 +449,6 @@ static int segments_init(struct kbase_device *kbdev, struct sscd_segment* segmen
 
 	if (segments[FW_TRACE].addr == NULL) {
 		segments[FW_TRACE].size = 0;
-		dev_err(kbdev->dev, "pixel: failed to allocate for firmware trace description");
 		return -ENOMEM;
 	}
 
@@ -538,7 +456,14 @@ static int segments_init(struct kbase_device *kbdev, struct sscd_segment* segmen
 	segments[KTRACE].addr = kzalloc(sizeof(struct pixel_ktrace), GFP_KERNEL);
 	if (segments[KTRACE].addr == NULL) {
 		segments[KTRACE].size = 0;
-		dev_err(kbdev->dev, "pixel: failed to allocate for ktrace buffer");
+		return -ENOMEM;
+	}
+
+	segments[CONTEXTS].size = sizeof(struct pixel_context_snapshot) +
+		MAX_SUPPORTED_CSGS * sizeof(struct pixel_context_snapshot_entry);
+	segments[CONTEXTS].addr = kzalloc(segments[CONTEXTS].size, GFP_KERNEL);
+	if (segments[CONTEXTS].addr == NULL) {
+		segments[CONTEXTS].size = 0;
 		return -ENOMEM;
 	}
 
@@ -552,9 +477,8 @@ static void segments_term(struct kbase_device *kbdev, struct sscd_segment* segme
 	kfree(segments[FW_TRACE].addr);
 	kfree(segments[PM_EVENT_LOG].addr);
 	kfree(segments[KTRACE].addr);
-#if MALI_USE_CSF
-	pixel_context_snapshot_term(segments);
-#endif
+	kfree(segments[CONTEXTS].addr);
+	vfree(segments[FW_CORE_DUMP].addr);
 	/* Null out the pointers */
 	memset(segments, 0, sizeof(struct sscd_segment) * NUM_SEGMENTS);
 }
@@ -578,9 +502,6 @@ void gpu_sscd_dump(struct kbase_device *kbdev, const char* reason)
 	unsigned long flags, current_ts = jiffies;
 	struct pixel_gpu_pdc_status pdc_status;
 	static unsigned long last_hang_sscd_ts;
-#if MALI_USE_CSF
-	int fwcd_err;
-#endif
 
 	if (!strcmp(reason, "GPU hang")) {
 		/* GPU hang - avoid multiple coredumps for the same hang until
@@ -603,12 +524,6 @@ void gpu_sscd_dump(struct kbase_device *kbdev, const char* reason)
 		return;
 	}
 
-#if MALI_USE_CSF
-	fwcd_err = fw_core_dump_create(kbdev);
-	if (fwcd_err)
-		dev_err(kbdev->dev, "pixel: failed to create firmware core dump (%d)", fwcd_err);
-#endif
-
 	ec = segments_init(kbdev, segs);
 	if (ec != 0) {
 		dev_err(kbdev->dev,
@@ -621,39 +536,23 @@ void gpu_sscd_dump(struct kbase_device *kbdev, const char* reason)
 	/* Read the FW view of GPU PDC state, we get this early */
 	get_pdc_state(kbdev, &pdc_status, &segs[PDC_STATUS]);
 
-	/* Suspend the MCU to prevent it from overwriting the data we want to dump */
-	suspend_mcu(kbdev);
-
-	/* Flush the cache so our memory page reads contain up to date values */
-	flush_caches(kbdev);
-
-	/* Read out the updated FW private memory pages */
-	get_fw_private_memory(kbdev, &segs[PRIVATE_MEM]);
-
-	/* Read out the updated memory shared between host and firmware */
-	get_fw_shared_memory(kbdev, &segs[SHARED_MEM]);
-
-	get_fw_registers(kbdev, &segs[MCU_REGISTERS]);
-	get_gpu_registers(kbdev, &segs[GPU_REGISTERS]);
-
 	get_fw_trace(kbdev, &segs[FW_TRACE]);
 
 	get_pm_event_log(kbdev, &segs[PM_EVENT_LOG]);
 
 	get_ktrace(kbdev, &segs[KTRACE]);
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 
-#if MALI_USE_CSF
-	ec = get_and_init_contexts(kbdev, &segs[CONTEXTS]);
+	ec = get_contexts(kbdev, &segs[CONTEXTS]);
 	if (ec) {
 		dev_err(kbdev->dev,
 			"could not collect active contexts: rc: %i", ec);
 	}
 
-	if (!fwcd_err)
+	if (!strcmp(reason, "Internal firmware error"))
 		get_and_init_fw_core_dump(kbdev, &segs[FW_CORE_DUMP]);
-#endif
-
-	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+	else
+		dev_warn(kbdev->dev, "pixel: sscd: skipping FW core");
 
 	/* Acquire the pm lock to prevent modifications to the rail state log */
 	mutex_lock(&pc->pm.lock);

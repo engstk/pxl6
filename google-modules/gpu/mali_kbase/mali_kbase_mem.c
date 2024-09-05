@@ -2717,7 +2717,7 @@ static int kbase_jit_grow(struct kbase_context *kctx, const struct base_jit_allo
 {
 	size_t delta;
 	size_t pages_required;
-	size_t old_size, old_size_orig;
+	size_t old_size;
 	struct kbase_mem_pool *pool;
 	int ret = -ENOMEM;
 	struct tagged_addr *gpu_pages;
@@ -2736,7 +2736,6 @@ static int kbase_jit_grow(struct kbase_context *kctx, const struct base_jit_allo
 	if (reg->gpu_alloc->nents >= info->commit_pages)
 		goto done;
 
-	old_size_orig = reg->gpu_alloc->nents;
 	/* Allocate some more pages */
 	delta = info->commit_pages - reg->gpu_alloc->nents;
 	pages_required = delta;
@@ -2814,13 +2813,6 @@ static int kbase_jit_grow(struct kbase_context *kctx, const struct base_jit_allo
 	spin_unlock(&kctx->mem_partials_lock);
 
 	ret = kbase_mem_grow_gpu_mapping(kctx, reg, info->commit_pages, old_size, mmu_sync_info);
-	if (unlikely(old_size_orig != old_size)) {
-		dev_warn(
-			kctx->kbdev->dev,
-			"JIT alloc %llx backing changed from %zu to %zu during grow for kctx %d_%d",
-			reg->start_pfn << PAGE_SHIFT, old_size_orig, old_size,
-			kctx->tgid, kctx->id);
-	}
 	/*
 	 * The grow failed so put the allocation back in the
 	 * pool and return failure.

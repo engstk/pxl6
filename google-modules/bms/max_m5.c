@@ -1607,6 +1607,8 @@ const struct max17x0x_reg max_m5[] = {
 	[MAXFG_TAG_avgt] = { ATOM_INIT_REG16(MAX_M5_AVGTA)},
 	[MAXFG_TAG_avgv] = { ATOM_INIT_REG16(MAX_M5_AVGVCELL)},
 	[MAXFG_TAG_vfocv] = { ATOM_INIT_REG16(MAX_M5_VFOCV)},
+	[MAXFG_TAG_qh] = { ATOM_INIT_REG16(MAX_M5_QH)},
+	[MAXFG_TAG_vcel] = { ATOM_INIT_REG16(MAX_M5_VCELL)},
 };
 
 int max_m5_regmap_init(struct max17x0x_regmap *regmap, struct i2c_client *clnt)

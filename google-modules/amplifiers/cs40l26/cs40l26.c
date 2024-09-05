@@ -5097,10 +5097,12 @@ void cs40l26_make_reset_decision(struct cs40l26_private *cs40l26, const char *fu
 
 	if (trigger) {
 		dev_info(dev, "Queue reset work after %s", func);
-		queue_work(cs40l26->vibe_workqueue, &cs40l26->reset_work);
 
-		/* Wait for reset to finish */
-		flush_work(&cs40l26->reset_work);
+		/*
+		 * Should not call flush_work() since it will cause deadlock if called by a
+		 * worker thread.
+		 */
+		queue_work(cs40l26->vibe_workqueue, &cs40l26->reset_work);
 	} else
 		dev_info(dev, "Reset event: %d. Skip this trigger from %s.", cs40l26->reset_event,
 			 func);

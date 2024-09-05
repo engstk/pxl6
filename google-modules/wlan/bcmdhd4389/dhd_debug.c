@@ -1245,6 +1245,10 @@ dhd_dbg_msgtrace_log_parser(dhd_pub_t *dhdp, void *event_data,
 			((plog_hdr->tag == EVENT_LOG_TAG_STATS) &&
 			(plog_hdr->binary_payload))) {
 			if (!ecntr_pushed && dhd_log_dump_ecntr_enabled()) {
+#ifdef DHD_ECNTRS_EXPOSED_DBGRING
+				dhd_dbg_push_to_ring(dhdp, ECNTRS_RING_ID,
+					&msg_hdr, logbuf);
+#endif /* DHD_ECNTRS_EXPOSED_DBGRING */
 				if (dhd_dbg_send_evtlog_to_ring(plog_hdr, &msg_hdr,
 					dhdp->ecntr_dbg_ring,
 					EVENT_LOG_MAX_BLOCK_SIZE, logbuf) != BCME_OK) {
@@ -3209,6 +3213,22 @@ dhd_dbg_attach(dhd_pub_t *dhdp, dbg_pullreq_t os_pullreq,
 	if (ret) {
 		goto error;
 	}
+
+#ifdef DHD_ECNTRS_EXPOSED_DBGRING
+	buf = VMALLOCZ(dhdp->osh, ECNTRS_RING_SIZE);
+	if (!buf) {
+		DHD_ERROR(("%s:%d: VMALLOC failed for driver_log_ring, size %d\n",
+			__FUNCTION__, __LINE__, ECNTRS_RING_SIZE));
+		ret = BCME_NOMEM;
+		goto error;
+	}
+	ret = dhd_dbg_ring_init(dhdp, &dbg->dbg_rings[ECNTRS_RING_ID],
+		ECNTRS_RING_ID, (uint8 *)ECNTRS_RING_NAME,
+		ECNTRS_RING_SIZE, buf, FALSE);
+	if (ret) {
+		goto error;
+	}
+#endif /* DHD_ECNTRS_EXPOSED_DBGRING */
 #endif /* DHD_DEBUGABILITY_LOG_DUMP_RING */
 
 #if defined(DHD_DEBUGABILITY_DEBUG_DUMP) || defined(DHD_HAL_RING_DUMP)

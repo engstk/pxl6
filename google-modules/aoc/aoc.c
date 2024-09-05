@@ -2436,15 +2436,6 @@ static int aoc_platform_probe(struct platform_device *pdev)
 		goto err_sram_dram_map;
 	}
 
-	prvdata->aoc_s2mpu_virt = devm_platform_ioremap_resource_byname(pdev, "aoc_s2mpu");
-	if (IS_ERR(prvdata->aoc_s2mpu_virt)) {
-		dev_err(dev, "failed to map aoc_s2mpu: rc = %ld\n",
-			PTR_ERR(prvdata->aoc_s2mpu_virt));
-		rc = PTR_ERR(prvdata->aoc_s2mpu_virt);
-		goto err_s2mpu_map;
-	}
-	prvdata->aoc_s2mpu_saved_value = ioread32(prvdata->aoc_s2mpu_virt + AOC_S2MPU_CTRL0);
-
 	pm_runtime_set_active(dev);
 	/* Leave AoC in suspended state. Otherwise, AoC SysMMU is set to active which results in the
 	 * SysMMU driver trying to access SysMMU SFRs during device suspend/resume operations. The
@@ -2520,7 +2511,6 @@ static int aoc_platform_probe(struct platform_device *pdev)
 
 /* err_acmp_reset: */
 err_find_iommu:
-err_s2mpu_map:
 err_sram_dram_map:
 
 err_watchdog_sysmmu_irq:

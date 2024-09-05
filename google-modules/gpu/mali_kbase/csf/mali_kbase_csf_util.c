@@ -27,7 +27,8 @@
 #include <linux/version_compat_defs.h>
 #include <linux/vmalloc.h>
 
-#define KBASEP_PRINTER_BUFFER_MAX_SIZE (2 * PAGE_SIZE)
+/* PIXEL: Cross-process dependencies on Android generate larger output */
+#define KBASEP_PRINTER_BUFFER_MAX_SIZE (64 * PAGE_SIZE)
 
 #define KBASEP_PRINT_FORMAT_BUFFER_MAX_SIZE 256
 

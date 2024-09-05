@@ -276,6 +276,10 @@ int kbase_pm_driver_suspend(struct kbase_device *kbdev)
 	}
 #endif /* CONFIG_MALI_ARBITER_SUPPORT */
 
+#if MALI_USE_CSF
+	kbase_backend_invalidate_gpu_timestamp_offset(kbdev);
+#endif
+
 	return 0;
 
 exit:

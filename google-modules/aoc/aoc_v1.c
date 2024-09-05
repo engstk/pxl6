@@ -189,21 +189,6 @@ int aoc_watchdog_restart(struct aoc_prvdata *prvdata,
 	dev_info(prvdata->dev, "aoc reset finished\n");
 	prvdata->aoc_reset_done = false;
 
-	/*
-	 * AOC_TZPC has been restored by ACPM, so we can access AOC_S2MPU.
-	 * Restore AOC_S2MPU.
-	 */
-	writel(prvdata->aoc_s2mpu_saved_value, prvdata->aoc_s2mpu_virt + AOC_S2MPU_CTRL0);
-
-#if IS_ENABLED(CONFIG_SOC_ZUMA)
-	/*
-	 * Zuma S2MPU registers changed. S2MPU_CTRL0.ENABLE functionality is
-	 * replaced by S2MPU_CTRL_PROTECTION_ENABLE_PER_VID.
-	 */
-	writel(AOC_S2MPU_CTRL_PROTECTION_ENABLE_VID_MASK_ALL,
-	       prvdata->aoc_s2mpu_virt + AOC_S2MPU_CTRL_PROTECTION_ENABLE_PER_VID_CLR);
-#endif
-
 	/* Restore SysMMU settings by briefly setting AoC to runtime active. Since SysMMU is a
 	 * supplier to AoC, it will be set to runtime active as a side effect. */
 	rc = pm_runtime_set_active(prvdata->dev);

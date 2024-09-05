@@ -2681,6 +2681,15 @@ static const struct snd_pcm_hw_constraint_list cs35l41_constraints = {
 static int cs35l41_pcm_startup(struct snd_pcm_substream *substream,
 			       struct snd_soc_dai *dai)
 {
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(dai->component);
+
+	// force wakeup from hibernate mode when pcm startup
+	cancel_delayed_work(&cs35l41->hb_work);
+	mutex_lock(&cs35l41->hb_lock);
+	cs35l41_exit_hibernate(cs35l41);
+	mutex_unlock(&cs35l41->hb_lock);
+
 	if (substream->runtime)
 		return snd_pcm_hw_constraint_list(substream->runtime, 0,
 				SNDRV_PCM_HW_PARAM_RATE, &cs35l41_constraints);

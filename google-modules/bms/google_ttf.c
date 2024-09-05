@@ -95,6 +95,14 @@ int ttf_pwr_vtier_idx(const struct batt_ttf_stats *stats, int soc)
  * reference or current average current demand for a soc at max rate.
  * NOTE: always <= cc_max for reference temperature
  */
+
+static bool ttf_cc_check(const struct ttf_soc_stats *soc_stats, int soc)
+{
+	/* delta_cc shouldn't be negative */
+	return soc_stats->cc[soc] && soc_stats->cc[soc + 1] &&
+	       soc_stats->cc[soc] < soc_stats->cc[soc + 1];
+}
+
 int ttf_ref_cc(const struct batt_ttf_stats *stats, int soc)
 {
 	const struct ttf_soc_stats *sstat = NULL;
@@ -105,11 +113,9 @@ int ttf_ref_cc(const struct batt_ttf_stats *stats, int soc)
 		return 0;
 
 	/* soc average current demand */
-	if (stats->soc_stats.cc[soc + 1] && stats->soc_stats.cc[soc] &&
-	    stats->soc_stats.elap[soc])
+	if (ttf_cc_check(&stats->soc_stats, soc) && stats->soc_stats.elap[soc])
 		sstat = &stats->soc_stats;
-	else if (stats->soc_ref.cc[soc + 1] && stats->soc_ref.cc[soc] &&
-		 stats->soc_ref.elap[soc])
+	else if (ttf_cc_check(&stats->soc_ref, soc) && stats->soc_ref.elap[soc])
 		sstat = &stats->soc_ref;
 	else
 		return 0;
@@ -412,10 +418,47 @@ int ttf_soc_estimate(ktime_t *res, const struct batt_ttf_stats *stats,
 	return max_ratio;
 }
 
+static int ttf_cstr(char *buff, int size, const struct ttf_soc_stats *soc_stats,
+		    const struct ttf_soc_stats *soc_ref, int start, int end,
+		    int const split, const char type)
+{
+	const bool combine = soc_ref == NULL ? false : true;
+	int i, cc, len = 0;
+	ktime_t elap;
+
+	for (i = start; i <= end; i++) {
+		if (i % split == 0 || i == start) {
+			len += scnprintf(&buff[len], size - len, &type);
+			if (split == 10)
+				len += scnprintf(&buff[len], size - len,
+						"%d", i / 10);
+			len += scnprintf(&buff[len], size - len, ":");
+		}
+		if (type == 'T') {
+			elap = soc_stats->elap[i];
+			if (combine && elap == 0)
+				elap = soc_ref->elap[i];
+			len += scnprintf(&buff[len], size - len, " %4ld", elap);
+		} else if (type == 'C') {
+			cc = soc_stats->cc[i];
+			if (combine && cc == 0)
+				cc = soc_ref->cc[i];
+			len += scnprintf(&buff[len], size - len, " %4d", cc);
+		}
+
+		if (i != end && (i + 1) % split == 0)
+			len += scnprintf(&buff[len], size - len, "\n");
+	}
+
+	len += scnprintf(&buff[len], size - len, "\n");
+
+	return len;
+}
+
 int ttf_soc_cstr(char *buff, int size, const struct ttf_soc_stats *soc_stats,
 		 int start, int end)
 {
-	int i, len = 0, split = 100;
+	int len = 0, split = 100;
 
 	if (start < 0 || start >= GBMS_SOC_STATS_LEN ||
 	    end < 0 || end >= GBMS_SOC_STATS_LEN ||
@@ -432,40 +475,26 @@ int ttf_soc_cstr(char *buff, int size, const struct ttf_soc_stats *soc_stats,
 		split = 10;
 
 	/* dump elap time as T: */
-	for (i = start; i <= end; i++) {
-		if (i % split == 0 || i == start) {
-			len += scnprintf(&buff[len], size - len, "T");
-			if (split == 10)
-				len += scnprintf(&buff[len], size - len,
-						"%d", i / 10);
-			len += scnprintf(&buff[len], size - len, ":");
-		}
-
-		len += scnprintf(&buff[len], size - len, " %4ld",
-				soc_stats->elap[i]);
-		if (i != end && (i + 1) % split == 0)
-			len += scnprintf(&buff[len], size - len, "\n");
-	}
-
-	len += scnprintf(&buff[len], size - len, "\n");
+	len += ttf_cstr(&buff[len], size - len, soc_stats, NULL, start, end, split, 'T');
 
 	/* dump coulumb count as C: */
-	for (i = start; i <= end; i++) {
-		if (i % split == 0 || i == start) {
-			len += scnprintf(&buff[len], size - len, "C");
-			if (split == 10)
-				len += scnprintf(&buff[len], size - len,
-						 "%d", i / 10);
-			len += scnprintf(&buff[len], size - len, ":");
-		}
+	len += ttf_cstr(&buff[len], size - len, soc_stats, NULL, start, end, split, 'C');
 
-		len += scnprintf(&buff[len], size - len, " %4d",
-				soc_stats->cc[i]);
-		if (i != end && (i + 1) % split == 0)
-			len += scnprintf(&buff[len], size - len, "\n");
-	}
+	return len;
+}
+
+int ttf_soc_cstr_combine(char *buff, int size, const struct ttf_soc_stats *soc_ref,
+			 const struct ttf_soc_stats *soc_stats)
+{
+	int len = 0;
 
 	len += scnprintf(&buff[len], size - len, "\n");
+
+	/* dump elap time as T: */
+	len += ttf_cstr(&buff[len], size - len, soc_stats, soc_ref, 0, 99, 10, 'T');
+
+	/* dump coulumb count as C: */
+	len += ttf_cstr(&buff[len], size - len, soc_stats, soc_ref, 0, 99, 10, 'C');
 
 	return len;
 }
@@ -993,6 +1022,7 @@ static void ttf_init_ref_table(struct batt_ttf_stats *stats,
 }
 
 /* must come after charge profile */
+#define TTF_REPORT_MAX_RATIO	300
 int ttf_stats_init(struct batt_ttf_stats *stats, struct device *device,
 		   int capacity_ma)
 {
@@ -1028,6 +1058,12 @@ int ttf_stats_init(struct batt_ttf_stats *stats, struct device *device,
 	ret = ttf_init_tier_parse_dt(stats, device);
 	if (ret < 0)
 		return ret;
+
+	/* max ratio to report ttf */
+	ret = of_property_read_u32(device->of_node, "google,ttf-report-max-ratio",
+				   &stats->report_max_ratio);
+	if (ret < 0)
+		stats->report_max_ratio = TTF_REPORT_MAX_RATIO;
 
 	/* initialize the reference stats for the reference soc estimates */
 	ttf_init_ref_table(stats, &as, capacity_ma);

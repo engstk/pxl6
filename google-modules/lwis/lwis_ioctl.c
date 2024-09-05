@@ -588,7 +588,6 @@ static int cmd_device_reset(struct lwis_client *lwis_client, struct lwis_cmd_pkt
 	struct lwis_device *lwis_dev = lwis_client->lwis_dev;
 	struct lwis_cmd_io_entries k_msg;
 	struct lwis_io_entry *k_entries = NULL;
-	unsigned long flags;
 	bool device_enabled = false;
 
 	ret = copy_io_entries_from_cmd(lwis_dev, u_msg, &k_msg, &k_entries);
@@ -625,9 +624,9 @@ static int cmd_device_reset(struct lwis_client *lwis_client, struct lwis_cmd_pkt
 			 "Device is not enabled, IoEntries will not be executed in DEVICE_RESET\n");
 	}
 
-	spin_lock_irqsave(&lwis_dev->lock, flags);
+	mutex_lock(&lwis_dev->client_lock);
 	lwis_device_event_states_clear_locked(lwis_dev);
-	spin_unlock_irqrestore(&lwis_dev->lock, flags);
+	mutex_unlock(&lwis_dev->client_lock);
 soft_reset_exit:
 	if (k_entries) {
 		lwis_allocator_free(lwis_dev, k_entries);
